@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<ruleset name="CatalogOps">
+	<description>Coding standards for the CatalogOps plugin.</description>
+
+	<!-- Production code only; tests follow PHPUnit conventions. -->
+	<file>catalogops.php</file>
+	<file>src</file>
+
+	<arg name="extensions" value="php"/>
+	<arg name="basepath" value="."/>
+	<arg name="parallel" value="8"/>
+	<arg name="colors"/>
+	<!-- Show sniff codes and progress. -->
+	<arg value="ps"/>
+
+	<config name="testVersion" value="8.1-"/>
+	<config name="minimum_wp_version" value="6.0"/>
+
+	<rule ref="WordPress">
+		<!--
+		PSR-4 autoloading: file names match class names (Plugin.php), not the
+		WordPress class-*.php convention. This is the one deliberate deviation.
+		-->
+		<exclude name="WordPress.Files.FileName"/>
+	</rule>
+
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="catalogops"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!-- Forward-compatibility with the declared PHP floor. -->
+	<rule ref="PHPCompatibilityWP"/>
+</ruleset>
