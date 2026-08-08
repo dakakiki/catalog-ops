@@ -24,6 +24,12 @@ final class SchemaTest extends WP_UnitTestCase {
 	public function set_up(): void {
 		parent::set_up();
 
+		// dbDelta issues real CREATE TABLE statements. WP_UnitTestCase otherwise
+		// rewrites those to CREATE TEMPORARY TABLE, which information_schema (used
+		// by our assertions) cannot see — so we opt out for these tests.
+		remove_filter( 'query', array( $this, '_create_temporary_tables' ) );
+		remove_filter( 'query', array( $this, '_drop_temporary_tables' ) );
+
 		global $wpdb;
 		$this->schema = new Schema( $wpdb );
 		$this->schema->drop();

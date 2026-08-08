@@ -26,15 +26,40 @@ final class SeedCommandTest extends WP_UnitTestCase {
 			$this->markTestSkipped( 'WooCommerce is not available in the test environment.' );
 		}
 
+		// The per-test transaction rolls back the attribute rows but not the
+		// in-process taxonomy registration, leaving the two out of sync. Reset
+		// both so each test starts from a clean, consistent attribute state.
+		$this->reset_attribute_state();
+
 		$this->command = new Seed_Command();
 	}
 
 	public function tear_down(): void {
 		// Undo any bulk-write flags the command may have left on if it threw.
 		wp_suspend_cache_invalidation( false );
-		$this->command->__invoke( array(), array( 'reset' => true ) );
+
+		if ( isset( $this->command ) ) {
+			$this->command->__invoke( array(), array( 'products' => '0', 'reset' => true ) );
+		}
+
+		$this->reset_attribute_state();
 
 		parent::tear_down();
+	}
+
+	/**
+	 * Unregister the seed's global attribute taxonomies and clear WooCommerce's
+	 * cached attribute list, so registration state matches the (rolled-back) DB.
+	 */
+	private function reset_attribute_state(): void {
+		foreach ( array( 'pa_color', 'pa_size' ) as $taxonomy ) {
+			if ( taxonomy_exists( $taxonomy ) ) {
+				unregister_taxonomy( $taxonomy );
+			}
+		}
+
+		delete_transient( 'wc_attribute_taxonomies' );
+		wp_cache_delete( 'attributes', 'woocommerce-attributes' );
 	}
 
 	public function test_seed_creates_the_requested_number_of_products(): void {
@@ -70,7 +95,7 @@ final class SeedCommandTest extends WP_UnitTestCase {
 		$this->command->__invoke( array(), array( 'products' => '3' ) );
 		$this->assertSame( 3, $this->seeded_count( 'product' ) );
 
-		$this->command->__invoke( array(), array( 'reset' => true ) );
+		$this->command->__invoke( array(), array( 'products' => '0', 'reset' => true ) );
 
 		$this->assertSame( 0, $this->seeded_count( 'product' ) );
 		$this->assertSame( 'product', get_post_type( $keeper ) );

@@ -301,7 +301,9 @@ final class Seed_Command {
 			);
 
 			if ( is_wp_error( $result ) ) {
-				WP_CLI::error( sprintf( 'Could not create the %s attribute: %s', $label, $result->get_error_message() ) );
+				// Most often the attribute already exists; keep going and reuse it
+				// rather than aborting the whole seed.
+				WP_CLI::warning( sprintf( 'Reusing existing %s attribute: %s', $label, $result->get_error_message() ) );
 			}
 		}
 
