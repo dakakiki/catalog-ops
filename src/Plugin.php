@@ -7,10 +7,12 @@
 
 namespace CatalogOps;
 
+use CatalogOps\Admin\Admin_Page;
 use CatalogOps\Container\Container;
 use CatalogOps\Database\Schema;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Saved_Filters;
+use CatalogOps\Rest\Query_Controller;
 
 /**
  * The plugin's composition root: a single entry point that owns the service
@@ -86,6 +88,19 @@ final class Plugin {
 
 		// Apply pending migrations after a plugin update (no reactivation needed).
 		add_action( 'admin_init', array( $this, 'maybe_upgrade_database' ) );
+
+		add_action(
+			'rest_api_init',
+			function (): void {
+				$this->container->get( Query_Controller::class )->register_routes();
+			}
+		);
+
+		if ( is_admin() ) {
+			$admin_page = $this->container->get( Admin_Page::class );
+			add_action( 'admin_menu', array( $admin_page, 'register_menu' ) );
+			add_action( 'admin_enqueue_scripts', array( $admin_page, 'enqueue_assets' ) );
+		}
 
 		/**
 		 * Fires once the plugin has wired its services and is ready.
@@ -166,8 +181,23 @@ final class Plugin {
 			}
 		);
 
-		// Operations, Providers, Admin, and CLI services register here as their
-		// milestones are implemented.
+		$this->container->singleton(
+			Query_Controller::class,
+			static function ( Container $container ): Query_Controller {
+				global $wpdb;
+
+				return new Query_Controller( $container->get( Query_Engine::class ), $wpdb );
+			}
+		);
+
+		$plugin_file = $this->file;
+		$this->container->singleton(
+			Admin_Page::class,
+			static fn(): Admin_Page => new Admin_Page( $plugin_file )
+		);
+
+		// Operations and provider modules register here as their milestones are
+		// implemented.
 	}
 
 	/**
