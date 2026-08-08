@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Database;
 
+use CatalogOps\Database\Migrations\Add_Operation_Progress_Columns;
 use CatalogOps\Database\Migrations\Create_Core_Tables;
 use CatalogOps\Database\Migrations\Create_Saved_Filters_Table;
 use CatalogOps\Database\Migrations\Migration;
@@ -53,6 +54,7 @@ final class Schema {
 		$this->migrations = array(
 			new Create_Core_Tables(),
 			new Create_Saved_Filters_Table(),
+			new Add_Operation_Progress_Columns(),
 		);
 
 		usort(
