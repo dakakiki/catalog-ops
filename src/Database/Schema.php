@@ -8,6 +8,7 @@
 namespace CatalogOps\Database;
 
 use CatalogOps\Database\Migrations\Create_Core_Tables;
+use CatalogOps\Database\Migrations\Create_Saved_Filters_Table;
 use CatalogOps\Database\Migrations\Migration;
 use wpdb;
 
@@ -51,6 +52,7 @@ final class Schema {
 
 		$this->migrations = array(
 			new Create_Core_Tables(),
+			new Create_Saved_Filters_Table(),
 		);
 
 		usort(
@@ -71,6 +73,13 @@ final class Schema {
 	 */
 	public function changes_table(): string {
 		return $this->wpdb->prefix . 'catalogops_changes';
+	}
+
+	/**
+	 * Fully-qualified name of the saved filters table.
+	 */
+	public function saved_filters_table(): string {
+		return $this->wpdb->prefix . 'catalogops_saved_filters';
 	}
 
 	/**
@@ -117,10 +126,12 @@ final class Schema {
 	 * for uninstall and integration-test teardown, never normal operation.
 	 */
 	public function drop(): void {
-		$operations = $this->operations_table();
-		$changes    = $this->changes_table();
+		$operations    = $this->operations_table();
+		$changes       = $this->changes_table();
+		$saved_filters = $this->saved_filters_table();
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+		$this->wpdb->query( "DROP TABLE IF EXISTS {$saved_filters}" );
 		$this->wpdb->query( "DROP TABLE IF EXISTS {$changes}" );
 		$this->wpdb->query( "DROP TABLE IF EXISTS {$operations}" );
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange

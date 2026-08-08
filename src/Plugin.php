@@ -10,6 +10,7 @@ namespace CatalogOps;
 use CatalogOps\Container\Container;
 use CatalogOps\Database\Schema;
 use CatalogOps\Query\Query_Engine;
+use CatalogOps\Query\Saved_Filters;
 
 /**
  * The plugin's composition root: a single entry point that owns the service
@@ -153,6 +154,15 @@ final class Plugin {
 				global $wpdb;
 
 				return new Query_Engine( $wpdb );
+			}
+		);
+
+		$this->container->singleton(
+			Saved_Filters::class,
+			static function ( Container $container ): Saved_Filters {
+				global $wpdb;
+
+				return new Saved_Filters( $wpdb, $container->get( Schema::class ) );
 			}
 		);
 
