@@ -27,9 +27,13 @@ use InvalidArgumentException;
 final class Operation_Service {
 
 	/**
-	 * Default number of objects per chunk before adaptation kicks in.
+	 * Default number of objects in the first chunk, before adaptation kicks in.
+	 * Kept conservative so the very first request stays well under a 30s limit on
+	 * an average shared host (CONTEXT §6); the runner grows it when chunks run
+	 * fast. Measured worst case at 200/chunk on the pessimized dev box was ~16s,
+	 * so 100 leaves comfortable margin for slower hosts.
 	 */
-	public const DEFAULT_BATCH = 200;
+	public const DEFAULT_BATCH = 100;
 
 	/**
 	 * Query engine (filter → ids).
