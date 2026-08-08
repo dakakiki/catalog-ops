@@ -41,5 +41,13 @@
 	</rule>
 
 	<!-- Forward-compatibility with the declared PHP floor. -->
-	<rule ref="PHPCompatibilityWP"/>
+	<rule ref="PHPCompatibilityWP">
+		<!--
+		False positive on PHP 8.1 enum methods: PHPCompatibility 9.x predates
+		enums and misreads `$this` inside an enum method as a plain-function use
+		(forbidden only before PHP 7.1). Our floor is 8.1, so the underlying
+		concern cannot apply; drop it until PHPCompatibility 10 lands enum support.
+		-->
+		<exclude name="PHPCompatibility.Variables.ForbiddenThisUseContexts.OutsideObjectContext"/>
+	</rule>
 </ruleset>
