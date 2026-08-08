@@ -229,15 +229,15 @@ final class Chunk_Runner {
 			if ( null === $new ) {
 				// Nothing to write (e.g. a formula over an empty field): skip and
 				// record it (CONTEXT §3), never coerce to zero.
-				$this->changes->mark_skipped( $row->id, $this->stringify( $current ) );
+				$this->changes->mark_skipped( $row->id, Values::to_string( $current ) );
 				continue;
 			}
 
 			$provider->stage( $product, $action->field(), $new );
 			$applied[] = array(
 				'row' => $row,
-				'old' => $this->stringify( $current ),
-				'new' => $this->stringify( $new ),
+				'old' => Values::to_string( $current ),
+				'new' => Values::to_string( $new ),
 			);
 		}
 
@@ -285,22 +285,5 @@ final class Chunk_Runner {
 		}
 
 		return $current;
-	}
-
-	/**
-	 * Normalize a field value to its stored string form (null stays null).
-	 *
-	 * @param mixed $value A value read from or written to a product.
-	 */
-	private function stringify( mixed $value ): ?string {
-		if ( null === $value ) {
-			return null;
-		}
-
-		if ( is_scalar( $value ) ) {
-			return (string) $value;
-		}
-
-		return (string) wp_json_encode( $value );
 	}
 }

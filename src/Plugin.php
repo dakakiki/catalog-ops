@@ -10,8 +10,19 @@ namespace CatalogOps;
 use CatalogOps\Admin\Admin_Page;
 use CatalogOps\Container\Container;
 use CatalogOps\Database\Schema;
+use CatalogOps\Operations\Changes;
+use CatalogOps\Operations\Chunk_Runner;
+use CatalogOps\Operations\Fields\Core_Fields;
+use CatalogOps\Operations\Fields\Field_Providers;
+use CatalogOps\Operations\Fields\Meta_Fields;
+use CatalogOps\Operations\Lock;
+use CatalogOps\Operations\Operation_Service;
+use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Scheduler;
+use CatalogOps\Operations\Watchdog;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Saved_Filters;
+use CatalogOps\Rest\Operations_Controller;
 use CatalogOps\Rest\Query_Controller;
 
 /**
@@ -93,8 +104,11 @@ final class Plugin {
 			'rest_api_init',
 			function (): void {
 				$this->container->get( Query_Controller::class )->register_routes();
+				$this->container->get( Operations_Controller::class )->register_routes();
 			}
 		);
+
+		$this->register_operation_hooks();
 
 		if ( is_admin() ) {
 			$admin_page = $this->container->get( Admin_Page::class );
@@ -196,8 +210,98 @@ final class Plugin {
 			static fn(): Admin_Page => new Admin_Page( $plugin_file )
 		);
 
-		// Operations and provider modules register here as their milestones are
-		// implemented.
+		$this->register_operation_services();
+	}
+
+	/**
+	 * Register the M2 write-engine services: field providers, the operations and
+	 * changes repositories, the lock, the Action Scheduler wrapper, and the
+	 * service/runner/watchdog that drive the pipeline.
+	 */
+	private function register_operation_services(): void {
+		$this->container->singleton(
+			Field_Providers::class,
+			static function (): Field_Providers {
+				$providers = array( new Core_Fields(), new Meta_Fields() );
+
+				/**
+				 * Filters the ordered list of field providers. M7 modules (ACF,
+				 * WPML, brands) append their providers here.
+				 *
+				 * @param array $providers List of Field_Provider instances.
+				 */
+				$providers = apply_filters( 'catalogops_field_providers', $providers );
+
+				return new Field_Providers( ...$providers );
+			}
+		);
+
+		$this->container->singleton(
+			Operations::class,
+			static function ( Container $container ): Operations {
+				global $wpdb;
+
+				return new Operations( $wpdb, $container->get( Schema::class ) );
+			}
+		);
+
+		$this->container->singleton(
+			Changes::class,
+			static function ( Container $container ): Changes {
+				global $wpdb;
+
+				return new Changes( $wpdb, $container->get( Schema::class ) );
+			}
+		);
+
+		$this->container->singleton(
+			Lock::class,
+			static fn( Container $container ): Lock => new Lock( $container->get( Operations::class ) )
+		);
+
+		$this->container->singleton(
+			Scheduler::class,
+			static fn(): Scheduler => new Scheduler()
+		);
+
+		$this->container->singleton(
+			Operation_Service::class,
+			static fn( Container $container ): Operation_Service => new Operation_Service(
+				$container->get( Query_Engine::class ),
+				$container->get( Operations::class ),
+				$container->get( Changes::class ),
+				$container->get( Field_Providers::class ),
+				$container->get( Lock::class ),
+				$container->get( Scheduler::class )
+			)
+		);
+
+		$this->container->singleton(
+			Chunk_Runner::class,
+			static fn( Container $container ): Chunk_Runner => new Chunk_Runner(
+				$container->get( Operations::class ),
+				$container->get( Changes::class ),
+				$container->get( Field_Providers::class ),
+				$container->get( Scheduler::class ),
+				$container->get( Lock::class )
+			)
+		);
+
+		$this->container->singleton(
+			Watchdog::class,
+			static fn( Container $container ): Watchdog => new Watchdog(
+				$container->get( Operations::class ),
+				$container->get( Lock::class )
+			)
+		);
+
+		$this->container->singleton(
+			Operations_Controller::class,
+			static fn( Container $container ): Operations_Controller => new Operations_Controller(
+				$container->get( Operation_Service::class ),
+				$container->get( Operations::class )
+			)
+		);
 	}
 
 	/**
@@ -209,5 +313,36 @@ final class Plugin {
 		}
 
 		\WP_CLI::add_command( 'catalogops seed', new CLI\Seed_Command() );
+	}
+
+	/**
+	 * Wire the Action Scheduler action hooks and ensure the recurring watchdog is
+	 * scheduled. Registered on every request so the async worker (cron or CLI)
+	 * finds the callbacks when it runs the queue.
+	 */
+	private function register_operation_hooks(): void {
+		add_action(
+			Scheduler::CHUNK_HOOK,
+			function ( $op_id = 0, $batch = 0 ): void {
+				$this->container->get( Chunk_Runner::class )->run( (int) $op_id, (int) $batch );
+			},
+			10,
+			2
+		);
+
+		add_action(
+			Scheduler::WATCHDOG_HOOK,
+			function (): void {
+				$this->container->get( Watchdog::class )->run();
+			}
+		);
+
+		// Schedule the recurring watchdog once Action Scheduler is ready.
+		add_action(
+			'action_scheduler_init',
+			function (): void {
+				$this->container->get( Scheduler::class )->ensure_watchdog();
+			}
+		);
 	}
 }

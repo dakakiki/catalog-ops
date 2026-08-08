@@ -124,6 +124,66 @@ final class Operation_Service {
 	}
 
 	/**
+	 * Dry-run a filter and actions: count the targets and show what would change
+	 * for a small sample, without writing anything (CONTEXT §2, the Preview step).
+	 * Resolving here is a throwaway read, separate from the single resolution
+	 * queue() freezes.
+	 *
+	 * @param Filter                                  $filter  Target filter.
+	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to apply.
+	 * @param int                                     $limit   Maximum sample rows.
+	 * @return array{target_count: int, sample: list<array{id: int, name: string, changes: list<array{field: string, old: ?string, new: ?string}>}>}
+	 *
+	 * @throws InvalidArgumentException When an action targets an unsupported field.
+	 */
+	public function preview( Filter $filter, array $actions, int $limit = 20 ): array {
+		$this->assert_fields_supported( $actions );
+
+		$ids   = $this->engine->resolve( $filter );
+		$limit = max( 0, $limit );
+
+		$sample = array();
+
+		foreach ( array_slice( $ids, 0, $limit ) as $object_id ) {
+			$product = wc_get_product( $object_id );
+
+			if ( ! $product instanceof \WC_Product ) {
+				continue;
+			}
+
+			$changes = array();
+
+			foreach ( $actions as $action ) {
+				$provider = $this->providers->for( $action->field() );
+
+				if ( null === $provider ) {
+					continue;
+				}
+
+				$current = $provider->read( $product, $action->field() );
+				$new     = $action->apply( $current );
+
+				$changes[] = array(
+					'field' => $action->field(),
+					'old'   => Values::to_string( $current ),
+					'new'   => Values::to_string( $new ),
+				);
+			}
+
+			$sample[] = array(
+				'id'      => (int) $object_id,
+				'name'    => $product->get_name(),
+				'changes' => $changes,
+			);
+		}
+
+		return array(
+			'target_count' => count( $ids ),
+			'sample'       => $sample,
+		);
+	}
+
+	/**
 	 * Freeze an operation's targets and hand it to the scheduler.
 	 *
 	 * @param int $op_id Operation id.

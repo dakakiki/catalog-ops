@@ -11,15 +11,14 @@ use CatalogOps\Database\Schema;
 use WP_UnitTestCase;
 
 /**
- * The operations and changes tables are queried through information_schema by
- * our own migration, which cannot see the CREATE TEMPORARY TABLEs WP_UnitTestCase
- * would otherwise substitute. So — like {@see \CatalogOps\Tests\Integration\Database\SchemaTest}
- * — these tests opt out of the temporary-table rewrite and manage real tables,
- * dropping and re-installing a clean schema around each test.
+ * Installs the plugin schema once per test class as real tables — before the
+ * per-test transactions begin, so the CREATE/ALTER DDL (which our migration
+ * verifies through information_schema) runs against real tables rather than the
+ * CREATE TEMPORARY TABLEs WP_UnitTestCase would otherwise substitute. Test
+ * bodies then do only DML, so each test's writes roll back for isolation.
  *
- * DDL implicitly commits, so the per-test transaction does not roll data back;
- * dropping the tables in tear_down removes both schema and rows. Subclasses that
- * also create posts (products) must clean those up themselves.
+ * A leading drop() clears any version-option/table mismatch a previous DDL-heavy
+ * class may have committed, so the install is never skipped by the version gate.
  *
  * The file name intentionally does not end in `Test.php`, so PHPUnit does not
  * collect this abstract base as a test case.
@@ -27,32 +26,41 @@ use WP_UnitTestCase;
 abstract class Operations_Database_Case extends WP_UnitTestCase {
 
 	/**
-	 * Schema under a real (non-temporary) table regime.
+	 * Schema handle for the current test.
 	 *
 	 * @var Schema
 	 */
 	protected Schema $schema;
 
 	/**
-	 * Install a clean schema on real tables.
+	 * Create the schema as real tables before any test in the class runs.
+	 *
+	 * @param \WP_UnitTest_Factory $factory Shared fixture factory.
+	 */
+	public static function wpSetUpBeforeClass( $factory ): void {
+		global $wpdb;
+
+		$schema = new Schema( $wpdb );
+		$schema->drop();
+		$schema->install();
+	}
+
+	/**
+	 * Drop the schema once the class is done.
+	 */
+	public static function wpTearDownAfterClass(): void {
+		global $wpdb;
+
+		( new Schema( $wpdb ) )->drop();
+	}
+
+	/**
+	 * Provide a per-test schema handle.
 	 */
 	public function set_up(): void {
 		parent::set_up();
 
-		remove_filter( 'query', array( $this, '_create_temporary_tables' ) );
-		remove_filter( 'query', array( $this, '_drop_temporary_tables' ) );
-
 		global $wpdb;
 		$this->schema = new Schema( $wpdb );
-		$this->schema->drop();
-		$this->schema->install();
-	}
-
-	/**
-	 * Drop the plugin tables (and thus the rows written during the test).
-	 */
-	public function tear_down(): void {
-		$this->schema->drop();
-		parent::tear_down();
 	}
 }
