@@ -9,6 +9,7 @@ namespace CatalogOps;
 
 use CatalogOps\Container\Container;
 use CatalogOps\Database\Schema;
+use CatalogOps\Query\Query_Engine;
 
 /**
  * The plugin's composition root: a single entry point that owns the service
@@ -146,8 +147,17 @@ final class Plugin {
 			}
 		);
 
-		// Query, Operations, Providers, Admin, and CLI services register here
-		// as their milestones are implemented.
+		$this->container->singleton(
+			Query_Engine::class,
+			static function (): Query_Engine {
+				global $wpdb;
+
+				return new Query_Engine( $wpdb );
+			}
+		);
+
+		// Operations, Providers, Admin, and CLI services register here as their
+		// milestones are implemented.
 	}
 
 	/**
