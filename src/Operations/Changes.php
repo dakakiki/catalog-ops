@@ -370,7 +370,7 @@ final class Changes {
 	}
 
 	/**
-	 * Delete all rows for an operation (used by tests and, later, retention).
+	 * Delete all rows for an operation (used by tests and retention).
 	 *
 	 * @param int $operation_id Operation id.
 	 * @return int Rows removed.
@@ -380,6 +380,50 @@ final class Changes {
 			$this->schema->changes_table(),
 			array( 'operation_id' => $operation_id ),
 			array( '%d' )
+		);
+	}
+
+	/**
+	 * Purge the recorded deltas of operations that completed before a cutoff — the
+	 * retention window closing (CONTEXT §3). Only the heavy changes rows are
+	 * removed; the operations themselves stay as the audit trail. Bounded to a
+	 * number of operations per call so a first run over a long-lived catalog does
+	 * not delete millions of rows in one statement; the daily job drains the
+	 * backlog over successive runs. Idempotent: an operation with no remaining rows
+	 * is simply not selected again.
+	 *
+	 * @param string $cutoff_gmt     MySQL datetime (GMT); operations completed before this.
+	 * @param int    $max_operations Maximum operations to purge this call.
+	 * @return array{operations: int, rows: int}
+	 */
+	public function purge_completed_before( string $cutoff_gmt, int $max_operations = 100 ): array {
+		$changes    = $this->schema->changes_table();
+		$operations = $this->schema->operations_table();
+		$max        = max( 1, $max_operations );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$op_ids = $this->wpdb->get_col(
+			$this->wpdb->prepare(
+				"SELECT DISTINCT c.operation_id
+				FROM {$changes} c
+				INNER JOIN {$operations} o ON o.id = c.operation_id
+				WHERE o.completed_at IS NOT NULL AND o.completed_at < %s
+				ORDER BY c.operation_id ASC
+				LIMIT %d",
+				$cutoff_gmt,
+				$max
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$rows = 0;
+		foreach ( $op_ids as $op_id ) {
+			$rows += $this->delete_for_operation( (int) $op_id );
+		}
+
+		return array(
+			'operations' => count( $op_ids ),
+			'rows'       => $rows,
 		);
 	}
 

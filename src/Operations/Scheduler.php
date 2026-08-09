@@ -29,6 +29,11 @@ final class Scheduler implements Operation_Scheduler {
 	public const WATCHDOG_HOOK = 'catalogops_watchdog';
 
 	/**
+	 * Hook fired periodically to purge deltas past the retention window.
+	 */
+	public const RETENTION_HOOK = 'catalogops_retention';
+
+	/**
 	 * Action Scheduler group for the watchdog and other plugin-wide actions.
 	 */
 	private const GROUP = 'catalogops';
@@ -37,6 +42,11 @@ final class Scheduler implements Operation_Scheduler {
 	 * How often the watchdog runs, in seconds.
 	 */
 	private const WATCHDOG_INTERVAL = 5 * MINUTE_IN_SECONDS;
+
+	/**
+	 * How often the retention purge runs, in seconds.
+	 */
+	private const RETENTION_INTERVAL = DAY_IN_SECONDS;
 
 	/**
 	 * Enqueue the next chunk of an operation, in its own cancellable group.
@@ -88,6 +98,27 @@ final class Scheduler implements Operation_Scheduler {
 			time() + self::WATCHDOG_INTERVAL,
 			self::WATCHDOG_INTERVAL,
 			self::WATCHDOG_HOOK,
+			array(),
+			self::GROUP
+		);
+	}
+
+	/**
+	 * Ensure the recurring retention purge is scheduled exactly once.
+	 */
+	public function ensure_retention(): void {
+		if ( ! function_exists( 'as_has_scheduled_action' ) || ! function_exists( 'as_schedule_recurring_action' ) ) {
+			return;
+		}
+
+		if ( as_has_scheduled_action( self::RETENTION_HOOK, array(), self::GROUP ) ) {
+			return;
+		}
+
+		as_schedule_recurring_action(
+			time() + self::RETENTION_INTERVAL,
+			self::RETENTION_INTERVAL,
+			self::RETENTION_HOOK,
 			array(),
 			self::GROUP
 		);

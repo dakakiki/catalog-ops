@@ -18,12 +18,14 @@ use CatalogOps\Operations\Fields\Meta_Fields;
 use CatalogOps\Operations\Lock;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Retention;
 use CatalogOps\Operations\Scheduler;
 use CatalogOps\Operations\Watchdog;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Saved_Filters;
 use CatalogOps\Rest\Operations_Controller;
 use CatalogOps\Rest\Query_Controller;
+use CatalogOps\Rest\Settings_Controller;
 
 /**
  * The plugin's composition root: a single entry point that owns the service
@@ -105,6 +107,7 @@ final class Plugin {
 			function (): void {
 				$this->container->get( Query_Controller::class )->register_routes();
 				$this->container->get( Operations_Controller::class )->register_routes();
+				$this->container->get( Settings_Controller::class )->register_routes();
 			}
 		);
 
@@ -296,11 +299,25 @@ final class Plugin {
 		);
 
 		$this->container->singleton(
+			Retention::class,
+			static fn( Container $container ): Retention => new Retention(
+				$container->get( Changes::class )
+			)
+		);
+
+		$this->container->singleton(
 			Operations_Controller::class,
 			static fn( Container $container ): Operations_Controller => new Operations_Controller(
 				$container->get( Operation_Service::class ),
 				$container->get( Operations::class ),
 				$container->get( Changes::class )
+			)
+		);
+
+		$this->container->singleton(
+			Settings_Controller::class,
+			static fn( Container $container ): Settings_Controller => new Settings_Controller(
+				$container->get( Retention::class )
 			)
 		);
 	}
@@ -338,11 +355,21 @@ final class Plugin {
 			}
 		);
 
-		// Schedule the recurring watchdog once Action Scheduler is ready.
+		add_action(
+			Scheduler::RETENTION_HOOK,
+			function (): void {
+				$this->container->get( Retention::class )->purge();
+			}
+		);
+
+		// Schedule the recurring watchdog and retention purge once Action
+		// Scheduler is ready.
 		add_action(
 			'action_scheduler_init',
 			function (): void {
-				$this->container->get( Scheduler::class )->ensure_watchdog();
+				$scheduler = $this->container->get( Scheduler::class );
+				$scheduler->ensure_watchdog();
+				$scheduler->ensure_retention();
 			}
 		);
 	}
