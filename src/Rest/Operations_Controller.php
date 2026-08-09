@@ -8,6 +8,9 @@
 namespace CatalogOps\Rest;
 
 use CatalogOps\Operations\Actions\Action_Factory;
+use CatalogOps\Operations\Change;
+use CatalogOps\Operations\Changes;
+use CatalogOps\Operations\Conflict_Policy;
 use CatalogOps\Operations\Operation;
 use CatalogOps\Operations\Operation_Blocked;
 use CatalogOps\Operations\Operation_Mode;
@@ -47,14 +50,23 @@ final class Operations_Controller {
 	private Operations $operations;
 
 	/**
+	 * Changes repository (audit-log detail and change counts).
+	 *
+	 * @var Changes
+	 */
+	private Changes $changes;
+
+	/**
 	 * Build the controller.
 	 *
 	 * @param Operation_Service $service    Operation service.
 	 * @param Operations        $operations Operations repository.
+	 * @param Changes           $changes    Changes repository.
 	 */
-	public function __construct( Operation_Service $service, Operations $operations ) {
+	public function __construct( Operation_Service $service, Operations $operations, Changes $changes ) {
 		$this->service    = $service;
 		$this->operations = $operations;
+		$this->changes    = $changes;
 	}
 
 	/**
@@ -131,6 +143,66 @@ final class Operations_Controller {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'cancel' ),
 				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
+
+		$policy_arg = array(
+			'conflict_policy' => array(
+				'type'    => 'string',
+				'enum'    => array( Conflict_Policy::SKIP->value, Conflict_Policy::FORCE->value ),
+				'default' => Conflict_Policy::SKIP->value,
+			),
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/operations/(?P<id>\d+)/undo',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'undo' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => $policy_arg,
+			)
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/operations/(?P<id>\d+)/undo/preview',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'undo_preview' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => $policy_arg + array(
+					'limit' => array(
+						'type'    => 'integer',
+						'default' => 20,
+						'minimum' => 0,
+						'maximum' => 100,
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/operations/(?P<id>\d+)/changes',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'changes' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => array(
+					'page'     => array(
+						'type'    => 'integer',
+						'default' => 1,
+						'minimum' => 1,
+					),
+					'per_page' => array(
+						'type'    => 'integer',
+						'default' => 50,
+						'minimum' => 1,
+						'maximum' => 200,
+					),
+				),
 			)
 		);
 	}
@@ -250,6 +322,94 @@ final class Operations_Controller {
 	}
 
 	/**
+	 * Preview undoing an operation: how many changes would be reverted and a
+	 * sample flagging which objects have drifted (CONTEXT §3).
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function undo_preview( WP_REST_Request $request ) {
+		$id = (int) $request->get_param( 'id' );
+
+		try {
+			$preview = $this->service->preview_undo(
+				$id,
+				$this->policy_param( $request ),
+				(int) $request->get_param( 'limit' )
+			);
+		} catch ( InvalidArgumentException $e ) {
+			return $this->error( 'catalogops_not_found', $e->getMessage(), 404 );
+		}
+
+		return new WP_REST_Response( $preview );
+	}
+
+	/**
+	 * Undo an operation: create and queue the inverse operation (CONTEXT §2).
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function undo( WP_REST_Request $request ) {
+		$id = (int) $request->get_param( 'id' );
+
+		try {
+			$undo_id = $this->service->undo( $id, $this->policy_param( $request ), get_current_user_id() );
+			$this->service->queue( $undo_id );
+		} catch ( Operation_Blocked $e ) {
+			return $this->error( 'catalogops_locked', $e->getMessage(), 409 );
+		} catch ( InvalidArgumentException $e ) {
+			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
+		} catch ( Throwable $e ) {
+			return $this->error( 'catalogops_failed', $e->getMessage(), 500 );
+		}
+
+		return new WP_REST_Response( $this->to_array( $this->operations->find( $undo_id ) ), 201 );
+	}
+
+	/**
+	 * A page of an operation's recorded deltas — the audit-log detail view.
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function changes( WP_REST_Request $request ) {
+		$id        = (int) $request->get_param( 'id' );
+		$operation = $this->operations->find( $id );
+
+		if ( null === $operation ) {
+			return $this->error( 'catalogops_not_found', 'Operation not found.', 404 );
+		}
+
+		$page     = max( 1, (int) $request->get_param( 'page' ) );
+		$per_page = (int) $request->get_param( 'per_page' );
+		$offset   = ( $page - 1 ) * $per_page;
+
+		$rows = array_map(
+			array( $this, 'change_to_array' ),
+			$this->changes->page( $id, $per_page, $offset )
+		);
+
+		return new WP_REST_Response(
+			array(
+				'items'  => $rows,
+				'counts' => $this->changes->counts( $id ),
+				'page'   => $page,
+			)
+		);
+	}
+
+	/**
+	 * The conflict policy carried by a request, defaulting to skip (CONTEXT §3).
+	 *
+	 * @param WP_REST_Request $request The request.
+	 */
+	private function policy_param( WP_REST_Request $request ): Conflict_Policy {
+		return Conflict_Policy::tryFrom( (string) $request->get_param( 'conflict_policy' ) )
+			?? Conflict_Policy::safe_default();
+	}
+
+	/**
 	 * Shape an operation for a JSON response.
 	 *
 	 * @param Operation $operation The operation.
@@ -257,17 +417,68 @@ final class Operations_Controller {
 	 */
 	private function to_array( Operation $operation ): array {
 		return array(
-			'id'           => $operation->id,
-			'status'       => $operation->status->value,
-			'source'       => $operation->source->value,
-			'mode'         => $operation->mode->value,
-			'target_count' => $operation->target_count,
-			'processed'    => $operation->processed,
-			'failed'       => $operation->failed,
-			'percent'      => $operation->percent(),
-			'created_at'   => $operation->created_at,
-			'completed_at' => $operation->completed_at,
+			'id'              => $operation->id,
+			'status'          => $operation->status->value,
+			'source'          => $operation->source->value,
+			'mode'            => $operation->mode->value,
+			'parent_op_id'    => $operation->parent_op_id,
+			'conflict_policy' => null === $operation->conflict_policy ? null : $operation->conflict_policy->value,
+			'user_id'         => $operation->user_id,
+			'user_name'       => $this->user_name( $operation->user_id ),
+			'target_count'    => $operation->target_count,
+			'processed'       => $operation->processed,
+			'failed'          => $operation->failed,
+			'percent'         => $operation->percent(),
+			'can_undo'        => $this->can_undo( $operation ),
+			'created_at'      => $operation->created_at,
+			'completed_at'    => $operation->completed_at,
 		);
+	}
+
+	/**
+	 * Shape one change row for the audit view.
+	 *
+	 * @param Change $change The change.
+	 * @return array<string, mixed>
+	 */
+	private function change_to_array( Change $change ): array {
+		$labels = array(
+			0 => 'pending',
+			1 => 'applied',
+			2 => 'failed',
+			3 => 'skipped',
+		);
+
+		return array(
+			'object_id'   => $change->object_id,
+			'object_type' => $change->object_type,
+			'field_type'  => $change->field_type->value,
+			'field_key'   => $change->field_key,
+			'old_value'   => $change->old_value,
+			'new_value'   => $change->new_value,
+			'status'      => $labels[ $change->status->value ] ?? 'pending',
+		);
+	}
+
+	/**
+	 * Whether the admin app should offer an undo control for this operation: it
+	 * made changes and is not currently running.
+	 *
+	 * @param Operation $operation The operation.
+	 */
+	private function can_undo( Operation $operation ): bool {
+		return ! $operation->status->is_active() && $operation->processed > 0;
+	}
+
+	/**
+	 * A display name for the user who ran an operation, for the audit log.
+	 *
+	 * @param int $user_id User id.
+	 */
+	private function user_name( int $user_id ): string {
+		$user = $user_id > 0 ? get_userdata( $user_id ) : false;
+
+		return false === $user ? '' : $user->display_name;
 	}
 
 	/**

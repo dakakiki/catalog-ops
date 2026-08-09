@@ -12,7 +12,13 @@
 
 namespace CatalogOps\Tests\Integration\Operations;
 
+use CatalogOps\Operations\Actions\Set_Value;
+use CatalogOps\Operations\Changes;
+use CatalogOps\Operations\Operation_Mode;
+use CatalogOps\Operations\Operation_Source;
+use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Query\Filter;
 use WC_Product_Simple;
 use WP_REST_Request;
 
@@ -22,6 +28,7 @@ use WP_REST_Request;
 final class OperationsControllerTest extends Operations_Database_Case {
 
 	private Operations $operations;
+	private Changes $changes;
 
 	public function set_up(): void {
 		parent::set_up();
@@ -34,6 +41,7 @@ final class OperationsControllerTest extends Operations_Database_Case {
 
 		global $wpdb;
 		$this->operations = new Operations( $wpdb, $this->schema );
+		$this->changes    = new Changes( $wpdb, $this->schema );
 	}
 
 	public function tear_down(): void {
@@ -142,6 +150,92 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$response = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/operations' ) );
 		$this->assertSame( 200, $response->get_status() );
 		$this->assertNotEmpty( $response->get_data()['items'] );
+	}
+
+	public function test_changes_endpoint_returns_deltas_and_counts(): void {
+		$op_id = $this->completed_operation( array( 501, 502 ) );
+
+		$response = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id . '/changes' ) );
+
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertCount( 2, $data['items'] );
+		$this->assertSame( 2, $data['counts']['applied'] );
+		$this->assertSame( 'regular_price', $data['items'][0]['field_key'] );
+		$this->assertSame( 'applied', $data['items'][0]['status'] );
+		$this->assertSame( '19.90', $data['items'][0]['old_value'] );
+		$this->assertSame( '9.99', $data['items'][0]['new_value'] );
+	}
+
+	public function test_undo_preview_endpoint_reports_total(): void {
+		$op_id = $this->completed_operation( array( 601, 602 ) );
+
+		$response = $this->post( '/catalogops/v1/operations/' . $op_id . '/undo/preview', array() );
+
+		$this->assertSame( 200, $response->get_status() );
+		$this->assertSame( 2, $response->get_data()['total'] );
+		$this->assertSame( 'skip', $response->get_data()['conflict_policy'] );
+	}
+
+	public function test_undo_preview_unknown_operation_is_404(): void {
+		$response = $this->post( '/catalogops/v1/operations/999999/undo/preview', array() );
+
+		$this->assertSame( 404, $response->get_status() );
+	}
+
+	public function test_undo_endpoint_creates_and_queues_the_inverse_operation(): void {
+		$op_id = $this->completed_operation( array( 701, 702 ) );
+
+		$response = $this->post(
+			'/catalogops/v1/operations/' . $op_id . '/undo',
+			array( 'conflict_policy' => 'force' )
+		);
+
+		$this->assertSame( 201, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( 'undo', $data['source'] );
+		$this->assertSame( $op_id, $data['parent_op_id'] );
+		$this->assertSame( 'force', $data['conflict_policy'] );
+		// Its targets were frozen from the parent's two applied deltas.
+		$this->assertSame( 2, $data['target_count'] );
+	}
+
+	/**
+	 * Create a completed operation with applied deltas on the given object ids —
+	 * a stand-in for a finished run, so the audit and undo endpoints have real
+	 * recorded changes to work from without driving the async chain.
+	 *
+	 * @param int[] $object_ids Object ids that were changed.
+	 * @return int Operation id.
+	 */
+	private function completed_operation( array $object_ids ): int {
+		$op_id = $this->operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			get_current_user_id()
+		);
+
+		$rows = array_map(
+			static fn( int $id ): array => array(
+				'object_id'  => $id,
+				'field_type' => 'post_field',
+				'field_key'  => 'regular_price',
+			),
+			$object_ids
+		);
+		$this->changes->seed( $op_id, $rows );
+
+		foreach ( $this->changes->pending_chunk( $op_id, 100 ) as $row ) {
+			$this->changes->mark_applied( $row->id, '19.90', '9.99' );
+		}
+
+		$this->operations->set_target_count( $op_id, count( $object_ids ) );
+		$this->operations->record_progress( $op_id, count( $object_ids ), 0 );
+		$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
+
+		return $op_id;
 	}
 
 	/**

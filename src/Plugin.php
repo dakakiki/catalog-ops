@@ -299,7 +299,8 @@ final class Plugin {
 			Operations_Controller::class,
 			static fn( Container $container ): Operations_Controller => new Operations_Controller(
 				$container->get( Operation_Service::class ),
-				$container->get( Operations::class )
+				$container->get( Operations::class ),
+				$container->get( Changes::class )
 			)
 		);
 	}
