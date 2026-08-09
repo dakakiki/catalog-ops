@@ -100,17 +100,11 @@ final class Fields_Controller {
 
 		register_rest_route(
 			self::REST_NAMESPACE,
-			'/fields/meta-values',
+			'/fields/brands',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'meta_values' ),
+				'callback'            => array( $this, 'brands' ),
 				'permission_callback' => array( $this, 'can_manage' ),
-				'args'                => array(
-					'key' => array(
-						'type'     => 'string',
-						'required' => true,
-					),
-				),
 			)
 		);
 
@@ -153,20 +147,21 @@ final class Fields_Controller {
 	}
 
 	/**
-	 * The distinct values a given custom field holds across the catalog, so the
-	 * filter can offer "which brands/values exist?" as suggestions. Only
-	 * user-facing keys are allowed, so internal values are never dumped.
+	 * The brands present in the catalog, for the filter's brand dropdown, plus the
+	 * filter field they map to. Which meta key holds the brand is catalog-specific
+	 * (the seed uses `_catalogops_brand`); it is overridable so a real store's
+	 * brand source can be pointed at without touching the UI. Returning the field
+	 * with the values keeps the client from having to know the key.
 	 *
-	 * @param \WP_REST_Request $request The request.
 	 * @return WP_REST_Response
 	 */
-	public function meta_values( $request ): WP_REST_Response {
-		$key = (string) $request->get_param( 'key' );
-
-		if ( ! $this->is_user_key( $key ) ) {
-			return new WP_REST_Response( array( 'values' => array() ) );
-		}
-
+	public function brands(): WP_REST_Response {
+		/**
+		 * Filters the meta key that holds a product's brand.
+		 *
+		 * @param string $key Brand meta key.
+		 */
+		$key      = (string) apply_filters( 'catalogops_brand_meta_key', '_catalogops_brand' );
 		$postmeta = $this->wpdb->postmeta;
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -179,7 +174,12 @@ final class Fields_Controller {
 		);
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
-		return new WP_REST_Response( array( 'values' => array_map( 'strval', $values ) ) );
+		return new WP_REST_Response(
+			array(
+				'field'  => 'meta:' . $key,
+				'brands' => array_map( 'strval', $values ),
+			)
+		);
 	}
 
 	/**

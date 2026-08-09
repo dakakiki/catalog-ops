@@ -57,12 +57,13 @@ const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
 /**
  * Build the filter payload from the form state and target scope.
  *
- * @param {Object} form  Form values.
- * @param {string} scope 'product' or 'variation'.
+ * @param {Object} form       Form values.
+ * @param {string} scope      'product' or 'variation'.
+ * @param {string} brandField The filter field a brand maps to (from the API).
  * @return {Object} Filter in the API's shape (scope included, so the same filter
  * drives the query, the preview, and the operation).
  */
-function buildFilter( form, scope ) {
+function buildFilter( form, scope, brandField ) {
 	const conditions = [];
 
 	if ( form.priceMin !== '' ) {
@@ -100,11 +101,11 @@ function buildFilter( form, scope ) {
 			value: [ Number( form.category ) ],
 		} );
 	}
-	if ( form.metaKey && form.metaValue !== '' ) {
+	if ( form.brand && brandField ) {
 		conditions.push( {
-			field: `meta:${ form.metaKey }`,
+			field: brandField,
 			operator: '=',
-			value: form.metaValue,
+			value: form.brand,
 		} );
 	}
 
@@ -959,8 +960,7 @@ function App() {
 		stockStatus: '',
 		sku: '',
 		category: '',
-		metaKey: '',
-		metaValue: '',
+		brand: '',
 	} );
 	const [ items, setItems ] = useState( [] );
 	const [ total, setTotal ] = useState( 0 );
@@ -968,11 +968,11 @@ function App() {
 	const [ loading, setLoading ] = useState( false );
 	const [ error, setError ] = useState( '' );
 	const [ historyKey, setHistoryKey ] = useState( 0 );
-	// Discovery data for the pickers: categories, custom-field keys, and the
-	// distinct values of the currently chosen key.
+	// Discovery data for the category and brand dropdowns. brandField is the
+	// filter field a brand maps to (catalog-specific; supplied by the API).
 	const [ categories, setCategories ] = useState( [] );
-	const [ metaKeys, setMetaKeys ] = useState( [] );
-	const [ metaValues, setMetaValues ] = useState( [] );
+	const [ brands, setBrands ] = useState( [] );
+	const [ brandField, setBrandField ] = useState( '' );
 	// Whether the filter, table, and bulk edit target parent products or their
 	// variations (CONTEXT §4).
 	const [ scope, setScope ] = useState( 'product' );
@@ -986,41 +986,29 @@ function App() {
 				stockStatus: '',
 				sku: '',
 				category: '',
-				metaKey: '',
-				metaValue: '',
+				brand: '',
 			},
-			'product'
+			'product',
+			''
 		)
 	);
 
-	// Load the category and custom-field-key pickers once.
+	// Load the category and brand dropdowns once.
 	useEffect( () => {
 		apiFetch( { path: '/catalogops/v1/fields/categories' } )
 			.then( ( res ) => setCategories( res.categories || [] ) )
 			.catch( () => {} );
-		apiFetch( { path: '/catalogops/v1/fields/meta-keys' } )
-			.then( ( res ) => setMetaKeys( res.keys || [] ) )
+		apiFetch( { path: '/catalogops/v1/fields/brands' } )
+			.then( ( res ) => {
+				setBrands( res.brands || [] );
+				setBrandField( res.field || '' );
+			} )
 			.catch( () => {} );
 	}, [] );
 
-	// When a custom-field key is chosen, load its distinct values as suggestions.
-	useEffect( () => {
-		if ( ! form.metaKey ) {
-			setMetaValues( [] );
-			return;
-		}
-		apiFetch( {
-			path: `/catalogops/v1/fields/meta-values?key=${ encodeURIComponent(
-				form.metaKey
-			) }`,
-		} )
-			.then( ( res ) => setMetaValues( res.values || [] ) )
-			.catch( () => {} );
-	}, [ form.metaKey ] );
-
 	const run = useCallback(
 		( toPage ) => {
-			const filter = buildFilter( form, scope );
+			const filter = buildFilter( form, scope, brandField );
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
@@ -1045,7 +1033,7 @@ function App() {
 				)
 				.finally( () => setLoading( false ) );
 		},
-		[ form, scope ]
+		[ form, scope, brandField ]
 	);
 
 	useEffect( () => {
@@ -1162,6 +1150,24 @@ function App() {
 								) ) }
 							</select>
 
+							<label htmlFor="catalogops-brand">
+								{ __( 'Brand', 'catalogops' ) }
+							</label>
+							<select
+								id="catalogops-brand"
+								value={ form.brand }
+								onChange={ update( 'brand' ) }
+							>
+								<option value="">
+									{ __( 'Any', 'catalogops' ) }
+								</option>
+								{ brands.map( ( b ) => (
+									<option key={ b } value={ b }>
+										{ b }
+									</option>
+								) ) }
+							</select>
+
 							<button
 								className="button button-primary"
 								onClick={ () => run( 1 ) }
@@ -1171,50 +1177,6 @@ function App() {
 									? __( 'Show variations', 'catalogops' )
 									: __( 'Show products', 'catalogops' ) }
 							</button>
-						</div>
-					</div>
-					<div className="catalogops-control-group">
-						<span className="catalogops-group-label">
-							{ __( 'Custom field', 'catalogops' ) }
-						</span>
-						<div className="catalogops-filters">
-							<input
-								type="text"
-								list="catalogops-filter-meta-keys"
-								placeholder={ __(
-									'field key, e.g. _catalogops_brand',
-									'catalogops'
-								) }
-								aria-label={ __(
-									'Custom field key',
-									'catalogops'
-								) }
-								value={ form.metaKey }
-								onChange={ update( 'metaKey' ) }
-							/>
-							<datalist id="catalogops-filter-meta-keys">
-								{ metaKeys.map( ( k ) => (
-									<option key={ k } value={ k } />
-								) ) }
-							</datalist>
-							<span aria-hidden="true">=</span>
-							<input
-								type="text"
-								list="catalogops-filter-meta-values"
-								placeholder={ __( 'value', 'catalogops' ) }
-								aria-label={ __(
-									'Custom field value',
-									'catalogops'
-								) }
-								value={ form.metaValue }
-								onChange={ update( 'metaValue' ) }
-								disabled={ ! form.metaKey }
-							/>
-							<datalist id="catalogops-filter-meta-values">
-								{ metaValues.map( ( v ) => (
-									<option key={ v } value={ v } />
-								) ) }
-							</datalist>
 						</div>
 					</div>
 					<div className="catalogops-control-group">
