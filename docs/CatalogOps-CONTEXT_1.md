@@ -172,6 +172,11 @@ max( regular_price * 0.8, cost * 1.1 )
 
 Prazno ili nenumeričko polje → **preskoči objekat i zabeleži u log**. Nikad kao nula (tako se cene postavljaju na 0).
 
+> **TODO (M5, uz % / formule) — custom fields i atributi varijacija:** kada se u M5 dodaju procentualne/formulske izmene cene (npr. „skini 10% za kategoriju X"), tada rešiti i pitanje **custom polja** u adminu. U M4 su privremeno uklonjena iz bulk-edita i iz filtera (bila su zbunjujuća; brend je tada izdvojen u poseban dropdown). Odluke koje treba doneti u M5:
+> - Da li „custom fields" uopšte treba da postoje kao takvi, ili se preformulišu kao **filter po atributu varijacije** (npr. veličina/boja) — što je verovatno prirodnije i **pripada filteru**, ne bulk-editu.
+> - Ako ostaju kao proizvoljna meta polja: kako birati ključ i vrednost bez izlaganja internih WooCommerce ključeva (`attribute_*`, `_price`, …) — već postoji `/fields/meta-keys` endpoint kao osnova.
+> - Cilj scenarija: agencija filtrira po kategoriji + brendu (+ eventualno atributu varijacije) i primeni procentualnu izmenu cene.
+
 ### ⚠ MySQL 5.7 ograničenja
 
 Razvojna baza je 5.7.36. **Ne koristiti:** CTE (`WITH`), window funkcije (`ROW_NUMBER()`, `RANK()`), funkcionalne indekse, `DESC` indekse.
