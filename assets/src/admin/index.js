@@ -345,6 +345,7 @@ const CHANGES_PER_PAGE = 10;
 function ChangesTable( { id } ) {
 	const [ data, setData ] = useState( null );
 	const [ error, setError ] = useState( '' );
+	const [ loading, setLoading ] = useState( true );
 	const [ page, setPage ] = useState( 1 );
 	// Draft is the input value; sku is the applied search (on Enter/Search).
 	const [ draft, setDraft ] = useState( '' );
@@ -354,11 +355,13 @@ function ChangesTable( { id } ) {
 		const query = `page=${ page }&per_page=${ CHANGES_PER_PAGE }${
 			sku ? `&sku=${ encodeURIComponent( sku ) }` : ''
 		}`;
+		setLoading( true );
 		apiFetch( {
 			path: `/catalogops/v1/operations/${ id }/changes?${ query }`,
 		} )
 			.then( setData )
-			.catch( ( err ) => setError( err.message ) );
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setLoading( false ) );
 	}, [ id, page, sku ] );
 
 	const applySearch = () => {
@@ -374,7 +377,11 @@ function ChangesTable( { id } ) {
 		);
 	}
 	if ( ! data ) {
-		return <p>{ __( 'Loading…', 'catalogops' ) }</p>;
+		return (
+			<p className="catalogops-loading">
+				{ __( 'Loading…', 'catalogops' ) }
+			</p>
+		);
 	}
 
 	const hasMore = data.items.length === CHANGES_PER_PAGE;
@@ -393,7 +400,11 @@ function ChangesTable( { id } ) {
 					onChange={ ( e ) => setDraft( e.target.value ) }
 					onKeyDown={ ( e ) => e.key === 'Enter' && applySearch() }
 				/>
-				<button className="button" onClick={ applySearch }>
+				<button
+					className="button"
+					onClick={ applySearch }
+					disabled={ loading }
+				>
 					{ __( 'Search', 'catalogops' ) }
 				</button>
 				{ sku !== '' && (
@@ -408,9 +419,18 @@ function ChangesTable( { id } ) {
 						{ __( 'Clear', 'catalogops' ) }
 					</button>
 				) }
+				{ loading && (
+					<span className="catalogops-loading">
+						{ __( 'Loading…', 'catalogops' ) }
+					</span>
+				) }
 			</div>
 
-			<div className="catalogops-table-scroll">
+			<div
+				className={ `catalogops-table-scroll${
+					loading ? ' catalogops-loading-dim' : ''
+				}` }
+			>
 				<table className="wp-list-table widefat striped catalogops-changes">
 					<thead>
 						<tr>
@@ -477,7 +497,7 @@ function ChangesTable( { id } ) {
 			<div className="catalogops-pagination">
 				<button
 					className="button"
-					disabled={ page <= 1 }
+					disabled={ page <= 1 || loading }
 					onClick={ () => setPage( page - 1 ) }
 				>
 					{ __( 'Previous', 'catalogops' ) }
@@ -491,7 +511,7 @@ function ChangesTable( { id } ) {
 				</span>
 				<button
 					className="button"
-					disabled={ ! hasMore }
+					disabled={ ! hasMore || loading }
 					onClick={ () => setPage( page + 1 ) }
 				>
 					{ __( 'Next', 'catalogops' ) }

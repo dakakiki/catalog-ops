@@ -356,18 +356,35 @@ tr.is-drift td {
 	padding: 14px 16px;
 }
 
-/* The nested audit table sits on the tinted detail cell, so give it its own
-   white base and explicit banding/hover — otherwise the stripes wash out. */
+/* The nested audit table sits on the tinted detail cell, so set the row
+   backgrounds explicitly (white base + a clearly darker even band) — the
+   default stripe is two near-white greys that wash out on this surface. */
 .catalogops-detail table.wp-list-table {
 	background: #fff;
 }
 
-.catalogops-detail table.wp-list-table > tbody > tr:nth-child( odd ) {
-	background: #f6f7f7;
+.catalogops-detail table.wp-list-table > tbody > tr {
+	background: #fff;
+}
+
+.catalogops-detail table.wp-list-table > tbody > tr:nth-child( even ) {
+	background: #eef1f5;
 }
 
 .catalogops-detail table.wp-list-table > tbody > tr:hover {
-	background: #f0f6fc;
+	background: #e5f0fb;
+}
+
+/* AJAX loading feedback for the audit detail (search + pagination). */
+.catalogops-loading {
+	margin: 8px 0;
+	color: var(--co-blue);
+	font-style: italic;
+}
+
+.catalogops-loading-dim {
+	opacity: 0.45;
+	transition: opacity 0.15s ease;
 }
 
 .catalogops-muted {
