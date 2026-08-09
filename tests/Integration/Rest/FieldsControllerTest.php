@@ -48,6 +48,21 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 		$this->assertNotContains( '_sku', $keys );
 	}
 
+	public function test_variation_attribute_keys_are_hidden(): void {
+		$product = new WC_Product_Simple();
+		$product->set_regular_price( '10' );
+		$id = $product->save();
+		// Variation attribute plumbing must never appear as a custom field.
+		update_post_meta( $id, 'attribute_pa_size', 'large' );
+		update_post_meta( $id, 'attribute_pa_color', 'red' );
+
+		$response = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/fields/meta-keys' ) );
+		$keys     = $response->get_data()['keys'];
+
+		$this->assertNotContains( 'attribute_pa_size', $keys );
+		$this->assertNotContains( 'attribute_pa_color', $keys );
+	}
+
 	public function test_endpoint_requires_a_capability(): void {
 		wp_set_current_user( 0 );
 

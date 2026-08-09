@@ -62,9 +62,11 @@ final class Fields_Controller {
 	);
 
 	/**
-	 * Internal key prefixes to hide.
+	 * Internal key prefixes to hide. `attribute_` covers the per-variation
+	 * attribute meta (e.g. `attribute_pa_size`) — plumbing that records which
+	 * value a variation is, never something to bulk-edit as a custom field.
 	 */
-	private const BLOCKED_PREFIXES = array( '_edit', '_wp_', '_oembed', '_pingme', '_encloseme', '_menu_item', '_wc_', '_woocommerce_' );
+	private const BLOCKED_PREFIXES = array( '_edit', '_wp_', '_oembed', '_pingme', '_encloseme', '_menu_item', '_wc_', '_woocommerce_', 'attribute_' );
 
 	/**
 	 * WordPress database handle.
