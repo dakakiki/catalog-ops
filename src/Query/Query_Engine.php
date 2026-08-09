@@ -64,7 +64,11 @@ final class Query_Engine {
 	}
 
 	/**
-	 * Build the full, prepared SELECT for a projection and filter.
+	 * Build the full, prepared SELECT for a projection and filter. The scope
+	 * decides the post type (parent products or their variations); a variation
+	 * carries its own price, stock, sku, and meta, but inherits its category from
+	 * the parent, and its chosen attribute value lives on the variation itself
+	 * (CONTEXT §4).
 	 *
 	 * @param string $projection The select list, e.g. `l.product_id`.
 	 * @param Filter $filter      The filter to translate.
@@ -72,22 +76,26 @@ final class Query_Engine {
 	private function select( string $projection, Filter $filter ): string {
 		$lookup = $this->wpdb->prefix . 'wc_product_meta_lookup';
 		$posts  = $this->wpdb->posts;
+		$scope  = $filter->scope();
 
 		$sql = "SELECT {$projection}
 			FROM {$lookup} l
 			INNER JOIN {$posts} p ON p.ID = l.product_id
-			WHERE p.post_type = 'product' AND p.post_status = 'publish'";
+			WHERE p.post_type = %s AND p.post_status = 'publish'";
 
-		list( $where, $args ) = $this->build_where( $filter );
+		$args = array( $scope->post_type() );
+
+		list( $where, $where_args ) = $this->build_where( $filter );
 
 		if ( '' !== $where ) {
 			$sql .= ' AND ' . $where;
+			$args = array( ...$args, ...$where_args );
 		}
 
-		// Identifiers ($projection, table names) are trusted; every value is a
-		// placeholder resolved here by prepare().
+		// Identifiers ($projection, table names) are trusted; every value —
+		// including the post type — is a placeholder resolved here by prepare().
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		return array() === $args ? $sql : $this->wpdb->prepare( $sql, ...$args );
+		return $this->wpdb->prepare( $sql, ...$args );
 	}
 
 	/**
@@ -101,7 +109,7 @@ final class Query_Engine {
 		$args      = array();
 
 		foreach ( $filter->conditions() as $condition ) {
-			list( $fragment, $fragment_args ) = $this->clause_for( $condition );
+			list( $fragment, $fragment_args ) = $this->clause_for( $condition, $filter->scope() );
 
 			if ( '' === $fragment ) {
 				continue;
@@ -121,12 +129,14 @@ final class Query_Engine {
 	}
 
 	/**
-	 * Dispatch a condition to the right clause builder based on its field.
+	 * Dispatch a condition to the right clause builder based on its field and the
+	 * query scope.
 	 *
-	 * @param Condition $condition The condition.
+	 * @param Condition   $condition The condition.
+	 * @param Query_Scope $scope     The object type being queried.
 	 * @return array{0: string, 1: list<mixed>}
 	 */
-	private function clause_for( Condition $condition ): array {
+	private function clause_for( Condition $condition, Query_Scope $scope ): array {
 		$field = $condition->field;
 
 		if ( 'price' === $field ) {
@@ -142,11 +152,18 @@ final class Query_Engine {
 		}
 
 		if ( 'category' === $field ) {
-			return $this->taxonomy_clause( 'product_cat', $condition );
+			// A variation inherits its category from the parent product.
+			return $this->taxonomy_clause( 'product_cat', $condition, $scope );
 		}
 
 		if ( str_starts_with( $field, 'attribute:' ) ) {
-			return $this->taxonomy_clause( substr( $field, strlen( 'attribute:' ) ), $condition );
+			$taxonomy = substr( $field, strlen( 'attribute:' ) );
+
+			// On a variation the chosen attribute value is stored on the variation
+			// itself, not as a parent taxonomy term.
+			return $scope->is_variation()
+				? $this->variation_attribute_clause( $taxonomy, $condition )
+				: $this->taxonomy_clause( $taxonomy, $condition, $scope );
 		}
 
 		if ( str_starts_with( $field, 'meta:' ) ) {
@@ -237,13 +254,16 @@ final class Query_Engine {
 	}
 
 	/**
-	 * Membership in a taxonomy's terms, as a correlated EXISTS.
+	 * Membership in a taxonomy's terms, as a correlated EXISTS. Terms are attached
+	 * to the parent product, so under the variation scope the EXISTS correlates on
+	 * the variation's parent (p.post_parent) rather than the variation itself.
 	 *
-	 * @param string    $taxonomy  Taxonomy name, e.g. `product_cat` or `pa_color`.
-	 * @param Condition $condition Value is a term id or a list of term ids.
+	 * @param string      $taxonomy  Taxonomy name, e.g. `product_cat` or `pa_color`.
+	 * @param Condition   $condition Value is a term id or a list of term ids.
+	 * @param Query_Scope $scope     The object type being queried.
 	 * @return array{0: string, 1: list<mixed>}
 	 */
-	private function taxonomy_clause( string $taxonomy, Condition $condition ): array {
+	private function taxonomy_clause( string $taxonomy, Condition $condition, Query_Scope $scope ): array {
 		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
 
 		if ( '' === $taxonomy || array() === $term_ids ) {
@@ -255,14 +275,76 @@ final class Query_Engine {
 		$placeholders  = implode( ', ', array_fill( 0, count( $term_ids ), '%d' ) );
 		$negate        = Operator::NOT_IN === $condition->operator || Operator::NOT_EXISTS === $condition->operator;
 		$keyword       = $negate ? 'NOT EXISTS' : 'EXISTS';
+		$object_column = $scope->is_variation() ? 'p.post_parent' : 'l.product_id';
 
 		$fragment = "{$keyword} (
 			SELECT 1 FROM {$relationships} tr
 			INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-			WHERE tr.object_id = l.product_id AND tt.taxonomy = %s AND tt.term_id IN ( {$placeholders} )
+			WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s AND tt.term_id IN ( {$placeholders} )
 		)";
 
 		return array( $fragment, array( $taxonomy, ...$term_ids ) );
+	}
+
+	/**
+	 * Match a variation by its own chosen attribute value. Unlike a parent
+	 * product, whose attributes are taxonomy terms, a variation stores the single
+	 * value it was created for as post meta `attribute_{taxonomy}` holding the
+	 * term slug. So a size-L filter matches only the L variations, not every
+	 * variation of a parent that offers size L (CONTEXT §4 — variations first
+	 * class). The condition's term ids are resolved to slugs to compare.
+	 *
+	 * @param string    $taxonomy  Attribute taxonomy, e.g. `pa_size`.
+	 * @param Condition $condition Value is a term id or a list of term ids.
+	 * @return array{0: string, 1: list<mixed>}
+	 */
+	private function variation_attribute_clause( string $taxonomy, Condition $condition ): array {
+		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
+
+		if ( '' === $taxonomy || array() === $term_ids ) {
+			return array( '', array() );
+		}
+
+		$slugs = $this->term_slugs( $term_ids );
+
+		if ( array() === $slugs ) {
+			return array( '', array() );
+		}
+
+		$postmeta     = $this->wpdb->postmeta;
+		$meta_key     = 'attribute_' . $taxonomy;
+		$placeholders = implode( ', ', array_fill( 0, count( $slugs ), '%s' ) );
+		$negate       = Operator::NOT_IN === $condition->operator || Operator::NOT_EXISTS === $condition->operator;
+		$keyword      = $negate ? 'NOT EXISTS' : 'EXISTS';
+
+		$fragment = "{$keyword} (
+			SELECT 1 FROM {$postmeta} pm
+			WHERE pm.post_id = l.product_id AND pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
+		)";
+
+		return array( $fragment, array( $meta_key, ...$slugs ) );
+	}
+
+	/**
+	 * Resolve term ids to their slugs (variation attribute meta stores slugs).
+	 *
+	 * @param int[] $term_ids Term ids.
+	 * @return list<string>
+	 */
+	private function term_slugs( array $term_ids ): array {
+		$terms        = $this->wpdb->terms;
+		$placeholders = implode( ', ', array_fill( 0, count( $term_ids ), '%d' ) );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$slugs = $this->wpdb->get_col(
+			$this->wpdb->prepare(
+				"SELECT slug FROM {$terms} WHERE term_id IN ( {$placeholders} )",
+				...$term_ids
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return array_map( 'strval', $slugs );
 	}
 
 	/**

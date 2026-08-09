@@ -34,14 +34,23 @@ final class Filter {
 	private string $relation;
 
 	/**
-	 * Build a filter from conditions and a relation.
+	 * Whether this filter targets products or their variations.
 	 *
-	 * @param Condition[] $conditions Conditions to combine.
-	 * @param string      $relation   AND (default) or OR.
+	 * @var Query_Scope
 	 */
-	public function __construct( array $conditions = array(), string $relation = self::RELATION_AND ) {
+	private Query_Scope $scope;
+
+	/**
+	 * Build a filter from conditions, a relation, and a target scope.
+	 *
+	 * @param Condition[]      $conditions Conditions to combine.
+	 * @param string           $relation   AND (default) or OR.
+	 * @param Query_Scope|null $scope      Products (default) or variations.
+	 */
+	public function __construct( array $conditions = array(), string $relation = self::RELATION_AND, ?Query_Scope $scope = null ) {
 		$this->conditions = array_values( $conditions );
 		$this->relation   = self::RELATION_OR === strtoupper( $relation ) ? self::RELATION_OR : self::RELATION_AND;
+		$this->scope      = $scope ?? Query_Scope::default_scope();
 	}
 
 	/**
@@ -50,7 +59,7 @@ final class Filter {
 	 * @param Condition $condition The condition to append.
 	 */
 	public function with( Condition $condition ): self {
-		return new self( array( ...$this->conditions, $condition ), $this->relation );
+		return new self( array( ...$this->conditions, $condition ), $this->relation, $this->scope );
 	}
 
 	/**
@@ -70,6 +79,13 @@ final class Filter {
 	}
 
 	/**
+	 * The object type this filter targets.
+	 */
+	public function scope(): Query_Scope {
+		return $this->scope;
+	}
+
+	/**
 	 * Whether the filter has no conditions (matches the whole catalog).
 	 */
 	public function is_empty(): bool {
@@ -79,7 +95,7 @@ final class Filter {
 	/**
 	 * Rebuild a filter from its array form.
 	 *
-	 * @param array{relation?: string, conditions?: array<int, array<string, mixed>>} $data Serialized filter.
+	 * @param array{relation?: string, scope?: string, conditions?: array<int, array<string, mixed>>} $data Serialized filter.
 	 */
 	public static function from_array( array $data ): self {
 		$conditions = array_map(
@@ -87,17 +103,22 @@ final class Filter {
 			$data['conditions'] ?? array()
 		);
 
-		return new self( $conditions, (string) ( $data['relation'] ?? self::RELATION_AND ) );
+		$scope = isset( $data['scope'] )
+			? ( Query_Scope::tryFrom( (string) $data['scope'] ) ?? Query_Scope::default_scope() )
+			: Query_Scope::default_scope();
+
+		return new self( $conditions, (string) ( $data['relation'] ?? self::RELATION_AND ), $scope );
 	}
 
 	/**
 	 * Serialize to a JSON-friendly array (for filter_json).
 	 *
-	 * @return array{relation: string, conditions: list<array<string, mixed>>}
+	 * @return array{relation: string, scope: string, conditions: list<array<string, mixed>>}
 	 */
 	public function to_array(): array {
 		return array(
 			'relation'   => $this->relation,
+			'scope'      => $this->scope->value,
 			'conditions' => array_map(
 				static fn( Condition $condition ): array => $condition->to_array(),
 				$this->conditions
