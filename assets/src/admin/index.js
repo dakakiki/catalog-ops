@@ -93,6 +93,20 @@ function buildFilter( form, scope ) {
 			value: form.sku.trim(),
 		} );
 	}
+	if ( form.category ) {
+		conditions.push( {
+			field: 'category',
+			operator: 'in',
+			value: [ Number( form.category ) ],
+		} );
+	}
+	if ( form.metaKey && form.metaValue !== '' ) {
+		conditions.push( {
+			field: `meta:${ form.metaKey }`,
+			operator: '=',
+			value: form.metaValue,
+		} );
+	}
 
 	return { relation: 'AND', scope, conditions };
 }
@@ -944,6 +958,9 @@ function App() {
 		priceMax: '',
 		stockStatus: '',
 		sku: '',
+		category: '',
+		metaKey: '',
+		metaValue: '',
 	} );
 	const [ items, setItems ] = useState( [] );
 	const [ total, setTotal ] = useState( 0 );
@@ -951,6 +968,11 @@ function App() {
 	const [ loading, setLoading ] = useState( false );
 	const [ error, setError ] = useState( '' );
 	const [ historyKey, setHistoryKey ] = useState( 0 );
+	// Discovery data for the pickers: categories, custom-field keys, and the
+	// distinct values of the currently chosen key.
+	const [ categories, setCategories ] = useState( [] );
+	const [ metaKeys, setMetaKeys ] = useState( [] );
+	const [ metaValues, setMetaValues ] = useState( [] );
 	// Whether the filter, table, and bulk edit target parent products or their
 	// variations (CONTEXT §4).
 	const [ scope, setScope ] = useState( 'product' );
@@ -958,10 +980,43 @@ function App() {
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
 		buildFilter(
-			{ priceMin: '', priceMax: '', stockStatus: '', sku: '' },
+			{
+				priceMin: '',
+				priceMax: '',
+				stockStatus: '',
+				sku: '',
+				category: '',
+				metaKey: '',
+				metaValue: '',
+			},
 			'product'
 		)
 	);
+
+	// Load the category and custom-field-key pickers once.
+	useEffect( () => {
+		apiFetch( { path: '/catalogops/v1/fields/categories' } )
+			.then( ( res ) => setCategories( res.categories || [] ) )
+			.catch( () => {} );
+		apiFetch( { path: '/catalogops/v1/fields/meta-keys' } )
+			.then( ( res ) => setMetaKeys( res.keys || [] ) )
+			.catch( () => {} );
+	}, [] );
+
+	// When a custom-field key is chosen, load its distinct values as suggestions.
+	useEffect( () => {
+		if ( ! form.metaKey ) {
+			setMetaValues( [] );
+			return;
+		}
+		apiFetch( {
+			path: `/catalogops/v1/fields/meta-values?key=${ encodeURIComponent(
+				form.metaKey
+			) }`,
+		} )
+			.then( ( res ) => setMetaValues( res.values || [] ) )
+			.catch( () => {} );
+	}, [ form.metaKey ] );
 
 	const run = useCallback(
 		( toPage ) => {
@@ -1089,6 +1144,24 @@ function App() {
 								</option>
 							</select>
 
+							<label htmlFor="catalogops-category">
+								{ __( 'Category', 'catalogops' ) }
+							</label>
+							<select
+								id="catalogops-category"
+								value={ form.category }
+								onChange={ update( 'category' ) }
+							>
+								<option value="">
+									{ __( 'Any', 'catalogops' ) }
+								</option>
+								{ categories.map( ( c ) => (
+									<option key={ c.id } value={ c.id }>
+										{ c.name }
+									</option>
+								) ) }
+							</select>
+
 							<button
 								className="button button-primary"
 								onClick={ () => run( 1 ) }
@@ -1098,6 +1171,50 @@ function App() {
 									? __( 'Show variations', 'catalogops' )
 									: __( 'Show products', 'catalogops' ) }
 							</button>
+						</div>
+					</div>
+					<div className="catalogops-control-group">
+						<span className="catalogops-group-label">
+							{ __( 'Custom field', 'catalogops' ) }
+						</span>
+						<div className="catalogops-filters">
+							<input
+								type="text"
+								list="catalogops-filter-meta-keys"
+								placeholder={ __(
+									'field key, e.g. _catalogops_brand',
+									'catalogops'
+								) }
+								aria-label={ __(
+									'Custom field key',
+									'catalogops'
+								) }
+								value={ form.metaKey }
+								onChange={ update( 'metaKey' ) }
+							/>
+							<datalist id="catalogops-filter-meta-keys">
+								{ metaKeys.map( ( k ) => (
+									<option key={ k } value={ k } />
+								) ) }
+							</datalist>
+							<span aria-hidden="true">=</span>
+							<input
+								type="text"
+								list="catalogops-filter-meta-values"
+								placeholder={ __( 'value', 'catalogops' ) }
+								aria-label={ __(
+									'Custom field value',
+									'catalogops'
+								) }
+								value={ form.metaValue }
+								onChange={ update( 'metaValue' ) }
+								disabled={ ! form.metaKey }
+							/>
+							<datalist id="catalogops-filter-meta-values">
+								{ metaValues.map( ( v ) => (
+									<option key={ v } value={ v } />
+								) ) }
+							</datalist>
 						</div>
 					</div>
 					<div className="catalogops-control-group">

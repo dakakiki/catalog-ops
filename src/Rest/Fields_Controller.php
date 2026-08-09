@@ -97,6 +97,32 @@ final class Fields_Controller {
 				'permission_callback' => array( $this, 'can_manage' ),
 			)
 		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/fields/meta-values',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'meta_values' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => array(
+					'key' => array(
+						'type'     => 'string',
+						'required' => true,
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/fields/categories',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'categories' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
 	}
 
 	/**
@@ -124,6 +150,62 @@ final class Fields_Controller {
 		$filtered = array_values( array_filter( $keys, array( $this, 'is_user_key' ) ) );
 
 		return new WP_REST_Response( array( 'keys' => $filtered ) );
+	}
+
+	/**
+	 * The distinct values a given custom field holds across the catalog, so the
+	 * filter can offer "which brands/values exist?" as suggestions. Only
+	 * user-facing keys are allowed, so internal values are never dumped.
+	 *
+	 * @param \WP_REST_Request $request The request.
+	 * @return WP_REST_Response
+	 */
+	public function meta_values( $request ): WP_REST_Response {
+		$key = (string) $request->get_param( 'key' );
+
+		if ( ! $this->is_user_key( $key ) ) {
+			return new WP_REST_Response( array( 'values' => array() ) );
+		}
+
+		$postmeta = $this->wpdb->postmeta;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$values = $this->wpdb->get_col(
+			$this->wpdb->prepare(
+				"SELECT DISTINCT meta_value FROM {$postmeta} WHERE meta_key = %s AND meta_value <> '' ORDER BY meta_value ASC LIMIT %d",
+				$key,
+				self::SCAN_LIMIT
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return new WP_REST_Response( array( 'values' => array_map( 'strval', $values ) ) );
+	}
+
+	/**
+	 * The product categories, for the filter's category picker.
+	 */
+	public function categories(): WP_REST_Response {
+		$terms = get_terms(
+			array(
+				'taxonomy'   => 'product_cat',
+				'hide_empty' => false,
+				'orderby'    => 'name',
+			)
+		);
+
+		$categories = array();
+		if ( is_array( $terms ) ) {
+			foreach ( $terms as $term ) {
+				$categories[] = array(
+					'id'    => (int) $term->term_id,
+					'name'  => $term->name,
+					'count' => (int) $term->count,
+				);
+			}
+		}
+
+		return new WP_REST_Response( array( 'categories' => $categories ) );
 	}
 
 	/**

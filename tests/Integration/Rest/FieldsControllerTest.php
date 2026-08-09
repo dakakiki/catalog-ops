@@ -63,6 +63,41 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 		$this->assertNotContains( 'attribute_pa_color', $keys );
 	}
 
+	public function test_meta_values_lists_distinct_values_for_a_key(): void {
+		foreach ( array( 'Acme', 'Globex', 'Acme' ) as $i => $brand ) {
+			$p = new WC_Product_Simple();
+			$p->set_regular_price( (string) ( 10 + $i ) );
+			$p->update_meta_data( '_catalogops_brand', $brand );
+			$p->save();
+		}
+
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/fields/meta-values' );
+		$request->set_param( 'key', '_catalogops_brand' );
+		$values = rest_do_request( $request )->get_data()['values'];
+
+		$this->assertContains( 'Acme', $values );
+		$this->assertContains( 'Globex', $values );
+		$this->assertSame( array_values( array_unique( $values ) ), $values );
+	}
+
+	public function test_meta_values_refuses_internal_keys(): void {
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/fields/meta-values' );
+		$request->set_param( 'key', '_edit_lock' );
+
+		$this->assertSame( array(), rest_do_request( $request )->get_data()['values'] );
+	}
+
+	public function test_categories_lists_product_categories(): void {
+		$term = wp_insert_term( 'FC Gadgets', 'product_cat' );
+		$id   = (int) $term['term_id'];
+
+		$response   = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/fields/categories' ) );
+		$categories = $response->get_data()['categories'];
+		$ids        = array_map( static fn( array $c ): int => $c['id'], $categories );
+
+		$this->assertContains( $id, $ids );
+	}
+
 	public function test_endpoint_requires_a_capability(): void {
 		wp_set_current_user( 0 );
 
