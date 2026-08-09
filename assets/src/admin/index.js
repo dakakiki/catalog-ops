@@ -979,98 +979,116 @@ function App() {
 			</h1>
 
 			<div className="catalogops-card catalogops-browse">
-				<div className="catalogops-scope">
-					<span className="catalogops-scope__label">
-						{ __( 'Target', 'catalogops' ) }
-					</span>
-					<div className="catalogops-segmented" role="group">
-						<button
-							type="button"
-							className={ `catalogops-segmented__btn${
-								scope === 'product' ? ' is-active' : ''
-							}` }
-							onClick={ () => setScope( 'product' ) }
-						>
-							{ __( 'Products', 'catalogops' ) }
-						</button>
-						<button
-							type="button"
-							className={ `catalogops-segmented__btn${
-								scope === 'variation' ? ' is-active' : ''
-							}` }
-							onClick={ () => setScope( 'variation' ) }
-						>
-							{ __( 'Variations', 'catalogops' ) }
-						</button>
+				<div className="catalogops-controls">
+					<div className="catalogops-control-group">
+						<span className="catalogops-group-label">
+							{ __( 'Target', 'catalogops' ) }
+						</span>
+						<div className="catalogops-segmented" role="group">
+							<button
+								type="button"
+								className={ `catalogops-segmented__btn${
+									scope === 'product' ? ' is-active' : ''
+								}` }
+								onClick={ () => setScope( 'product' ) }
+							>
+								{ __( 'Products', 'catalogops' ) }
+							</button>
+							<button
+								type="button"
+								className={ `catalogops-segmented__btn${
+									scope === 'variation' ? ' is-active' : ''
+								}` }
+								onClick={ () => setScope( 'variation' ) }
+							>
+								{ __( 'Variations', 'catalogops' ) }
+							</button>
+						</div>
 					</div>
-				</div>
 
-				<div className="catalogops-filters">
-					<label htmlFor="catalogops-price-min">
-						{ __( 'Min price', 'catalogops' ) }
-					</label>
-					<input
-						id="catalogops-price-min"
-						type="number"
-						value={ form.priceMin }
-						onChange={ update( 'priceMin' ) }
-					/>
+					<div className="catalogops-control-group">
+						<span className="catalogops-group-label">
+							{ __( 'Filter', 'catalogops' ) }
+						</span>
+						<div className="catalogops-filters">
+							<label htmlFor="catalogops-price-min">
+								{ __( 'Min', 'catalogops' ) }
+							</label>
+							<input
+								id="catalogops-price-min"
+								className="small-text"
+								type="number"
+								value={ form.priceMin }
+								onChange={ update( 'priceMin' ) }
+							/>
 
-					<label htmlFor="catalogops-price-max">
-						{ __( 'Max price', 'catalogops' ) }
-					</label>
-					<input
-						id="catalogops-price-max"
-						type="number"
-						value={ form.priceMax }
-						onChange={ update( 'priceMax' ) }
-					/>
+							<label htmlFor="catalogops-price-max">
+								{ __( 'Max', 'catalogops' ) }
+							</label>
+							<input
+								id="catalogops-price-max"
+								className="small-text"
+								type="number"
+								value={ form.priceMax }
+								onChange={ update( 'priceMax' ) }
+							/>
 
-					<label htmlFor="catalogops-stock">
-						{ __( 'Stock', 'catalogops' ) }
-					</label>
-					<select
-						id="catalogops-stock"
-						value={ form.stockStatus }
-						onChange={ update( 'stockStatus' ) }
-					>
-						<option value="">{ __( 'Any', 'catalogops' ) }</option>
-						<option value="instock">
-							{ __( 'In stock', 'catalogops' ) }
-						</option>
-						<option value="outofstock">
-							{ __( 'Out of stock', 'catalogops' ) }
-						</option>
-					</select>
+							<label htmlFor="catalogops-stock">
+								{ __( 'Stock', 'catalogops' ) }
+							</label>
+							<select
+								id="catalogops-stock"
+								value={ form.stockStatus }
+								onChange={ update( 'stockStatus' ) }
+							>
+								<option value="">
+									{ __( 'Any', 'catalogops' ) }
+								</option>
+								<option value="instock">
+									{ __( 'In stock', 'catalogops' ) }
+								</option>
+								<option value="outofstock">
+									{ __( 'Out of stock', 'catalogops' ) }
+								</option>
+							</select>
 
-					<button
-						className="button button-primary"
-						onClick={ () => run( 1 ) }
-						disabled={ loading }
-					>
-						{ __( 'Apply', 'catalogops' ) }
-					</button>
-				</div>
-
-				<div className="catalogops-search">
-					<label htmlFor="catalogops-sku">
-						{ __( 'Find by SKU', 'catalogops' ) }
-					</label>
-					<input
-						id="catalogops-sku"
-						type="search"
-						placeholder={ __( 'e.g. COPS-1234', 'catalogops' ) }
-						value={ form.sku }
-						onChange={ update( 'sku' ) }
-						onKeyDown={ ( e ) => e.key === 'Enter' && run( 1 ) }
-					/>
-					<button
-						className="button"
-						onClick={ () => run( 1 ) }
-						disabled={ loading }
-					>
-						{ __( 'Search', 'catalogops' ) }
-					</button>
+							<button
+								className="button button-primary"
+								onClick={ () => run( 1 ) }
+								disabled={ loading }
+							>
+								{ __( 'Apply', 'catalogops' ) }
+							</button>
+						</div>
+					</div>
+					<div className="catalogops-control-group">
+						<span className="catalogops-group-label">
+							{ __( 'Find', 'catalogops' ) }
+						</span>
+						<div className="catalogops-search">
+							<input
+								id="catalogops-sku"
+								type="search"
+								placeholder={ __(
+									'SKU, e.g. COPS-1234',
+									'catalogops'
+								) }
+								aria-label={ __( 'Find by SKU', 'catalogops' ) }
+								value={ form.sku }
+								onChange={ update( 'sku' ) }
+								onKeyDown={ ( e ) =>
+									e.key === 'Enter' && run( 1 )
+								}
+							/>
+							<button
+								className="button"
+								onClick={ () => run( 1 ) }
+								disabled={ loading }
+							>
+								{ __( 'Search', 'catalogops' ) }
+							</button>
+						</div>
+					</div>
 				</div>
 
 				<p className="catalogops-status">

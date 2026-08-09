@@ -53,19 +53,49 @@
 	color: var(--co-muted);
 }
 
-/* --- Scope segmented switch -------------------------------------------- */
+/* --- Browse control groups --------------------------------------------- */
 
-.catalogops-scope {
+/* Three labelled rows — Target, Filter, Find — separated by dividers so it is
+   clear which control does what. */
+.catalogops-controls {
 	display: flex;
-	align-items: center;
-	gap: 10px;
+	flex-direction: column;
 	margin-bottom: 14px;
 }
 
-.catalogops-scope__label {
-	font-weight: 600;
+.catalogops-control-group {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px 12px;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--co-border);
+}
+
+.catalogops-control-group:last-child {
+	border-bottom: 0;
+}
+
+.catalogops-group-label {
+	flex: 0 0 60px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
 	color: var(--co-muted);
 }
+
+/* Keep the compact controls from stretching tall. */
+.catalogops-controls input,
+.catalogops-controls select {
+	max-width: 100%;
+}
+
+.catalogops-controls select {
+	max-width: 150px;
+}
+
+/* --- Scope segmented switch -------------------------------------------- */
 
 .catalogops-segmented {
 	display: inline-flex;
@@ -106,21 +136,12 @@
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px 14px;
-	margin-bottom: 12px;
+	gap: 6px 10px;
 }
 
 .catalogops-filters label {
 	font-weight: 600;
 	color: var(--co-muted);
-}
-
-.catalogops-filters input[type='number'] {
-	width: 7em;
-}
-
-.catalogops-filters .button-primary {
-	margin-left: auto;
 }
 
 .catalogops-status {
