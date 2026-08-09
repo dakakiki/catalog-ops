@@ -22,7 +22,7 @@ import apiFetch from '@wordpress/api-fetch';
 import { __, sprintf } from '@wordpress/i18n';
 import './style.css';
 
-const PER_PAGE = 25;
+const PER_PAGE = 10;
 
 /**
  * Map a stock status to a badge modifier.
@@ -84,6 +84,13 @@ function buildFilter( form, scope ) {
 			field: 'stock_status',
 			operator: '=',
 			value: form.stockStatus,
+		} );
+	}
+	if ( form.sku && form.sku.trim() !== '' ) {
+		conditions.push( {
+			field: 'sku',
+			operator: 'contains',
+			value: form.sku.trim(),
 		} );
 	}
 
@@ -333,15 +340,31 @@ function BulkEdit( { filter, onDone } ) {
  * @param {Object} props    Component props.
  * @param {number} props.id Operation id.
  */
+const CHANGES_PER_PAGE = 10;
+
 function ChangesTable( { id } ) {
 	const [ data, setData ] = useState( null );
 	const [ error, setError ] = useState( '' );
+	const [ page, setPage ] = useState( 1 );
+	// Draft is the input value; objectId is the applied search (on Enter/Search).
+	const [ draft, setDraft ] = useState( '' );
+	const [ objectId, setObjectId ] = useState( 0 );
 
 	useEffect( () => {
-		apiFetch( { path: `/catalogops/v1/operations/${ id }/changes` } )
+		const query = `page=${ page }&per_page=${ CHANGES_PER_PAGE }${
+			objectId ? `&object_id=${ objectId }` : ''
+		}`;
+		apiFetch( {
+			path: `/catalogops/v1/operations/${ id }/changes?${ query }`,
+		} )
 			.then( setData )
 			.catch( ( err ) => setError( err.message ) );
-	}, [ id ] );
+	}, [ id, page, objectId ] );
+
+	const applySearch = () => {
+		setPage( 1 );
+		setObjectId( Number( draft.trim() ) || 0 );
+	};
 
 	if ( error ) {
 		return (
@@ -354,29 +377,112 @@ function ChangesTable( { id } ) {
 		return <p>{ __( 'Loading…', 'catalogops' ) }</p>;
 	}
 
+	const hasMore = data.items.length === CHANGES_PER_PAGE;
+
 	return (
-		<table className="wp-list-table widefat fixed striped">
-			<thead>
-				<tr>
-					<th>{ __( 'Object', 'catalogops' ) }</th>
-					<th>{ __( 'Field', 'catalogops' ) }</th>
-					<th>{ __( 'Old', 'catalogops' ) }</th>
-					<th>{ __( 'New', 'catalogops' ) }</th>
-					<th>{ __( 'Status', 'catalogops' ) }</th>
-				</tr>
-			</thead>
-			<tbody>
-				{ data.items.map( ( c, i ) => (
-					<tr key={ i }>
-						<td>{ c.object_id }</td>
-						<td>{ c.field_key }</td>
-						<td>{ c.old_value }</td>
-						<td>{ c.new_value }</td>
-						<td>{ c.status }</td>
-					</tr>
-				) ) }
-			</tbody>
-		</table>
+		<div>
+			<div className="catalogops-search">
+				<label htmlFor={ `changes-search-${ id }` }>
+					{ __( 'Find object ID', 'catalogops' ) }
+				</label>
+				<input
+					id={ `changes-search-${ id }` }
+					type="search"
+					placeholder={ __(
+						'product or variation ID',
+						'catalogops'
+					) }
+					value={ draft }
+					onChange={ ( e ) => setDraft( e.target.value ) }
+					onKeyDown={ ( e ) => e.key === 'Enter' && applySearch() }
+				/>
+				<button className="button" onClick={ applySearch }>
+					{ __( 'Search', 'catalogops' ) }
+				</button>
+				{ objectId > 0 && (
+					<button
+						className="button-link"
+						onClick={ () => {
+							setDraft( '' );
+							setObjectId( 0 );
+							setPage( 1 );
+						} }
+					>
+						{ __( 'Clear', 'catalogops' ) }
+					</button>
+				) }
+			</div>
+
+			<div className="catalogops-table-scroll">
+				<table className="wp-list-table widefat striped">
+					<thead>
+						<tr>
+							<th>{ __( 'Object', 'catalogops' ) }</th>
+							<th>{ __( 'Field', 'catalogops' ) }</th>
+							<th>{ __( 'Old', 'catalogops' ) }</th>
+							<th>{ __( 'New', 'catalogops' ) }</th>
+							<th>{ __( 'Status', 'catalogops' ) }</th>
+						</tr>
+					</thead>
+					<tbody>
+						{ data.items.length === 0 ? (
+							<tr className="catalogops-empty">
+								<td colSpan="5">
+									{ __(
+										'No matching changes.',
+										'catalogops'
+									) }
+								</td>
+							</tr>
+						) : (
+							data.items.map( ( c, i ) => (
+								<tr key={ i }>
+									<td>{ c.object_id }</td>
+									<td>{ c.field_key }</td>
+									<td className="catalogops-num">
+										{ c.old_value }
+									</td>
+									<td className="catalogops-num">
+										{ c.new_value }
+									</td>
+									<td>
+										<span
+											className={ `catalogops-badge catalogops-change-${ c.status }` }
+										>
+											{ c.status }
+										</span>
+									</td>
+								</tr>
+							) )
+						) }
+					</tbody>
+				</table>
+			</div>
+
+			<div className="catalogops-pagination">
+				<button
+					className="button"
+					disabled={ page <= 1 }
+					onClick={ () => setPage( page - 1 ) }
+				>
+					{ __( 'Previous', 'catalogops' ) }
+				</button>
+				<span className="catalogops-page">
+					{ sprintf(
+						/* translators: %d: page number. */
+						__( 'Page %d', 'catalogops' ),
+						page
+					) }
+				</span>
+				<button
+					className="button"
+					disabled={ ! hasMore }
+					onClick={ () => setPage( page + 1 ) }
+				>
+					{ __( 'Next', 'catalogops' ) }
+				</button>
+			</div>
+		</div>
 	);
 }
 
@@ -776,6 +882,7 @@ function App() {
 		priceMin: '',
 		priceMax: '',
 		stockStatus: '',
+		sku: '',
 	} );
 	const [ items, setItems ] = useState( [] );
 	const [ total, setTotal ] = useState( 0 );
@@ -790,7 +897,7 @@ function App() {
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
 		buildFilter(
-			{ priceMin: '', priceMax: '', stockStatus: '' },
+			{ priceMin: '', priceMax: '', stockStatus: '', sku: '' },
 			'product'
 		)
 	);
@@ -918,6 +1025,27 @@ function App() {
 						disabled={ loading }
 					>
 						{ __( 'Apply', 'catalogops' ) }
+					</button>
+				</div>
+
+				<div className="catalogops-search">
+					<label htmlFor="catalogops-sku">
+						{ __( 'Find by SKU', 'catalogops' ) }
+					</label>
+					<input
+						id="catalogops-sku"
+						type="search"
+						placeholder={ __( 'e.g. COPS-1234', 'catalogops' ) }
+						value={ form.sku }
+						onChange={ update( 'sku' ) }
+						onKeyDown={ ( e ) => e.key === 'Enter' && run( 1 ) }
+					/>
+					<button
+						className="button"
+						onClick={ () => run( 1 ) }
+						disabled={ loading }
+					>
+						{ __( 'Search', 'catalogops' ) }
 					</button>
 				</div>
 

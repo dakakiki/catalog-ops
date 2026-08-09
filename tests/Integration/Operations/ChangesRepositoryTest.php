@@ -176,6 +176,15 @@ final class ChangesRepositoryTest extends Operations_Database_Case {
 		$this->assertCount( 1, $second );
 	}
 
+	public function test_page_filters_by_object_id(): void {
+		$this->changes->seed( 60, $this->rows_for( array( 900, 901, 902 ) ) );
+
+		$only = $this->changes->page( 60, 50, 0, 901 );
+
+		$this->assertCount( 1, $only );
+		$this->assertSame( 901, $only[0]->object_id );
+	}
+
 	/**
 	 * Build seed rows for a list of object ids, all targeting regular_price.
 	 *

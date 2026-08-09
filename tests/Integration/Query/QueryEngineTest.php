@@ -137,6 +137,18 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertNotContains( $blue_product, $ids );
 	}
 
+	public function test_sku_contains_search(): void {
+		$alpha = $this->make_product( array( 'sku' => 'COPS-ALPHA-1' ) );
+		$beta  = $this->make_product( array( 'sku' => 'COPS-BETA-2' ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'sku', Operator::CONTAINS, 'ALPHA' ) ) )
+		);
+
+		$this->assertSame( array( $alpha ), $ids );
+		$this->assertNotContains( $beta, $ids );
+	}
+
 	public function test_meta_equals(): void {
 		$acme  = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
 		$other = $this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
@@ -197,6 +209,10 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$product->set_manage_stock( true );
 		$product->set_stock_quantity( $quantity );
 		$product->set_stock_status( $status );
+
+		if ( ! empty( $args['sku'] ) ) {
+			$product->set_sku( (string) $args['sku'] );
+		}
 
 		if ( ! empty( $args['category'] ) ) {
 			$product->set_category_ids( array_map( 'intval', (array) $args['category'] ) );

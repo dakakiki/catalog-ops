@@ -151,6 +151,10 @@ final class Query_Engine {
 			return $this->string_clause( 'l.stock_status', $condition );
 		}
 
+		if ( 'sku' === $field ) {
+			return $this->string_clause( 'l.sku', $condition );
+		}
+
 		if ( 'category' === $field ) {
 			// A variation inherits its category from the parent product.
 			return $this->taxonomy_clause( 'product_cat', $condition, $scope );
@@ -236,6 +240,11 @@ final class Query_Engine {
 			$comparison = Operator::NOT_EQUALS === $operator ? '!=' : '=';
 
 			return array( "{$column} {$comparison} %s", array( (string) $condition->value ) );
+		}
+
+		if ( Operator::CONTAINS === $operator ) {
+			// Substring search, e.g. the SKU box in the admin table.
+			return array( "{$column} LIKE %s", array( '%' . $this->wpdb->esc_like( (string) $condition->value ) . '%' ) );
 		}
 
 		if ( Operator::IN === $operator || Operator::NOT_IN === $operator ) {

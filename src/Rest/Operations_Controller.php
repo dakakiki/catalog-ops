@@ -191,16 +191,21 @@ final class Operations_Controller {
 				'callback'            => array( $this, 'changes' ),
 				'permission_callback' => array( $this, 'can_manage' ),
 				'args'                => array(
-					'page'     => array(
+					'page'      => array(
 						'type'    => 'integer',
 						'default' => 1,
 						'minimum' => 1,
 					),
-					'per_page' => array(
+					'per_page'  => array(
 						'type'    => 'integer',
 						'default' => 50,
 						'minimum' => 1,
 						'maximum' => 200,
+					),
+					'object_id' => array(
+						'type'    => 'integer',
+						'default' => 0,
+						'minimum' => 0,
 					),
 				),
 			)
@@ -381,13 +386,14 @@ final class Operations_Controller {
 			return $this->error( 'catalogops_not_found', 'Operation not found.', 404 );
 		}
 
-		$page     = max( 1, (int) $request->get_param( 'page' ) );
-		$per_page = (int) $request->get_param( 'per_page' );
-		$offset   = ( $page - 1 ) * $per_page;
+		$page      = max( 1, (int) $request->get_param( 'page' ) );
+		$per_page  = (int) $request->get_param( 'per_page' );
+		$object_id = max( 0, (int) $request->get_param( 'object_id' ) );
+		$offset    = ( $page - 1 ) * $per_page;
 
 		$rows = array_map(
 			array( $this, 'change_to_array' ),
-			$this->changes->page( $id, $per_page, $offset )
+			$this->changes->page( $id, $per_page, $offset, $object_id )
 		);
 
 		return new WP_REST_Response(

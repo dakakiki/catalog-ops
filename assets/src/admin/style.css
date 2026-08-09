@@ -129,14 +129,66 @@
 	font-style: italic;
 }
 
+/* --- Bulk edit --------------------------------------------------------- */
+
+.catalogops-bulk-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 12px;
+	margin-bottom: 8px;
+}
+
+.catalogops-bulk-controls label {
+	font-weight: 600;
+	color: var(--co-muted);
+}
+
+/* --- Search ------------------------------------------------------------ */
+
+.catalogops-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 4px 0 12px;
+}
+
+.catalogops-search label {
+	font-weight: 600;
+	color: var(--co-muted);
+}
+
+.catalogops-search input[type='search'] {
+	min-width: 220px;
+}
+
 /* --- Tables ------------------------------------------------------------ */
 
+/* Let columns size to their content so action buttons never overflow the
+   fixed grid and spill outside the table on a narrow viewport. Tables that
+   still exceed the card scroll horizontally inside their own wrapper. */
 .catalogops table.wp-list-table {
 	margin-top: 4px;
+	table-layout: auto;
+}
+
+.catalogops-table-scroll {
+	overflow-x: auto;
+	max-width: 100%;
 }
 
 .catalogops table.wp-list-table th {
 	font-weight: 600;
+}
+
+/* Clear even/odd banding plus a hover cue. */
+.catalogops table.wp-list-table.striped > tbody > tr:nth-child( odd ),
+.catalogops table.wp-list-table > tbody > tr.alternate {
+	background: #f6f7f7;
+}
+
+.catalogops table.wp-list-table > tbody > tr:hover {
+	background: #f0f6fc;
 }
 
 .catalogops-num {
@@ -177,6 +229,27 @@
 .catalogops-badge--neutral {
 	background: #f0f0f1;
 	color: var(--co-muted);
+}
+
+/* Per-change status badges (audit detail). */
+.catalogops-change-applied {
+	background: #edfaef;
+	color: var(--co-green);
+}
+
+.catalogops-change-skipped {
+	background: #fcf5e6;
+	color: var(--co-amber);
+}
+
+.catalogops-change-failed {
+	background: #fcebec;
+	color: var(--co-red);
+}
+
+.catalogops-change-pending {
+	background: #e7f2fb;
+	color: var(--co-blue);
 }
 
 /* Operation status badges. */
@@ -274,6 +347,7 @@ tr.is-drift td {
 
 .catalogops-actions {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 6px;
 }
 

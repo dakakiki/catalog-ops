@@ -204,30 +204,40 @@ final class Changes {
 	}
 
 	/**
-	 * A page of an operation's change rows, newest object first — the audit-log
-	 * detail view of what an operation did, field by field.
+	 * A page of an operation's change rows, oldest id first — the audit-log detail
+	 * view of what an operation did, field by field. An optional object id narrows
+	 * it to a single product/variation, so a user can look up whether a specific
+	 * object was changed (and to what).
 	 *
 	 * @param int $operation_id Operation id.
 	 * @param int $limit        Page size.
 	 * @param int $offset       Rows to skip.
+	 * @param int $object_id    When > 0, only this object's rows.
 	 * @return list<Change>
 	 */
-	public function page( int $operation_id, int $limit, int $offset ): array {
+	public function page( int $operation_id, int $limit, int $offset, int $object_id = 0 ): array {
 		$table  = $this->schema->changes_table();
 		$limit  = max( 1, $limit );
 		$offset = max( 0, $offset );
 
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$where = 'operation_id = %d';
+		$args  = array( $operation_id );
+		if ( $object_id > 0 ) {
+			$where .= ' AND object_id = %d';
+			$args[] = $object_id;
+		}
+		$args[] = $limit;
+		$args[] = $offset;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
-				"SELECT * FROM {$table} WHERE operation_id = %d ORDER BY id ASC LIMIT %d OFFSET %d",
-				$operation_id,
-				$limit,
-				$offset
+				"SELECT * FROM {$table} WHERE {$where} ORDER BY id ASC LIMIT %d OFFSET %d",
+				...$args
 			),
 			ARRAY_A
 		);
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
 		return array_map( array( $this, 'hydrate' ), $rows );
 	}
