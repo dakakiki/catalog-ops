@@ -335,14 +335,16 @@ final class Operation_Service {
 		$actions = $operation->actions();
 		$this->assert_fields_supported( $actions );
 
+		$filter = $operation->filter();
+
 		// The one-and-only filter resolution (CONTEXT §2).
-		$ids = $this->engine->resolve( $operation->filter() );
+		$ids = $this->engine->resolve( $filter );
 
 		if ( array() === $ids ) {
 			return 0;
 		}
 
-		$this->changes->seed( $op_id, $this->seed_rows( $ids, $actions ) );
+		$this->changes->seed( $op_id, $this->seed_rows( $ids, $actions, $filter->scope()->value ) );
 
 		return count( $ids );
 	}
@@ -377,13 +379,17 @@ final class Operation_Service {
 	}
 
 	/**
-	 * Build the cross-product of target ids and action fields as seed rows.
+	 * Build the cross-product of target ids and action fields as seed rows. The
+	 * object_type is stamped from the filter's scope, so a variation operation's
+	 * deltas record `variation` — which is what undo and the audit log read back,
+	 * and what tells the runner it is loading a variation (CONTEXT §4).
 	 *
-	 * @param int[]                                   $ids     Frozen target ids.
-	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to apply.
-	 * @return array<int, array{object_id: int, field_type: string, field_key: string}>
+	 * @param int[]                                   $ids         Frozen target ids.
+	 * @param \CatalogOps\Operations\Actions\Action[] $actions     Actions to apply.
+	 * @param string                                  $object_type product|variation.
+	 * @return array<int, array{object_type: string, object_id: int, field_type: string, field_key: string}>
 	 */
-	private function seed_rows( array $ids, array $actions ): array {
+	private function seed_rows( array $ids, array $actions, string $object_type ): array {
 		$specs = array();
 
 		foreach ( $actions as $action ) {
@@ -404,9 +410,10 @@ final class Operation_Service {
 		foreach ( $ids as $object_id ) {
 			foreach ( $specs as $spec ) {
 				$rows[] = array(
-					'object_id'  => $object_id,
-					'field_type' => $spec['field_type'],
-					'field_key'  => $spec['field_key'],
+					'object_type' => $object_type,
+					'object_id'   => $object_id,
+					'field_type'  => $spec['field_type'],
+					'field_key'   => $spec['field_key'],
 				);
 			}
 		}
