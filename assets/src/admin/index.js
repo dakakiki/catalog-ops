@@ -407,24 +407,13 @@ function ChangesTable( { id } ) {
 				>
 					{ __( 'Search', 'catalogops' ) }
 				</button>
-				{ sku !== '' && (
-					<button
-						className="button-link"
-						onClick={ () => {
-							setDraft( '' );
-							setSku( '' );
-							setPage( 1 );
-						} }
-					>
-						{ __( 'Clear', 'catalogops' ) }
-					</button>
-				) }
-				{ loading && (
-					<span className="catalogops-loading">
-						{ __( 'Loading…', 'catalogops' ) }
-					</span>
-				) }
 			</div>
+
+			{ loading && (
+				<p className="catalogops-loading">
+					{ __( 'Loading…', 'catalogops' ) }
+				</p>
+			) }
 
 			<div
 				className={ `catalogops-table-scroll${
