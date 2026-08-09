@@ -39,6 +39,7 @@ final class Operation {
 	 * @param string                           $created_at       Creation time (GMT, MySQL datetime).
 	 * @param string|null                      $completed_at     Completion time, or null.
 	 * @param string|null                      $last_progress_at Heartbeat time, or null.
+	 * @param Conflict_Policy|null             $conflict_policy  Drift policy (undo only; null otherwise).
 	 */
 	public function __construct(
 		public readonly int $id,
@@ -56,7 +57,16 @@ final class Operation {
 		public readonly string $created_at,
 		public readonly ?string $completed_at,
 		public readonly ?string $last_progress_at,
+		public readonly ?Conflict_Policy $conflict_policy = null,
 	) {}
+
+	/**
+	 * Whether this operation is an undo of an earlier one — the case the runner
+	 * treats specially, reverting recorded deltas instead of applying actions.
+	 */
+	public function is_undo(): bool {
+		return Operation_Source::UNDO === $this->source;
+	}
 
 	/**
 	 * Rebuild the filter object from its stored form.

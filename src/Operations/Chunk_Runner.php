@@ -7,7 +7,6 @@
 
 namespace CatalogOps\Operations;
 
-use CatalogOps\Operations\Actions\Action;
 use CatalogOps\Operations\Fields\Field_Providers;
 use Throwable;
 use WC_Product;
@@ -132,11 +131,10 @@ final class Chunk_Runner {
 		$rows = $this->changes->pending_chunk( $op_id, $batch_size );
 
 		if ( array() === $rows ) {
-			$this->finalize( $op_id );
+			$this->finalize( $operation );
 			return;
 		}
 
-		$actions = $operation->actions();
 		$started = microtime( true );
 
 		$by_object = array();
@@ -144,12 +142,14 @@ final class Chunk_Runner {
 			$by_object[ $row->object_id ][] = $row;
 		}
 
+		$plan = $this->plan_for( $operation, array_map( 'intval', array_keys( $by_object ) ) );
+
 		$processed = 0;
 		$failed    = 0;
 
 		foreach ( $by_object as $object_id => $object_rows ) {
 			try {
-				$this->apply_object( (int) $object_id, $object_rows, $actions );
+				$this->apply_object( (int) $object_id, $object_rows, $plan );
 				++$processed;
 			} catch ( Throwable $e ) {
 				foreach ( $object_rows as $row ) {
@@ -178,19 +178,42 @@ final class Chunk_Runner {
 			return;
 		}
 
-		$this->finalize( $op_id );
+		$this->finalize( $operation );
 	}
 
 	/**
-	 * Snapshot, apply, and save one object's pending changes in a single save.
+	 * Build the plan that decides each object's new value for this operation: the
+	 * forward apply plan from the operation's actions, or — for an undo — the
+	 * revert plan from the parent operation's recorded deltas (CONTEXT §2, one
+	 * pipeline). The undo plan is handed the parent deltas for exactly this chunk's
+	 * objects, fetched in a single query.
 	 *
-	 * @param int      $object_id   The product id.
-	 * @param Change[] $object_rows The object's pending change rows.
-	 * @param Action[] $actions     The operation's actions.
+	 * @param Operation $operation  The operation being run.
+	 * @param int[]     $object_ids Object ids in this chunk.
+	 */
+	private function plan_for( Operation $operation, array $object_ids ): Chunk_Plan {
+		if ( $operation->is_undo() ) {
+			$parent_deltas = $this->changes->applied_index( (int) $operation->parent_op_id, $object_ids );
+			$policy        = $operation->conflict_policy ?? Conflict_Policy::safe_default();
+
+			return new Revert_Plan( $this->providers, $parent_deltas, $policy );
+		}
+
+		return new Apply_Plan( $operation->actions(), $this->providers );
+	}
+
+	/**
+	 * Snapshot, evaluate, and save one object's pending changes in a single save.
+	 * The plan decides what to write (an edit) or revert (an undo) and stages it;
+	 * the runner persists one save and claims each row (CONTEXT §3).
+	 *
+	 * @param int        $object_id   The product id.
+	 * @param Change[]   $object_rows The object's pending change rows.
+	 * @param Chunk_Plan $plan        The plan for this operation.
 	 *
 	 * @throws \RuntimeException When the product cannot be loaded.
 	 */
-	private function apply_object( int $object_id, array $object_rows, array $actions ): void {
+	private function apply_object( int $object_id, array $object_rows, Chunk_Plan $plan ): void {
 		$product = wc_get_product( $object_id );
 
 		if ( ! $product instanceof WC_Product ) {
@@ -198,50 +221,14 @@ final class Chunk_Runner {
 			throw new \RuntimeException( sprintf( 'Product %d could not be loaded.', $object_id ) );
 		}
 
-		// Index this object's rows by their storage identity so each action can
-		// find the row it should claim.
-		$row_for = array();
-		foreach ( $object_rows as $row ) {
-			$row_for[ $row->field_type->value . '|' . $row->field_key ] = $row;
+		$outcome = $plan->evaluate( $product, $object_rows );
+
+		// Record skips before the save, mirroring the pre-refactor ordering.
+		foreach ( $outcome->skipped() as $skip ) {
+			$this->changes->mark_skipped( $skip['row']->id, $skip['old'] );
 		}
 
-		// Staged changes to claim after a successful save: each is
-		// array{row: Change, old: ?string, new: ?string}.
-		$applied = array();
-
-		foreach ( $actions as $action ) {
-			$provider = $this->providers->for( $action->field() );
-
-			if ( null === $provider ) {
-				continue;
-			}
-
-			$key = $provider->field_type( $action->field() )->value . '|' . $provider->storage_key( $action->field() );
-
-			if ( ! isset( $row_for[ $key ] ) ) {
-				continue;
-			}
-
-			$row     = $row_for[ $key ];
-			$current = $provider->read( $product, $action->field() );
-			$new     = $action->apply( $current );
-
-			if ( null === $new ) {
-				// Nothing to write (e.g. a formula over an empty field): skip and
-				// record it (CONTEXT §3), never coerce to zero.
-				$this->changes->mark_skipped( $row->id, Values::to_string( $current ) );
-				continue;
-			}
-
-			$provider->stage( $product, $action->field(), $new );
-			$applied[] = array(
-				'row' => $row,
-				'old' => Values::to_string( $current ),
-				'new' => Values::to_string( $new ),
-			);
-		}
-
-		if ( array() === $applied ) {
+		if ( ! $outcome->has_writes() ) {
 			return;
 		}
 
@@ -249,19 +236,26 @@ final class Chunk_Runner {
 		// clears transients (CONTEXT §3).
 		$product->save();
 
-		foreach ( $applied as $change ) {
+		foreach ( $outcome->applied() as $change ) {
 			$this->changes->mark_applied( $change['row']->id, $change['old'], $change['new'] );
 		}
 	}
 
 	/**
-	 * Complete an operation and release the write-lock.
+	 * Complete an operation and release the write-lock. When the operation is an
+	 * undo, its parent moves to `reverted` — the operation the undo just rolled
+	 * back (CONTEXT §3).
 	 *
-	 * @param int $op_id Operation id.
+	 * @param Operation $operation The operation that has finished.
 	 */
-	private function finalize( int $op_id ): void {
-		$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
-		$this->lock->release( $op_id );
+	private function finalize( Operation $operation ): void {
+		$this->operations->set_status( $operation->id, Operation_Status::COMPLETED, true );
+
+		if ( $operation->is_undo() && null !== $operation->parent_op_id ) {
+			$this->operations->set_status( (int) $operation->parent_op_id, Operation_Status::REVERTED );
+		}
+
+		$this->lock->release( $operation->id );
 	}
 
 	/**

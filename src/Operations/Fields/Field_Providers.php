@@ -56,6 +56,31 @@ final class Field_Providers {
 	}
 
 	/**
+	 * Resolve a stored (field_type, field_key) pair — as recorded on a changes
+	 * row — to the provider that owns it and the field key it reads/writes by.
+	 * This is the reverse of {@see for()}, used by undo to route a recorded delta
+	 * back to a provider without the original UI key (CONTEXT §3).
+	 *
+	 * @param Field_Type $type        Where the value is stored.
+	 * @param string     $storage_key The bare stored key.
+	 * @return array{provider: Field_Provider, key: string}|null Match, or null when unowned.
+	 */
+	public function for_storage( Field_Type $type, string $storage_key ): ?array {
+		foreach ( $this->providers as $provider ) {
+			$key = $provider->ui_key( $type, $storage_key );
+
+			if ( null !== $key ) {
+				return array(
+					'provider' => $provider,
+					'key'      => $key,
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Every editable field advertised across all providers, for the UI.
 	 *
 	 * @return list<array{key: string, label: string, type: string}>

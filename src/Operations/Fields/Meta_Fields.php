@@ -63,6 +63,21 @@ final class Meta_Fields implements Field_Provider {
 	}
 
 	/**
+	 * A meta storage key maps back to the same key with the `meta:` prefix
+	 * restored. This provider owns any non-empty meta key.
+	 *
+	 * @param Field_Type $type        Where the value is stored.
+	 * @param string     $storage_key The bare stored key.
+	 */
+	public function ui_key( Field_Type $type, string $storage_key ): ?string {
+		if ( Field_Type::META !== $type || '' === $storage_key ) {
+			return null;
+		}
+
+		return self::PREFIX . $storage_key;
+	}
+
+	/**
 	 * Read a single meta value from the loaded product.
 	 *
 	 * @param WC_Product $product The loaded product.

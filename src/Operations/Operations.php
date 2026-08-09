@@ -52,9 +52,10 @@ final class Operations {
 	 * @param Filter                                  $filter       The target filter.
 	 * @param \CatalogOps\Operations\Actions\Action[] $actions The actions to apply.
 	 * @param Operation_Mode                          $mode         Write strategy.
-	 * @param Operation_Source                        $source       Origin.
-	 * @param int                                     $user_id      Owner user id.
-	 * @param int|null                                $parent_op_id Parent operation, for undo.
+	 * @param Operation_Source                        $source          Origin.
+	 * @param int                                     $user_id         Owner user id.
+	 * @param int|null                                $parent_op_id    Parent operation, for undo.
+	 * @param Conflict_Policy|null                    $conflict_policy Drift policy (undo only).
 	 * @return int The new operation id.
 	 */
 	public function create(
@@ -63,25 +64,27 @@ final class Operations {
 		Operation_Mode $mode,
 		Operation_Source $source,
 		int $user_id,
-		?int $parent_op_id = null
+		?int $parent_op_id = null,
+		?Conflict_Policy $conflict_policy = null
 	): int {
 		$this->wpdb->insert(
 			$this->schema->operations_table(),
 			array(
-				'created_at'   => current_time( 'mysql', true ),
-				'user_id'      => $user_id,
-				'status'       => Operation_Status::DRAFT->value,
-				'source'       => $source->value,
-				'parent_op_id' => $parent_op_id,
-				'filter_json'  => (string) wp_json_encode( $filter->to_array() ),
-				'actions_json' => (string) wp_json_encode( Action_Factory::list_to_array( $actions ) ),
-				'target_count' => 0,
-				'processed'    => 0,
-				'failed'       => 0,
-				'mode'         => $mode->value,
-				'batch_size'   => 0,
+				'created_at'      => current_time( 'mysql', true ),
+				'user_id'         => $user_id,
+				'status'          => Operation_Status::DRAFT->value,
+				'source'          => $source->value,
+				'parent_op_id'    => $parent_op_id,
+				'filter_json'     => (string) wp_json_encode( $filter->to_array() ),
+				'actions_json'    => (string) wp_json_encode( Action_Factory::list_to_array( $actions ) ),
+				'target_count'    => 0,
+				'processed'       => 0,
+				'failed'          => 0,
+				'mode'            => $mode->value,
+				'batch_size'      => 0,
+				'conflict_policy' => null === $conflict_policy ? null : $conflict_policy->value,
 			),
-			array( '%s', '%d', '%s', '%s', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d' )
+			array( '%s', '%d', '%s', '%s', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s' )
 		);
 
 		return (int) $this->wpdb->insert_id;
@@ -294,6 +297,7 @@ final class Operations {
 			(string) $row['created_at'],
 			null === $row['completed_at'] ? null : (string) $row['completed_at'],
 			null === $row['last_progress_at'] ? null : (string) $row['last_progress_at'],
+			empty( $row['conflict_policy'] ) ? null : Conflict_Policy::from( (string) $row['conflict_policy'] ),
 		);
 	}
 }

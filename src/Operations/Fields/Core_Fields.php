@@ -119,6 +119,21 @@ final class Core_Fields implements Field_Provider {
 	}
 
 	/**
+	 * A post-field storage key maps straight back to the same core field key,
+	 * provided it is one this provider knows.
+	 *
+	 * @param Field_Type $type        Where the value is stored.
+	 * @param string     $storage_key The bare stored key.
+	 */
+	public function ui_key( Field_Type $type, string $storage_key ): ?string {
+		if ( Field_Type::POST_FIELD !== $type || ! isset( self::FIELDS[ $storage_key ] ) ) {
+			return null;
+		}
+
+		return $storage_key;
+	}
+
+	/**
 	 * Read a core field via its WooCommerce getter.
 	 *
 	 * @param WC_Product $product The loaded product.

@@ -78,6 +78,33 @@ final class FieldProvidersTest extends WP_UnitTestCase {
 		$this->assertSame( 'Globex', wc_get_product( $id )->get_meta( '_catalogops_brand', true ) );
 	}
 
+	public function test_for_storage_routes_a_delta_back_to_its_provider(): void {
+		$core = $this->providers->for_storage( Field_Type::POST_FIELD, 'regular_price' );
+		$this->assertNotNull( $core );
+		$this->assertInstanceOf( Core_Fields::class, $core['provider'] );
+		$this->assertSame( 'regular_price', $core['key'] );
+
+		$meta = $this->providers->for_storage( Field_Type::META, '_catalogops_brand' );
+		$this->assertNotNull( $meta );
+		$this->assertInstanceOf( Meta_Fields::class, $meta['provider'] );
+		$this->assertSame( 'meta:_catalogops_brand', $meta['key'] );
+	}
+
+	public function test_for_storage_returns_null_for_unowned_storage(): void {
+		// A post-field key the core provider does not know.
+		$this->assertNull( $this->providers->for_storage( Field_Type::POST_FIELD, 'not_a_field' ) );
+		// An empty meta key.
+		$this->assertNull( $this->providers->for_storage( Field_Type::META, '' ) );
+	}
+
+	public function test_ui_key_round_trips_through_storage_key(): void {
+		$resolved = $this->providers->for_storage( Field_Type::META, '_cost' );
+		$this->assertNotNull( $resolved );
+
+		// The reverse-resolved key normalizes back to the same storage key.
+		$this->assertSame( '_cost', $resolved['provider']->storage_key( $resolved['key'] ) );
+	}
+
 	public function test_all_fields_lists_core_fields(): void {
 		$keys = array_column( $this->providers->all_fields(), 'key' );
 

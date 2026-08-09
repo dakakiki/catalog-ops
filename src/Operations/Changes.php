@@ -95,6 +95,144 @@ final class Changes {
 	}
 
 	/**
+	 * Freeze an undo operation's target list by copying the parent operation's
+	 * applied deltas as fresh pending rows (CONTEXT §2: undo enters the same
+	 * pipeline, its targets frozen up front). Each new row carries the same
+	 * (object, field) identity as the parent delta it reverts, with null values to
+	 * be filled at apply time and status PENDING. Done as a single INSERT…SELECT so
+	 * even a 20k-row operation seeds in one statement.
+	 *
+	 * @param int $undo_op_id   The undo operation receiving the rows.
+	 * @param int $parent_op_id The operation whose applied deltas are reverted.
+	 * @return int Number of rows seeded (the undo's target count).
+	 */
+	public function seed_from_parent( int $undo_op_id, int $parent_op_id ): int {
+		$table = $this->schema->changes_table();
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		return (int) $this->wpdb->query(
+			$this->wpdb->prepare(
+				"INSERT INTO {$table} (operation_id, object_type, object_id, field_type, field_key, status)
+				SELECT %d, object_type, object_id, field_type, field_key, 0
+				FROM {$table} WHERE operation_id = %d AND status = %d",
+				$undo_op_id,
+				$parent_op_id,
+				Change_Status::APPLIED->value
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	}
+
+	/**
+	 * The parent operation's applied deltas for a set of objects, indexed by
+	 * object+field so an undo chunk can look up, per row, both the value to write
+	 * back (the parent's old_value) and the drift baseline (the parent's new_value)
+	 * in one query. Keyed by "{object_id}|{field_type}|{field_key}".
+	 *
+	 * @param int   $parent_op_id The reverted operation.
+	 * @param int[] $object_ids   Object ids in the current chunk.
+	 * @return array<string, array{old: ?string, new: ?string}>
+	 */
+	public function applied_index( int $parent_op_id, array $object_ids ): array {
+		$object_ids = array_values( array_unique( array_map( 'intval', $object_ids ) ) );
+
+		if ( array() === $object_ids ) {
+			return array();
+		}
+
+		$table        = $this->schema->changes_table();
+		$placeholders = implode( ', ', array_fill( 0, count( $object_ids ), '%d' ) );
+		$params       = array_merge( array( $parent_op_id, Change_Status::APPLIED->value ), $object_ids );
+
+		// The IN-list placeholders are generated to match $object_ids exactly, so
+		// the static replacement-count check cannot see they line up.
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT object_id, field_type, field_key, old_value, new_value
+				FROM {$table}
+				WHERE operation_id = %d AND status = %d AND object_id IN ( {$placeholders} )",
+				...$params
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$index = array();
+
+		foreach ( $rows as $row ) {
+			$key           = $row['object_id'] . '|' . $row['field_type'] . '|' . $row['field_key'];
+			$index[ $key ] = array(
+				'old' => null === $row['old_value'] ? null : (string) $row['old_value'],
+				'new' => null === $row['new_value'] ? null : (string) $row['new_value'],
+			);
+		}
+
+		return $index;
+	}
+
+	/**
+	 * A sample of an operation's applied deltas, oldest object first — for the
+	 * undo preview, which reads each sampled object's current value to show whether
+	 * it would revert or be skipped as drift.
+	 *
+	 * @param int $operation_id Operation id.
+	 * @param int $limit        Maximum rows to return.
+	 * @return list<Change>
+	 */
+	public function applied_sample( int $operation_id, int $limit ): array {
+		$table = $this->schema->changes_table();
+		$limit = max( 0, $limit );
+
+		if ( 0 === $limit ) {
+			return array();
+		}
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT * FROM {$table} WHERE operation_id = %d AND status = %d ORDER BY object_id ASC, id ASC LIMIT %d",
+				$operation_id,
+				Change_Status::APPLIED->value,
+				$limit
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return array_map( array( $this, 'hydrate' ), $rows );
+	}
+
+	/**
+	 * A page of an operation's change rows, newest object first — the audit-log
+	 * detail view of what an operation did, field by field.
+	 *
+	 * @param int $operation_id Operation id.
+	 * @param int $limit        Page size.
+	 * @param int $offset       Rows to skip.
+	 * @return list<Change>
+	 */
+	public function page( int $operation_id, int $limit, int $offset ): array {
+		$table  = $this->schema->changes_table();
+		$limit  = max( 1, $limit );
+		$offset = max( 0, $offset );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT * FROM {$table} WHERE operation_id = %d ORDER BY id ASC LIMIT %d OFFSET %d",
+				$operation_id,
+				$limit,
+				$offset
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return array_map( array( $this, 'hydrate' ), $rows );
+	}
+
+	/**
 	 * The next slice of still-pending rows for an operation, in frozen order
 	 * (by object, then by seed order) so an object's fields stay together.
 	 *

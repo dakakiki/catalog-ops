@@ -51,6 +51,23 @@ interface Field_Provider {
 	public function storage_key( string $key ): string;
 
 	/**
+	 * Reverse of {@see storage_key()}: given a stored (field_type, field_key)
+	 * pair from a changes row, return the field key this provider reads and writes
+	 * by — or null when this provider does not own that storage.
+	 *
+	 * Undo (M3) works from recorded deltas, which carry only where a value lives
+	 * (field_type + storage key), never the original UI key. This is how the
+	 * runner routes a delta back to the provider that can write it (CONTEXT §3;
+	 * see {@see Field_Type}). The returned key round-trips: passing it back through
+	 * {@see storage_key()} yields the same storage key.
+	 *
+	 * @param Field_Type $type        Where the value is stored.
+	 * @param string     $storage_key The bare stored key.
+	 * @return string|null The provider's field key, or null if unowned.
+	 */
+	public function ui_key( Field_Type $type, string $storage_key ): ?string;
+
+	/**
 	 * Read the current value from a loaded product (the snapshot's old_value).
 	 *
 	 * @param WC_Product $product The loaded product.

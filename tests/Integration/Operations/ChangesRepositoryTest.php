@@ -108,6 +108,74 @@ final class ChangesRepositoryTest extends Operations_Database_Case {
 		$this->assertSame( (string) Change_Status::APPLIED->value, $row['status'] );
 	}
 
+	public function test_seed_from_parent_copies_only_applied_rows_as_pending(): void {
+		// Parent op 20 has three targets; two get applied, one is skipped.
+		$this->changes->seed( 20, $this->rows_for( array( 500, 501, 502 ) ) );
+		$rows = $this->changes->pending_chunk( 20, 10 );
+		$this->changes->mark_applied( $rows[0]->id, '19.90', '9.99' );
+		$this->changes->mark_applied( $rows[1]->id, '25.00', '9.99' );
+		$this->changes->mark_skipped( $rows[2]->id );
+
+		// Undo op 21 freezes its targets from the parent's applied deltas.
+		$seeded = $this->changes->seed_from_parent( 21, 20 );
+
+		$this->assertSame( 2, $seeded );
+		$this->assertSame( 2, $this->changes->pending_count( 21 ) );
+
+		// The undo rows carry the parent's object+field identity, values still null.
+		$undo = $this->changes->pending_chunk( 21, 10 );
+		$this->assertSame( array( 500, 501 ), array_map( static fn( $c ) => $c->object_id, $undo ) );
+		$this->assertSame( 'regular_price', $undo[0]->field_key );
+		$this->assertNull( $undo[0]->old_value );
+		$this->assertNull( $undo[0]->new_value );
+		$this->assertSame( Change_Status::PENDING, $undo[0]->status );
+	}
+
+	public function test_applied_index_maps_object_and_field_to_the_delta(): void {
+		$this->changes->seed( 30, $this->rows_for( array( 600, 601 ) ) );
+		$rows = $this->changes->pending_chunk( 30, 10 );
+		$this->changes->mark_applied( $rows[0]->id, '19.90', '9.99' );
+		$this->changes->mark_applied( $rows[1]->id, '30.00', '9.99' );
+
+		$index = $this->changes->applied_index( 30, array( 600, 601, 999 ) );
+
+		$this->assertArrayHasKey( '600|post_field|regular_price', $index );
+		$this->assertSame( '19.90', $index['600|post_field|regular_price']['old'] );
+		$this->assertSame( '9.99', $index['600|post_field|regular_price']['new'] );
+		$this->assertSame( '30.00', $index['601|post_field|regular_price']['old'] );
+		// An object with no applied delta is simply absent.
+		$this->assertArrayNotHasKey( '999|post_field|regular_price', $index );
+	}
+
+	public function test_applied_index_is_empty_for_no_objects(): void {
+		$this->assertSame( array(), $this->changes->applied_index( 30, array() ) );
+	}
+
+	public function test_applied_sample_returns_applied_rows_oldest_object_first(): void {
+		$this->changes->seed( 40, $this->rows_for( array( 720, 700, 710 ) ) );
+		$rows = $this->changes->pending_chunk( 40, 10 );
+		foreach ( $rows as $row ) {
+			$this->changes->mark_applied( $row->id, '10.00', '1.00' );
+		}
+
+		$sample = $this->changes->applied_sample( 40, 2 );
+
+		$this->assertCount( 2, $sample );
+		$this->assertSame( 700, $sample[0]->object_id );
+		$this->assertSame( 710, $sample[1]->object_id );
+		$this->assertSame( '10.00', $sample[0]->old_value );
+	}
+
+	public function test_page_returns_rows_for_the_audit_view(): void {
+		$this->changes->seed( 50, $this->rows_for( array( 800, 801, 802 ) ) );
+
+		$first = $this->changes->page( 50, 2, 0 );
+		$this->assertCount( 2, $first );
+
+		$second = $this->changes->page( 50, 2, 2 );
+		$this->assertCount( 1, $second );
+	}
+
 	/**
 	 * Build seed rows for a list of object ids, all targeting regular_price.
 	 *

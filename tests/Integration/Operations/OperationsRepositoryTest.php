@@ -46,6 +46,45 @@ final class OperationsRepositoryTest extends Operations_Database_Case {
 		$this->assertContains( 'batch_size', $columns );
 	}
 
+	public function test_migration_added_conflict_policy_column(): void {
+		global $wpdb;
+
+		$columns = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+				$this->schema->operations_table()
+			)
+		);
+
+		$this->assertContains( 'conflict_policy', $columns );
+	}
+
+	public function test_undo_metadata_round_trips(): void {
+		$id = $this->operations->create(
+			new Filter(),
+			array(),
+			Operation_Mode::SAFE,
+			Operation_Source::UNDO,
+			7,
+			41,
+			\CatalogOps\Operations\Conflict_Policy::FORCE
+		);
+
+		$operation = $this->operations->find( $id );
+		$this->assertNotNull( $operation );
+		$this->assertTrue( $operation->is_undo() );
+		$this->assertSame( 41, $operation->parent_op_id );
+		$this->assertSame( \CatalogOps\Operations\Conflict_Policy::FORCE, $operation->conflict_policy );
+	}
+
+	public function test_non_undo_operation_has_no_conflict_policy(): void {
+		$id        = $this->make_operation();
+		$operation = $this->operations->find( $id );
+
+		$this->assertFalse( $operation->is_undo() );
+		$this->assertNull( $operation->conflict_policy );
+	}
+
 	public function test_create_persists_a_draft_and_round_trips(): void {
 		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) );
 		$actions = array( new Set_Value( 'regular_price', '9.99' ) );

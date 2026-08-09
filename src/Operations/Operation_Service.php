@@ -188,7 +188,101 @@ final class Operation_Service {
 	}
 
 	/**
-	 * Freeze an operation's targets and hand it to the scheduler.
+	 * Record an undo of an earlier operation as a draft (CONTEXT §2: undo is an
+	 * operation, not a function — the inverse enters the same pipeline, has a
+	 * preview, and is itself undoable). It carries no filter or actions; its
+	 * targets are the parent's recorded deltas, frozen at {@see queue()} time. The
+	 * conflict policy the user chose is persisted on it for the async run.
+	 *
+	 * @param int             $parent_op_id The operation to undo.
+	 * @param Conflict_Policy $policy       How to resolve drifted objects.
+	 * @param int             $user_id      Owner user id.
+	 * @return int The new undo operation id.
+	 *
+	 * @throws InvalidArgumentException When the parent is missing or still active.
+	 */
+	public function undo( int $parent_op_id, Conflict_Policy $policy, int $user_id ): int {
+		$parent = $this->operations->find( $parent_op_id );
+
+		if ( null === $parent ) {
+			throw new InvalidArgumentException( 'Operation not found.' );
+		}
+
+		if ( $parent->status->is_active() ) {
+			throw new InvalidArgumentException( 'A running operation cannot be undone; cancel it first.' );
+		}
+
+		return $this->operations->create(
+			new Filter(),
+			array(),
+			$parent->mode,
+			Operation_Source::UNDO,
+			$user_id,
+			$parent_op_id,
+			$policy
+		);
+	}
+
+	/**
+	 * Preview an undo without writing: the total number of recorded changes that
+	 * would be reverted, and a sample showing, per object, whether it would revert
+	 * or be skipped as drift (CONTEXT §3). The exact skipped count is not computed
+	 * here — that would mean reading every target object, which the architecture
+	 * reserves for execution; the sample conveys the shape and the run reports the
+	 * exact figure.
+	 *
+	 * @param int             $parent_op_id The operation to undo.
+	 * @param Conflict_Policy $policy       Policy to reflect in the sample's action.
+	 * @param int             $limit        Maximum sample rows.
+	 * @return array{parent_op_id: int, total: int, conflict_policy: string, sample: list<array{id: int, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
+	 *
+	 * @throws InvalidArgumentException When the parent operation is missing.
+	 */
+	public function preview_undo( int $parent_op_id, Conflict_Policy $policy, int $limit = 20 ): array {
+		$parent = $this->operations->find( $parent_op_id );
+
+		if ( null === $parent ) {
+			throw new InvalidArgumentException( 'Operation not found.' );
+		}
+
+		$total  = $this->changes->counts( $parent_op_id )['applied'];
+		$sample = array();
+
+		foreach ( $this->changes->applied_sample( $parent_op_id, max( 0, $limit ) ) as $row ) {
+			$resolved = $this->providers->for_storage( $row->field_type, $row->field_key );
+			$product  = wc_get_product( $row->object_id );
+
+			$current = null;
+			if ( null !== $resolved && $product instanceof \WC_Product ) {
+				$current = Values::to_string( $resolved['provider']->read( $product, $resolved['key'] ) );
+			}
+
+			$drift = ! Values::equal( $current, $row->new_value );
+
+			$sample[] = array(
+				'id'         => $row->object_id,
+				'field'      => null === $resolved ? $row->field_key : $resolved['key'],
+				'current'    => $current,
+				'restore_to' => $row->old_value,
+				'drift'      => $drift,
+				'action'     => ( $drift && Conflict_Policy::SKIP === $policy ) ? 'skip' : 'revert',
+			);
+		}
+
+		return array(
+			'parent_op_id'    => $parent_op_id,
+			'total'           => $total,
+			'conflict_policy' => $policy->value,
+			'sample'          => $sample,
+		);
+	}
+
+	/**
+	 * Freeze an operation's targets and hand it to the scheduler. For a normal
+	 * operation this resolves the filter exactly once and seeds one row per
+	 * (object, field); for an undo it copies the parent's applied deltas as the
+	 * frozen target list (CONTEXT §2). From here both drive through the identical
+	 * chunked pipeline.
 	 *
 	 * @param int $op_id Operation id.
 	 *
@@ -210,6 +304,34 @@ final class Operation_Service {
 			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 		}
 
+		$target = $operation->is_undo()
+			? $this->freeze_undo( $operation )
+			: $this->freeze_edit( $op_id, $operation );
+
+		if ( 0 === $target ) {
+			// Nothing to do: settle immediately and free the lock.
+			$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
+			$this->lock->release( $op_id );
+			return;
+		}
+
+		$this->operations->set_target_count( $op_id, $target );
+		$this->operations->set_batch_size( $op_id, self::DEFAULT_BATCH );
+		$this->operations->set_status( $op_id, Operation_Status::QUEUED );
+		$this->operations->touch( $op_id );
+
+		$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
+	}
+
+	/**
+	 * Freeze a normal operation's targets: resolve the filter once and seed one
+	 * pending row per (object, field).
+	 *
+	 * @param int       $op_id     Operation id.
+	 * @param Operation $operation The operation.
+	 * @return int Number of target objects frozen.
+	 */
+	private function freeze_edit( int $op_id, Operation $operation ): int {
 		$actions = $operation->actions();
 		$this->assert_fields_supported( $actions );
 
@@ -217,19 +339,23 @@ final class Operation_Service {
 		$ids = $this->engine->resolve( $operation->filter() );
 
 		if ( array() === $ids ) {
-			// Nothing to do: settle immediately and free the lock.
-			$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
-			$this->lock->release( $op_id );
-			return;
+			return 0;
 		}
 
 		$this->changes->seed( $op_id, $this->seed_rows( $ids, $actions ) );
-		$this->operations->set_target_count( $op_id, count( $ids ) );
-		$this->operations->set_batch_size( $op_id, self::DEFAULT_BATCH );
-		$this->operations->set_status( $op_id, Operation_Status::QUEUED );
-		$this->operations->touch( $op_id );
 
-		$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
+		return count( $ids );
+	}
+
+	/**
+	 * Freeze an undo's targets: copy the parent operation's applied deltas as the
+	 * frozen revert list.
+	 *
+	 * @param Operation $operation The undo operation.
+	 * @return int Number of deltas to revert.
+	 */
+	private function freeze_undo( Operation $operation ): int {
+		return $this->changes->seed_from_parent( $operation->id, (int) $operation->parent_op_id );
 	}
 
 	/**
