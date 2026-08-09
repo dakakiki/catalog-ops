@@ -9,7 +9,10 @@
 
 namespace CatalogOps\Tests\Integration\Rest;
 
+use WC_Product_Attribute;
 use WC_Product_Simple;
+use WC_Product_Variable;
+use WC_Product_Variation;
 use WP_REST_Request;
 use WP_UnitTestCase;
 
@@ -24,6 +27,12 @@ final class QueryControllerTest extends WP_UnitTestCase {
 		if ( ! function_exists( 'wc_get_product' ) ) {
 			$this->markTestSkipped( 'WooCommerce is not available in the test environment.' );
 		}
+
+		if ( taxonomy_exists( 'pa_size' ) ) {
+			unregister_taxonomy( 'pa_size' );
+		}
+		delete_transient( 'wc_attribute_taxonomies' );
+		wp_cache_delete( 'attributes', 'woocommerce-attributes' );
 
 		wp_set_current_user( self::factory()->user->create( array( 'role' => 'administrator' ) ) );
 	}
@@ -80,6 +89,76 @@ final class QueryControllerTest extends WP_UnitTestCase {
 		$response = rest_do_request( $request );
 
 		$this->assertContains( $response->get_status(), array( 401, 403 ) );
+	}
+
+	public function test_variation_scope_returns_variations_with_parent_context(): void {
+		list( $parent, $variations ) = $this->make_variable_product();
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'scope'    => 'variation',
+				'filter'   => array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 30 ) ) ),
+				'per_page' => 25,
+			)
+		);
+
+		$response = rest_do_request( $request );
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+
+		$this->assertSame( 'variation', $data['scope'] );
+		$this->assertSame( 1, $data['total'] );
+
+		$item = $data['items'][0];
+		$this->assertSame( $variations['Large'], $item['id'] );
+		$this->assertSame( $parent, $item['parent_id'] );
+		// The label carries the parent title and the variation's attribute value.
+		$this->assertStringContainsString( 'QC Variable', $item['name'] );
+		$this->assertStringContainsString( 'large', $item['name'] );
+	}
+
+	/**
+	 * Create a variable product with a Small and a Large variation.
+	 *
+	 * @return array{0: int, 1: array<string, int>}
+	 */
+	private function make_variable_product(): array {
+		$size_tax = wc_attribute_taxonomy_name( 'size' );
+		if ( ! wc_attribute_taxonomy_id_by_name( 'size' ) ) {
+			wc_create_attribute( array( 'name' => 'Size', 'slug' => 'size', 'type' => 'select' ) );
+		}
+		if ( ! taxonomy_exists( $size_tax ) ) {
+			register_taxonomy( $size_tax, array( 'product' ), array( 'hierarchical' => false, 'query_var' => true ) );
+		}
+
+		$small = (int) wp_insert_term( 'Small', $size_tax )['term_id'];
+		$large = (int) wp_insert_term( 'Large', $size_tax )['term_id'];
+
+		$parent = new WC_Product_Variable();
+		$parent->set_name( 'QC Variable' );
+		$attribute = new WC_Product_Attribute();
+		$attribute->set_id( wc_attribute_taxonomy_id_by_name( 'size' ) );
+		$attribute->set_name( $size_tax );
+		$attribute->set_options( array( $small, $large ) );
+		$attribute->set_visible( true );
+		$attribute->set_variation( true );
+		$parent->set_attributes( array( $attribute ) );
+		$parent_id = $parent->save();
+
+		$variations = array();
+		foreach ( array( 'Small' => 10, 'Large' => 90 ) as $name => $price ) {
+			$variation = new WC_Product_Variation();
+			$variation->set_parent_id( $parent_id );
+			$variation->set_attributes( array( $size_tax => sanitize_title( $name ) ) );
+			$variation->set_regular_price( (string) $price );
+			$variation->set_manage_stock( true );
+			$variation->set_stock_quantity( 5 );
+			$variation->set_stock_status( 'instock' );
+			$variations[ $name ] = $variation->save();
+		}
+
+		return array( $parent_id, $variations );
 	}
 
 	/**

@@ -9,6 +9,7 @@ namespace CatalogOps\Rest;
 
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
+use CatalogOps\Query\Query_Scope;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
@@ -64,6 +65,10 @@ final class Query_Controller {
 						'type'    => 'object',
 						'default' => array(),
 					),
+					'scope'    => array(
+						'type' => 'string',
+						'enum' => array( Query_Scope::PRODUCT->value, Query_Scope::VARIATION->value ),
+					),
 					'page'     => array(
 						'type'    => 'integer',
 						'default' => 1,
@@ -93,7 +98,16 @@ final class Query_Controller {
 	 * @param WP_REST_Request $request The request.
 	 */
 	public function query( WP_REST_Request $request ): WP_REST_Response {
-		$filter   = Filter::from_array( (array) $request->get_param( 'filter' ) );
+		$filter_data = (array) $request->get_param( 'filter' );
+
+		// A top-level scope param (what the UI's Products/Variations toggle sends)
+		// overrides any scope inside the filter object.
+		$scope = $request->get_param( 'scope' );
+		if ( null !== $scope ) {
+			$filter_data['scope'] = $scope;
+		}
+
+		$filter   = Filter::from_array( $filter_data );
 		$page     = max( 1, (int) $request->get_param( 'page' ) );
 		$per_page = min( 200, max( 1, (int) $request->get_param( 'per_page' ) ) );
 
@@ -106,18 +120,23 @@ final class Query_Controller {
 				'total'    => $total,
 				'page'     => $page,
 				'per_page' => $per_page,
-				'items'    => $this->rows_for( $page_ids ),
+				'scope'    => $filter->scope()->value,
+				'items'    => $this->rows_for( $page_ids, $filter->scope() ),
 			)
 		);
 	}
 
 	/**
-	 * Fetch display columns for a page of product IDs, in the given order.
+	 * Fetch display columns for a page of IDs, in the given order. For variations
+	 * the post has no title of its own, so the parent's title is joined in and the
+	 * variation's attribute summary is read, giving the table a meaningful label
+	 * (CONTEXT §4). Only the page's rows are touched, never the whole result.
 	 *
-	 * @param int[] $ids Product IDs for this page.
+	 * @param int[]       $ids   IDs for this page.
+	 * @param Query_Scope $scope The object type these IDs are.
 	 * @return list<array<string, mixed>>
 	 */
-	private function rows_for( array $ids ): array {
+	private function rows_for( array $ids, Query_Scope $scope ): array {
 		if ( array() === $ids ) {
 			return array();
 		}
@@ -126,12 +145,17 @@ final class Query_Controller {
 		$posts        = $this->wpdb->posts;
 		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
 
+		$is_variation = $scope->is_variation();
+		$name_select  = $is_variation ? 'parent.post_title AS name, p.post_parent AS parent_id' : 'p.post_title AS name, 0 AS parent_id';
+		$parent_join  = $is_variation ? "LEFT JOIN {$posts} parent ON parent.ID = p.post_parent" : '';
+
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
-				"SELECT p.ID, p.post_title, l.sku, l.min_price, l.max_price, l.stock_status, l.stock_quantity
+				"SELECT p.ID, {$name_select}, l.sku, l.min_price, l.max_price, l.stock_status, l.stock_quantity
 				FROM {$lookup} l
 				INNER JOIN {$posts} p ON p.ID = l.product_id
+				{$parent_join}
 				WHERE l.product_id IN ( {$placeholders} )",
 				...$ids
 			),
@@ -144,16 +168,24 @@ final class Query_Controller {
 			$by_id[ (int) $row['ID'] ] = $row;
 		}
 
+		$attributes = $is_variation ? $this->variation_attributes( $ids ) : array();
+
 		$items = array();
 		foreach ( $ids as $id ) {
 			if ( ! isset( $by_id[ $id ] ) ) {
 				continue;
 			}
 
-			$row     = $by_id[ $id ];
+			$row  = $by_id[ $id ];
+			$name = (string) $row['name'];
+			if ( $is_variation && isset( $attributes[ $id ] ) ) {
+				$name = '' === $name ? $attributes[ $id ] : $name . ' — ' . $attributes[ $id ];
+			}
+
 			$items[] = array(
 				'id'             => (int) $row['ID'],
-				'name'           => (string) $row['post_title'],
+				'name'           => $name,
+				'parent_id'      => (int) $row['parent_id'],
 				'sku'            => (string) $row['sku'],
 				'price'          => $row['min_price'],
 				'max_price'      => $row['max_price'],
@@ -163,5 +195,40 @@ final class Query_Controller {
 		}
 
 		return $items;
+	}
+
+	/**
+	 * A short attribute summary per variation (e.g. "large, red"), read from the
+	 * variations' `attribute_*` post meta in one pass over the page's ids.
+	 *
+	 * @param int[] $ids Variation ids for this page.
+	 * @return array<int, string> Variation id => comma-separated attribute values.
+	 */
+	private function variation_attributes( array $ids ): array {
+		$postmeta     = $this->wpdb->postmeta;
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+		$like         = $this->wpdb->esc_like( 'attribute_' ) . '%';
+		$args         = array( ...$ids, $like );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT post_id, meta_value
+				FROM {$postmeta}
+				WHERE post_id IN ( {$placeholders} ) AND meta_key LIKE %s AND meta_value <> ''
+				ORDER BY meta_key ASC",
+				...$args
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$summary = array();
+		foreach ( $rows as $row ) {
+			$id             = (int) $row['post_id'];
+			$summary[ $id ] = isset( $summary[ $id ] ) ? $summary[ $id ] . ', ' . $row['meta_value'] : (string) $row['meta_value'];
+		}
+
+		return $summary;
 	}
 }
