@@ -346,24 +346,24 @@ function ChangesTable( { id } ) {
 	const [ data, setData ] = useState( null );
 	const [ error, setError ] = useState( '' );
 	const [ page, setPage ] = useState( 1 );
-	// Draft is the input value; objectId is the applied search (on Enter/Search).
+	// Draft is the input value; sku is the applied search (on Enter/Search).
 	const [ draft, setDraft ] = useState( '' );
-	const [ objectId, setObjectId ] = useState( 0 );
+	const [ sku, setSku ] = useState( '' );
 
 	useEffect( () => {
 		const query = `page=${ page }&per_page=${ CHANGES_PER_PAGE }${
-			objectId ? `&object_id=${ objectId }` : ''
+			sku ? `&sku=${ encodeURIComponent( sku ) }` : ''
 		}`;
 		apiFetch( {
 			path: `/catalogops/v1/operations/${ id }/changes?${ query }`,
 		} )
 			.then( setData )
 			.catch( ( err ) => setError( err.message ) );
-	}, [ id, page, objectId ] );
+	}, [ id, page, sku ] );
 
 	const applySearch = () => {
 		setPage( 1 );
-		setObjectId( Number( draft.trim() ) || 0 );
+		setSku( draft.trim() );
 	};
 
 	if ( error ) {
@@ -383,15 +383,12 @@ function ChangesTable( { id } ) {
 		<div>
 			<div className="catalogops-search">
 				<label htmlFor={ `changes-search-${ id }` }>
-					{ __( 'Find object ID', 'catalogops' ) }
+					{ __( 'Find by SKU', 'catalogops' ) }
 				</label>
 				<input
 					id={ `changes-search-${ id }` }
 					type="search"
-					placeholder={ __(
-						'product or variation ID',
-						'catalogops'
-					) }
+					placeholder={ __( 'e.g. COPS-1234', 'catalogops' ) }
 					value={ draft }
 					onChange={ ( e ) => setDraft( e.target.value ) }
 					onKeyDown={ ( e ) => e.key === 'Enter' && applySearch() }
@@ -399,12 +396,12 @@ function ChangesTable( { id } ) {
 				<button className="button" onClick={ applySearch }>
 					{ __( 'Search', 'catalogops' ) }
 				</button>
-				{ objectId > 0 && (
+				{ sku !== '' && (
 					<button
 						className="button-link"
 						onClick={ () => {
 							setDraft( '' );
-							setObjectId( 0 );
+							setSku( '' );
 							setPage( 1 );
 						} }
 					>
@@ -414,10 +411,11 @@ function ChangesTable( { id } ) {
 			</div>
 
 			<div className="catalogops-table-scroll">
-				<table className="wp-list-table widefat striped">
+				<table className="wp-list-table widefat striped catalogops-changes">
 					<thead>
 						<tr>
-							<th>{ __( 'Object', 'catalogops' ) }</th>
+							<th>{ __( 'SKU', 'catalogops' ) }</th>
+							<th>{ __( 'Item', 'catalogops' ) }</th>
 							<th>{ __( 'Field', 'catalogops' ) }</th>
 							<th>{ __( 'Old', 'catalogops' ) }</th>
 							<th>{ __( 'New', 'catalogops' ) }</th>
@@ -427,7 +425,7 @@ function ChangesTable( { id } ) {
 					<tbody>
 						{ data.items.length === 0 ? (
 							<tr className="catalogops-empty">
-								<td colSpan="5">
+								<td colSpan="6">
 									{ __(
 										'No matching changes.',
 										'catalogops'
@@ -437,7 +435,24 @@ function ChangesTable( { id } ) {
 						) : (
 							data.items.map( ( c, i ) => (
 								<tr key={ i }>
-									<td>{ c.object_id }</td>
+									<td>
+										{ c.sku || (
+											<span className="catalogops-muted">
+												{ `#${ c.object_id }` }
+											</span>
+										) }
+									</td>
+									<td>
+										{ c.name || '—' }
+										{ c.object_type === 'variation' && (
+											<span className="catalogops-badge catalogops-badge--neutral catalogops-var-tag">
+												{ __(
+													'variation',
+													'catalogops'
+												) }
+											</span>
+										) }
+									</td>
 									<td>{ c.field_key }</td>
 									<td className="catalogops-num">
 										{ c.old_value }

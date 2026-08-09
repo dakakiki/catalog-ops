@@ -307,11 +307,16 @@ final class Plugin {
 
 		$this->container->singleton(
 			Operations_Controller::class,
-			static fn( Container $container ): Operations_Controller => new Operations_Controller(
-				$container->get( Operation_Service::class ),
-				$container->get( Operations::class ),
-				$container->get( Changes::class )
-			)
+			static function ( Container $container ): Operations_Controller {
+				global $wpdb;
+
+				return new Operations_Controller(
+					$container->get( Operation_Service::class ),
+					$container->get( Operations::class ),
+					$container->get( Changes::class ),
+					$wpdb
+				);
+			}
 		);
 
 		$this->container->singleton(

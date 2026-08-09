@@ -209,13 +209,15 @@ final class Changes {
 	 * it to a single product/variation, so a user can look up whether a specific
 	 * object was changed (and to what).
 	 *
-	 * @param int $operation_id Operation id.
-	 * @param int $limit        Page size.
-	 * @param int $offset       Rows to skip.
-	 * @param int $object_id    When > 0, only this object's rows.
+	 * @param int    $operation_id Operation id.
+	 * @param int    $limit        Page size.
+	 * @param int    $offset       Rows to skip.
+	 * @param int    $object_id    When > 0, only this object's rows.
+	 * @param string $sku          When non-empty, only objects whose SKU (or, for a
+	 *                             variation, the parent's SKU) matches this substring.
 	 * @return list<Change>
 	 */
-	public function page( int $operation_id, int $limit, int $offset, int $object_id = 0 ): array {
+	public function page( int $operation_id, int $limit, int $offset, int $object_id = 0, string $sku = '' ): array {
 		$table  = $this->schema->changes_table();
 		$limit  = max( 1, $limit );
 		$offset = max( 0, $offset );
@@ -225,6 +227,21 @@ final class Changes {
 		if ( $object_id > 0 ) {
 			$where .= ' AND object_id = %d';
 			$args[] = $object_id;
+		}
+		if ( '' !== $sku ) {
+			// Match the object's own SKU, or — for a variation, whose own SKU is
+			// often blank — the parent product's SKU, which is the one a user
+			// searches by.
+			$lookup = $this->wpdb->prefix . 'wc_product_meta_lookup';
+			$posts  = $this->wpdb->posts;
+			$like   = '%' . $this->wpdb->esc_like( $sku ) . '%';
+			$where .= " AND object_id IN (
+				SELECT product_id FROM {$lookup} WHERE sku LIKE %s
+				UNION
+				SELECT p.ID FROM {$posts} p INNER JOIN {$lookup} pl ON pl.product_id = p.post_parent WHERE pl.sku LIKE %s
+			)";
+			$args[] = $like;
+			$args[] = $like;
 		}
 		$args[] = $limit;
 		$args[] = $offset;

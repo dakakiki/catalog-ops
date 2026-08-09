@@ -24,6 +24,7 @@ use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
+use wpdb;
 
 /**
  * Exposes the write pipeline to the admin app: preview a change, create-and-queue
@@ -57,16 +58,25 @@ final class Operations_Controller {
 	private Changes $changes;
 
 	/**
+	 * WordPress database handle (audit rows are enriched with SKU and name).
+	 *
+	 * @var wpdb
+	 */
+	private wpdb $wpdb;
+
+	/**
 	 * Build the controller.
 	 *
 	 * @param Operation_Service $service    Operation service.
 	 * @param Operations        $operations Operations repository.
 	 * @param Changes           $changes    Changes repository.
+	 * @param wpdb              $wpdb       WordPress database handle.
 	 */
-	public function __construct( Operation_Service $service, Operations $operations, Changes $changes ) {
+	public function __construct( Operation_Service $service, Operations $operations, Changes $changes, wpdb $wpdb ) {
 		$this->service    = $service;
 		$this->operations = $operations;
 		$this->changes    = $changes;
+		$this->wpdb       = $wpdb;
 	}
 
 	/**
@@ -206,6 +216,10 @@ final class Operations_Controller {
 						'type'    => 'integer',
 						'default' => 0,
 						'minimum' => 0,
+					),
+					'sku'       => array(
+						'type'    => 'string',
+						'default' => '',
 					),
 				),
 			)
@@ -389,11 +403,15 @@ final class Operations_Controller {
 		$page      = max( 1, (int) $request->get_param( 'page' ) );
 		$per_page  = (int) $request->get_param( 'per_page' );
 		$object_id = max( 0, (int) $request->get_param( 'object_id' ) );
+		$sku       = trim( (string) $request->get_param( 'sku' ) );
 		$offset    = ( $page - 1 ) * $per_page;
 
+		$changes    = $this->changes->page( $id, $per_page, $offset, $object_id, $sku );
+		$identities = $this->identify( array_map( static fn( Change $c ): int => $c->object_id, $changes ) );
+
 		$rows = array_map(
-			array( $this, 'change_to_array' ),
-			$this->changes->page( $id, $per_page, $offset, $object_id )
+			fn( Change $c ): array => $this->change_to_array( $c, $identities ),
+			$changes
 		);
 
 		return new WP_REST_Response(
@@ -403,6 +421,112 @@ final class Operations_Controller {
 				'page'   => $page,
 			)
 		);
+	}
+
+	/**
+	 * Resolve a set of changed object ids to a human identity — SKU and a label —
+	 * so the audit view shows "COPS-1234 · Shirt (Large)" instead of a raw post id
+	 * that means nothing to the user. A variation borrows its parent's SKU (its
+	 * own is usually blank) and shows the parent's name plus its attribute values.
+	 *
+	 * @param int[] $ids Changed object ids on the current page.
+	 * @return array<int, array{sku: string, name: string, object_type: string}>
+	 */
+	private function identify( array $ids ): array {
+		$ids = array_values( array_unique( array_filter( $ids ) ) );
+
+		if ( array() === $ids ) {
+			return array();
+		}
+
+		$lookup       = $this->wpdb->prefix . 'wc_product_meta_lookup';
+		$posts        = $this->wpdb->posts;
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT p.ID, p.post_type, p.post_title, p.post_parent,
+					l.sku AS sku, parent.post_title AS parent_title, pl.sku AS parent_sku
+				FROM {$posts} p
+				LEFT JOIN {$lookup} l ON l.product_id = p.ID
+				LEFT JOIN {$posts} parent ON parent.ID = p.post_parent
+				LEFT JOIN {$lookup} pl ON pl.product_id = p.post_parent
+				WHERE p.ID IN ( {$placeholders} )",
+				...$ids
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$variation_ids = array();
+		foreach ( $rows as $row ) {
+			if ( 'product_variation' === $row['post_type'] ) {
+				$variation_ids[] = (int) $row['ID'];
+			}
+		}
+		$attributes = $this->attribute_summaries( $variation_ids );
+
+		$identities = array();
+		foreach ( $rows as $row ) {
+			$id           = (int) $row['ID'];
+			$is_variation = 'product_variation' === $row['post_type'];
+			$sku          = (string) $row['sku'];
+			$name         = (string) $row['post_title'];
+
+			if ( $is_variation ) {
+				$sku  = '' !== $sku ? $sku : (string) $row['parent_sku'];
+				$name = (string) $row['parent_title'];
+				if ( isset( $attributes[ $id ] ) ) {
+					$name = '' === $name ? $attributes[ $id ] : $name . ' (' . $attributes[ $id ] . ')';
+				}
+			}
+
+			$identities[ $id ] = array(
+				'sku'         => $sku,
+				'name'        => $name,
+				'object_type' => (string) $row['post_type'],
+			);
+		}
+
+		return $identities;
+	}
+
+	/**
+	 * A short attribute summary per variation, from its `attribute_*` post meta.
+	 *
+	 * @param int[] $ids Variation ids.
+	 * @return array<int, string> Variation id => comma-separated attribute values.
+	 */
+	private function attribute_summaries( array $ids ): array {
+		if ( array() === $ids ) {
+			return array();
+		}
+
+		$postmeta     = $this->wpdb->postmeta;
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+		$like         = $this->wpdb->esc_like( 'attribute_' ) . '%';
+		$args         = array( ...$ids, $like );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT post_id, meta_value FROM {$postmeta}
+				WHERE post_id IN ( {$placeholders} ) AND meta_key LIKE %s AND meta_value <> ''
+				ORDER BY meta_key ASC",
+				...$args
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$summary = array();
+		foreach ( $rows as $row ) {
+			$id             = (int) $row['post_id'];
+			$summary[ $id ] = isset( $summary[ $id ] ) ? $summary[ $id ] . ', ' . $row['meta_value'] : (string) $row['meta_value'];
+		}
+
+		return $summary;
 	}
 
 	/**
@@ -442,12 +566,14 @@ final class Operations_Controller {
 	}
 
 	/**
-	 * Shape one change row for the audit view.
+	 * Shape one change row for the audit view, enriched with the object's SKU and
+	 * name so the row is legible without knowing internal ids.
 	 *
-	 * @param Change $change The change.
+	 * @param Change                                                            $change     The change.
+	 * @param array<int, array{sku: string, name: string, object_type: string}> $identities Identity map by object id.
 	 * @return array<string, mixed>
 	 */
-	private function change_to_array( Change $change ): array {
+	private function change_to_array( Change $change, array $identities ): array {
 		$labels = array(
 			0 => 'pending',
 			1 => 'applied',
@@ -455,9 +581,16 @@ final class Operations_Controller {
 			3 => 'skipped',
 		);
 
+		$identity = $identities[ $change->object_id ] ?? array(
+			'sku'  => '',
+			'name' => '',
+		);
+
 		return array(
 			'object_id'   => $change->object_id,
 			'object_type' => $change->object_type,
+			'sku'         => $identity['sku'],
+			'name'        => $identity['name'],
 			'field_type'  => $change->field_type->value,
 			'field_key'   => $change->field_key,
 			'old_value'   => $change->old_value,

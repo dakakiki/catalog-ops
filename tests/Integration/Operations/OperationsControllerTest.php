@@ -167,6 +167,53 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertSame( '9.99', $data['items'][0]['new_value'] );
 	}
 
+	public function test_changes_endpoint_enriches_with_sku_and_supports_sku_search(): void {
+		$product = new WC_Product_Simple();
+		$product->set_regular_price( '10' );
+		$product->set_sku( 'COPS-AUDIT-1' );
+		$product->set_manage_stock( true );
+		$product->set_stock_quantity( 5 );
+		$pid = $product->save();
+
+		$op_id = $this->operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			get_current_user_id()
+		);
+		$this->changes->seed(
+			$op_id,
+			array(
+				array( 'object_id' => $pid, 'field_type' => 'post_field', 'field_key' => 'regular_price' ),
+			)
+		);
+		foreach ( $this->changes->pending_chunk( $op_id, 10 ) as $row ) {
+			$this->changes->mark_applied( $row->id, '10', '9.99' );
+		}
+		$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
+
+		// The row carries the product's SKU and name, not just an internal id.
+		$all  = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id . '/changes' ) );
+		$item = $all->get_data()['items'][0];
+		$this->assertSame( 'COPS-AUDIT-1', $item['sku'] );
+		$this->assertNotSame( '', $item['name'] );
+
+		// SKU search finds it.
+		$hit = new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id . '/changes' );
+		$hit->set_param( 'sku', 'AUDIT' );
+		$found = rest_do_request( $hit )->get_data();
+		$this->assertCount( 1, $found['items'] );
+		$this->assertSame( $pid, $found['items'][0]['object_id'] );
+
+		// A non-matching SKU returns nothing.
+		$miss = new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id . '/changes' );
+		$miss->set_param( 'sku', 'NOPE' );
+		$this->assertCount( 0, rest_do_request( $miss )->get_data()['items'] );
+
+		wp_delete_post( $pid, true );
+	}
+
 	public function test_undo_preview_endpoint_reports_total(): void {
 		$op_id = $this->completed_operation( array( 601, 602 ) );
 
