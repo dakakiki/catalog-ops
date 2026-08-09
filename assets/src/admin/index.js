@@ -227,7 +227,7 @@ function BulkEdit( { filter, onDone } ) {
 			<h2>{ __( 'Bulk edit', 'catalogops' ) }</h2>
 			<p className="description">
 				{ __(
-					'Applies to every item matching the filter above (products or variations).',
+					'Sets the chosen field to this exact value for every item in the filter above — it overwrites whatever they hold now (no percentages or formulas yet). Use Preview to see old → new; nothing is written until you Apply.',
 					'catalogops'
 				) }
 			</p>
