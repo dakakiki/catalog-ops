@@ -179,11 +179,19 @@ function BulkEdit( { filter, onDone } ) {
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
 	const [ busy, setBusy ] = useState( false );
+	// Custom-field keys present in the catalog, offered as suggestions.
+	const [ metaKeys, setMetaKeys ] = useState( [] );
 
 	const fieldKey = field === 'meta' ? `meta:${ metaKey }` : field;
 	const buildActions = () => [ { type: 'set', field: fieldKey, value } ];
 
 	useOperationPoll( operation, setOperation, onDone );
+
+	useEffect( () => {
+		apiFetch( { path: '/catalogops/v1/fields/meta-keys' } )
+			.then( ( res ) => setMetaKeys( res.keys || [] ) )
+			.catch( () => {} );
+	}, [] );
 
 	const runPreview = () => {
 		setBusy( true );
@@ -249,26 +257,55 @@ function BulkEdit( { filter, onDone } ) {
 				</select>
 
 				{ field === 'meta' && (
-					<input
-						type="text"
-						placeholder={ __(
-							'meta key, e.g. _catalogops_brand',
-							'catalogops'
-						) }
-						value={ metaKey }
-						onChange={ ( e ) => setMetaKey( e.target.value ) }
-					/>
+					<>
+						<input
+							type="text"
+							list="catalogops-meta-keys"
+							placeholder={ __(
+								'start typing a field key…',
+								'catalogops'
+							) }
+							value={ metaKey }
+							onChange={ ( e ) => setMetaKey( e.target.value ) }
+						/>
+						<datalist id="catalogops-meta-keys">
+							{ metaKeys.map( ( k ) => (
+								<option key={ k } value={ k } />
+							) ) }
+						</datalist>
+					</>
 				) }
 
 				<label htmlFor="catalogops-value">
 					{ __( 'to', 'catalogops' ) }
 				</label>
-				<input
-					id="catalogops-value"
-					type="text"
-					value={ value }
-					onChange={ ( e ) => setValue( e.target.value ) }
-				/>
+				{ field === 'stock_status' ? (
+					<select
+						id="catalogops-value"
+						value={ value }
+						onChange={ ( e ) => setValue( e.target.value ) }
+					>
+						<option value="">
+							{ __( 'Choose…', 'catalogops' ) }
+						</option>
+						<option value="instock">
+							{ __( 'In stock', 'catalogops' ) }
+						</option>
+						<option value="outofstock">
+							{ __( 'Out of stock', 'catalogops' ) }
+						</option>
+						<option value="onbackorder">
+							{ __( 'On backorder', 'catalogops' ) }
+						</option>
+					</select>
+				) : (
+					<input
+						id="catalogops-value"
+						type="text"
+						value={ value }
+						onChange={ ( e ) => setValue( e.target.value ) }
+					/>
+				) }
 
 				<button
 					className="button"

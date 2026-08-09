@@ -23,6 +23,7 @@ use CatalogOps\Operations\Scheduler;
 use CatalogOps\Operations\Watchdog;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Saved_Filters;
+use CatalogOps\Rest\Fields_Controller;
 use CatalogOps\Rest\Operations_Controller;
 use CatalogOps\Rest\Query_Controller;
 use CatalogOps\Rest\Settings_Controller;
@@ -108,6 +109,7 @@ final class Plugin {
 				$this->container->get( Query_Controller::class )->register_routes();
 				$this->container->get( Operations_Controller::class )->register_routes();
 				$this->container->get( Settings_Controller::class )->register_routes();
+				$this->container->get( Fields_Controller::class )->register_routes();
 			}
 		);
 
@@ -324,6 +326,15 @@ final class Plugin {
 			static fn( Container $container ): Settings_Controller => new Settings_Controller(
 				$container->get( Retention::class )
 			)
+		);
+
+		$this->container->singleton(
+			Fields_Controller::class,
+			static function (): Fields_Controller {
+				global $wpdb;
+
+				return new Fields_Controller( $wpdb );
+			}
 		);
 	}
 
