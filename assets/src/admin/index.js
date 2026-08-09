@@ -1057,7 +1057,9 @@ function App() {
 								onClick={ () => run( 1 ) }
 								disabled={ loading }
 							>
-								{ __( 'Apply', 'catalogops' ) }
+								{ scope === 'variation'
+									? __( 'Show variations', 'catalogops' )
+									: __( 'Show products', 'catalogops' ) }
 							</button>
 						</div>
 					</div>
