@@ -49,7 +49,6 @@ const EDITABLE_FIELDS = [
 	{ key: 'sale_price', label: __( 'Sale price', 'catalogops' ) },
 	{ key: 'stock_quantity', label: __( 'Stock quantity', 'catalogops' ) },
 	{ key: 'stock_status', label: __( 'Stock status', 'catalogops' ) },
-	{ key: 'meta', label: __( 'Custom field (meta)', 'catalogops' ) },
 ];
 
 const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
@@ -188,25 +187,15 @@ function ProgressBar( { op } ) {
  */
 function BulkEdit( { filter, onDone } ) {
 	const [ field, setField ] = useState( 'regular_price' );
-	const [ metaKey, setMetaKey ] = useState( '' );
 	const [ value, setValue ] = useState( '' );
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
 	const [ busy, setBusy ] = useState( false );
-	// Custom-field keys present in the catalog, offered as suggestions.
-	const [ metaKeys, setMetaKeys ] = useState( [] );
 
-	const fieldKey = field === 'meta' ? `meta:${ metaKey }` : field;
-	const buildActions = () => [ { type: 'set', field: fieldKey, value } ];
+	const buildActions = () => [ { type: 'set', field, value } ];
 
 	useOperationPoll( operation, setOperation, onDone );
-
-	useEffect( () => {
-		apiFetch( { path: '/catalogops/v1/fields/meta-keys' } )
-			.then( ( res ) => setMetaKeys( res.keys || [] ) )
-			.catch( () => {} );
-	}, [] );
 
 	const runPreview = () => {
 		setBusy( true );
@@ -270,26 +259,6 @@ function BulkEdit( { filter, onDone } ) {
 						</option>
 					) ) }
 				</select>
-
-				{ field === 'meta' && (
-					<>
-						<input
-							type="text"
-							list="catalogops-meta-keys"
-							placeholder={ __(
-								'start typing a field key…',
-								'catalogops'
-							) }
-							value={ metaKey }
-							onChange={ ( e ) => setMetaKey( e.target.value ) }
-						/>
-						<datalist id="catalogops-meta-keys">
-							{ metaKeys.map( ( k ) => (
-								<option key={ k } value={ k } />
-							) ) }
-						</datalist>
-					</>
-				) }
 
 				<label htmlFor="catalogops-value">
 					{ __( 'to', 'catalogops' ) }
