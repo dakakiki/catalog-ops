@@ -372,7 +372,10 @@ tr.is-drift td {
 	gap: 6px;
 }
 
-.catalogops-detail td {
+/* Only the outer detail cell is tinted; nested table cells stay transparent so
+   the audit table's own row banding shows through (targeting `td` unscoped here
+   painted every nested cell and hid the stripes). */
+.catalogops-detail > td {
 	background: #fbfbfc;
 	padding: 14px 16px;
 }
