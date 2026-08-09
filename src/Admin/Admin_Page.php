@@ -79,8 +79,10 @@ final class Admin_Page {
 
 		wp_enqueue_script( 'catalogops-admin', $url . 'admin.js', $meta['dependencies'], $meta['version'], true );
 
-		if ( file_exists( $base . 'admin.css' ) ) {
-			wp_enqueue_style( 'catalogops-admin', $url . 'admin.css', array(), $meta['version'] );
+		// wp-scripts extracts styles imported from the entry to `style-admin.css`.
+		if ( file_exists( $base . 'style-admin.css' ) ) {
+			wp_enqueue_style( 'catalogops-admin', $url . 'style-admin.css', array(), $meta['version'] );
+			wp_style_add_data( 'catalogops-admin', 'rtl', 'replace' );
 		}
 
 		wp_localize_script(

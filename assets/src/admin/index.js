@@ -20,8 +20,25 @@ import {
 } from '@wordpress/element';
 import apiFetch from '@wordpress/api-fetch';
 import { __, sprintf } from '@wordpress/i18n';
+import './style.css';
 
 const PER_PAGE = 25;
+
+/**
+ * Map a stock status to a badge modifier.
+ *
+ * @param {string} status Stock status.
+ * @return {string} Badge modifier class suffix.
+ */
+function stockBadge( status ) {
+	if ( status === 'instock' ) {
+		return 'in';
+	}
+	if ( status === 'outofstock' ) {
+		return 'out';
+	}
+	return 'neutral';
+}
 
 /** Statuses at which an operation stops moving and polling can end. */
 const TERMINAL_STATUSES = [ 'completed', 'failed', 'reverted', 'paused' ];
@@ -112,7 +129,7 @@ function useOperationPoll( operation, setOperation, onDone ) {
  */
 function ProgressBar( { op } ) {
 	return (
-		<div className="catalogops-progress">
+		<div className={ `catalogops-progress is-${ op.status }` }>
 			<p>
 				{ sprintf(
 					/* translators: 1: status, 2: processed, 3: target. */
@@ -129,21 +146,10 @@ function ProgressBar( { op } ) {
 							op.failed
 						) }
 			</p>
-			<div
-				style={ {
-					background: '#e0e0e0',
-					borderRadius: '3px',
-					overflow: 'hidden',
-					height: '20px',
-				} }
-			>
+			<div className="catalogops-progress__track">
 				<div
-					style={ {
-						width: `${ op.percent }%`,
-						background: '#2271b1',
-						height: '100%',
-						transition: 'width .3s',
-					} }
+					className="catalogops-progress__fill"
+					style={ { width: `${ op.percent }%` } }
 				/>
 			</div>
 		</div>
@@ -504,21 +510,32 @@ function UndoPanel( { op, onDone } ) {
 						</thead>
 						<tbody>
 							{ preview.sample.map( ( s, i ) => (
-								<tr key={ i }>
+								<tr
+									key={ i }
+									className={
+										s.action === 'skip' ? 'is-drift' : ''
+									}
+								>
 									<td>{ s.id }</td>
 									<td>{ s.field }</td>
-									<td>{ s.current }</td>
-									<td>{ s.restore_to }</td>
+									<td className="catalogops-num">
+										{ s.current }
+									</td>
+									<td className="catalogops-num">
+										{ s.restore_to }
+									</td>
 									<td>
 										{ s.action === 'skip' ? (
-											<em style={ { color: '#b32d2e' } }>
+											<span className="catalogops-badge catalogops-badge--out">
 												{ __(
 													'skip (drift)',
 													'catalogops'
 												) }
-											</em>
+											</span>
 										) : (
-											__( 'revert', 'catalogops' )
+											<span className="catalogops-badge catalogops-badge--neutral">
+												{ __( 'revert', 'catalogops' ) }
+											</span>
 										) }
 									</td>
 								</tr>
@@ -558,8 +575,14 @@ function OperationRow( { op, onChanged } ) {
 			<tr>
 				<td>{ op.id }</td>
 				<td>{ op.source }</td>
-				<td>{ op.status }</td>
 				<td>
+					<span
+						className={ `catalogops-badge catalogops-status-badge is-${ op.status }` }
+					>
+						{ op.status }
+					</span>
+				</td>
+				<td className="catalogops-num">
 					{ op.processed } / { op.target_count }
 					{ op.failed > 0 &&
 						' ' +
@@ -572,25 +595,27 @@ function OperationRow( { op, onChanged } ) {
 				<td>{ op.user_name || '—' }</td>
 				<td>{ op.created_at }</td>
 				<td>
-					<button
-						className="button button-small"
-						onClick={ () => toggle( 'changes' ) }
-					>
-						{ __( 'Changes', 'catalogops' ) }
-					</button>{ ' ' }
-					{ op.can_undo && (
+					<div className="catalogops-actions">
 						<button
 							className="button button-small"
-							onClick={ () => toggle( 'undo' ) }
+							onClick={ () => toggle( 'changes' ) }
 						>
-							{ __( 'Undo', 'catalogops' ) }
+							{ __( 'Changes', 'catalogops' ) }
 						</button>
-					) }
+						{ op.can_undo && (
+							<button
+								className="button button-small"
+								onClick={ () => toggle( 'undo' ) }
+							>
+								{ __( 'Undo', 'catalogops' ) }
+							</button>
+						) }
+					</div>
 				</td>
 			</tr>
 			{ open && (
-				<tr>
-					<td colSpan="7" style={ { background: '#fbfbfb' } }>
+				<tr className="catalogops-detail">
+					<td colSpan="7">
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
 						{ open === 'undo' && (
 							<UndoPanel
@@ -655,7 +680,7 @@ function History( { refreshKey, onChanged } ) {
 				</thead>
 				<tbody>
 					{ items.length === 0 ? (
-						<tr>
+						<tr className="catalogops-empty">
 							<td colSpan="7">
 								{ __( 'No operations yet.', 'catalogops' ) }
 							</td>
@@ -822,165 +847,185 @@ function App() {
 				{ __( 'CatalogOps', 'catalogops' ) }
 			</h1>
 
-			<div className="catalogops-scope">
-				<label htmlFor="catalogops-scope">
-					{ __( 'Target', 'catalogops' ) }
-				</label>
-				<select
-					id="catalogops-scope"
-					value={ scope }
-					onChange={ ( e ) => setScope( e.target.value ) }
-				>
-					<option value="product">
-						{ __( 'Products', 'catalogops' ) }
-					</option>
-					<option value="variation">
-						{ __( 'Variations', 'catalogops' ) }
-					</option>
-				</select>
-			</div>
-
-			<div className="catalogops-filters">
-				<label htmlFor="catalogops-price-min">
-					{ __( 'Min price', 'catalogops' ) }
-				</label>
-				<input
-					id="catalogops-price-min"
-					type="number"
-					value={ form.priceMin }
-					onChange={ update( 'priceMin' ) }
-				/>
-
-				<label htmlFor="catalogops-price-max">
-					{ __( 'Max price', 'catalogops' ) }
-				</label>
-				<input
-					id="catalogops-price-max"
-					type="number"
-					value={ form.priceMax }
-					onChange={ update( 'priceMax' ) }
-				/>
-
-				<label htmlFor="catalogops-stock">
-					{ __( 'Stock', 'catalogops' ) }
-				</label>
-				<select
-					id="catalogops-stock"
-					value={ form.stockStatus }
-					onChange={ update( 'stockStatus' ) }
-				>
-					<option value="">{ __( 'Any', 'catalogops' ) }</option>
-					<option value="instock">
-						{ __( 'In stock', 'catalogops' ) }
-					</option>
-					<option value="outofstock">
-						{ __( 'Out of stock', 'catalogops' ) }
-					</option>
-				</select>
-
-				<button
-					className="button button-primary"
-					onClick={ () => run( 1 ) }
-					disabled={ loading }
-				>
-					{ __( 'Apply', 'catalogops' ) }
-				</button>
-			</div>
-
-			<p className="catalogops-status">
-				{ loading && __( 'Loading…', 'catalogops' ) }
-				{ ! loading &&
-					scope === 'variation' &&
-					sprintf(
-						/* translators: %d: number of matching variations. */
-						__( '%d matching variations', 'catalogops' ),
-						total
-					) }
-				{ ! loading &&
-					scope !== 'variation' &&
-					sprintf(
-						/* translators: %d: number of matching products. */
-						__( '%d matching products', 'catalogops' ),
-						total
-					) }
-			</p>
-
-			{ error && (
-				<div className="notice notice-error">
-					<p>{ error }</p>
+			<div className="catalogops-card catalogops-browse">
+				<div className="catalogops-scope">
+					<span className="catalogops-scope__label">
+						{ __( 'Target', 'catalogops' ) }
+					</span>
+					<div className="catalogops-segmented" role="group">
+						<button
+							type="button"
+							className={ `catalogops-segmented__btn${
+								scope === 'product' ? ' is-active' : ''
+							}` }
+							onClick={ () => setScope( 'product' ) }
+						>
+							{ __( 'Products', 'catalogops' ) }
+						</button>
+						<button
+							type="button"
+							className={ `catalogops-segmented__btn${
+								scope === 'variation' ? ' is-active' : ''
+							}` }
+							onClick={ () => setScope( 'variation' ) }
+						>
+							{ __( 'Variations', 'catalogops' ) }
+						</button>
+					</div>
 				</div>
-			) }
 
-			<table className="wp-list-table widefat fixed striped">
-				<thead>
-					<tr>
-						<th>{ __( 'ID', 'catalogops' ) }</th>
-						<th>{ __( 'Name', 'catalogops' ) }</th>
-						<th>{ __( 'SKU', 'catalogops' ) }</th>
-						<th>{ __( 'Price', 'catalogops' ) }</th>
-						<th>{ __( 'Stock', 'catalogops' ) }</th>
-						<th>{ __( 'Qty', 'catalogops' ) }</th>
-					</tr>
-				</thead>
-				<tbody>
-					{ items.length === 0 && ! loading ? (
+				<div className="catalogops-filters">
+					<label htmlFor="catalogops-price-min">
+						{ __( 'Min price', 'catalogops' ) }
+					</label>
+					<input
+						id="catalogops-price-min"
+						type="number"
+						value={ form.priceMin }
+						onChange={ update( 'priceMin' ) }
+					/>
+
+					<label htmlFor="catalogops-price-max">
+						{ __( 'Max price', 'catalogops' ) }
+					</label>
+					<input
+						id="catalogops-price-max"
+						type="number"
+						value={ form.priceMax }
+						onChange={ update( 'priceMax' ) }
+					/>
+
+					<label htmlFor="catalogops-stock">
+						{ __( 'Stock', 'catalogops' ) }
+					</label>
+					<select
+						id="catalogops-stock"
+						value={ form.stockStatus }
+						onChange={ update( 'stockStatus' ) }
+					>
+						<option value="">{ __( 'Any', 'catalogops' ) }</option>
+						<option value="instock">
+							{ __( 'In stock', 'catalogops' ) }
+						</option>
+						<option value="outofstock">
+							{ __( 'Out of stock', 'catalogops' ) }
+						</option>
+					</select>
+
+					<button
+						className="button button-primary"
+						onClick={ () => run( 1 ) }
+						disabled={ loading }
+					>
+						{ __( 'Apply', 'catalogops' ) }
+					</button>
+				</div>
+
+				<p className="catalogops-status">
+					{ loading && __( 'Loading…', 'catalogops' ) }
+					{ ! loading &&
+						scope === 'variation' &&
+						sprintf(
+							/* translators: %d: number of matching variations. */
+							__( '%d matching variations', 'catalogops' ),
+							total
+						) }
+					{ ! loading &&
+						scope !== 'variation' &&
+						sprintf(
+							/* translators: %d: number of matching products. */
+							__( '%d matching products', 'catalogops' ),
+							total
+						) }
+				</p>
+
+				{ error && (
+					<div className="notice notice-error">
+						<p>{ error }</p>
+					</div>
+				) }
+
+				<table className="wp-list-table widefat fixed striped">
+					<thead>
 						<tr>
-							<td colSpan="6">
-								{ __(
-									'No products match this filter.',
-									'catalogops'
-								) }
-							</td>
+							<th>{ __( 'ID', 'catalogops' ) }</th>
+							<th>{ __( 'Name', 'catalogops' ) }</th>
+							<th>{ __( 'SKU', 'catalogops' ) }</th>
+							<th className="catalogops-num">
+								{ __( 'Price', 'catalogops' ) }
+							</th>
+							<th>{ __( 'Stock', 'catalogops' ) }</th>
+							<th className="catalogops-num">
+								{ __( 'Qty', 'catalogops' ) }
+							</th>
 						</tr>
-					) : (
-						items.map( ( item ) => (
-							<tr key={ item.id }>
-								<td>{ item.id }</td>
-								<td>{ item.name }</td>
-								<td>{ item.sku }</td>
-								<td>{ item.price }</td>
-								<td>{ item.stock_status }</td>
-								<td>{ item.stock_quantity }</td>
+					</thead>
+					<tbody>
+						{ items.length === 0 && ! loading ? (
+							<tr>
+								<td colSpan="6">
+									{ __(
+										'No items match this filter.',
+										'catalogops'
+									) }
+								</td>
 							</tr>
-						) )
-					) }
-				</tbody>
-			</table>
+						) : (
+							items.map( ( item ) => (
+								<tr key={ item.id }>
+									<td>{ item.id }</td>
+									<td>{ item.name }</td>
+									<td>{ item.sku }</td>
+									<td className="catalogops-num">
+										{ item.price }
+									</td>
+									<td>
+										<span
+											className={ `catalogops-badge catalogops-badge--${ stockBadge(
+												item.stock_status
+											) }` }
+										>
+											{ item.stock_status }
+										</span>
+									</td>
+									<td className="catalogops-num">
+										{ item.stock_quantity }
+									</td>
+								</tr>
+							) )
+						) }
+					</tbody>
+				</table>
 
-			<div className="catalogops-pagination tablenav">
-				<button
-					className="button"
-					disabled={ page <= 1 || loading }
-					onClick={ () => run( page - 1 ) }
-				>
-					{ __( 'Previous', 'catalogops' ) }
-				</button>
-				<span className="catalogops-page">
-					{ sprintf(
-						/* translators: 1: current page, 2: total pages. */
-						__( 'Page %1$d of %2$d', 'catalogops' ),
-						page,
-						pages
-					) }
-				</span>
-				<button
-					className="button"
-					disabled={ page >= pages || loading }
-					onClick={ () => run( page + 1 ) }
-				>
-					{ __( 'Next', 'catalogops' ) }
-				</button>
+				<div className="catalogops-pagination tablenav">
+					<button
+						className="button"
+						disabled={ page <= 1 || loading }
+						onClick={ () => run( page - 1 ) }
+					>
+						{ __( 'Previous', 'catalogops' ) }
+					</button>
+					<span className="catalogops-page">
+						{ sprintf(
+							/* translators: 1: current page, 2: total pages. */
+							__( 'Page %1$d of %2$d', 'catalogops' ),
+							page,
+							pages
+						) }
+					</span>
+					<button
+						className="button"
+						disabled={ page >= pages || loading }
+						onClick={ () => run( page + 1 ) }
+					>
+						{ __( 'Next', 'catalogops' ) }
+					</button>
+				</div>
 			</div>
-
-			<hr />
 
 			<BulkEdit filter={ appliedFilter } onDone={ refreshAll } />
 
-			<hr />
-
 			<History refreshKey={ historyKey } onChanged={ refreshAll } />
-
-			<hr />
 
 			<RetentionSetting />
 		</div>

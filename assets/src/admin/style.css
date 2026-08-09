@@ -1,0 +1,302 @@
+/**
+ * CatalogOps admin styles.
+ *
+ * A light pass over the functionality-first app: sections become cards, the
+ * scope control becomes a segmented switch, tables read cleaner (right-aligned
+ * numbers, status/stock badges), and progress/undo get status colour. Palette
+ * follows the WordPress admin (blue #2271b1, green #1a7f37, red #d63638,
+ * amber #dba617) so it sits natively in wp-admin.
+ */
+
+.catalogops {
+	--co-border: #dcdcde;
+	--co-border-strong: #c3c4c7;
+	--co-muted: #646970;
+	--co-blue: #2271b1;
+	--co-green: #1a7f37;
+	--co-red: #d63638;
+	--co-amber: #bd8600;
+	max-width: 1180px;
+}
+
+.catalogops h1 {
+	margin-bottom: 16px;
+}
+
+/* --- Cards -------------------------------------------------------------- */
+
+.catalogops-card,
+.catalogops-bulk-edit,
+.catalogops-history,
+.catalogops-retention {
+	background: #fff;
+	border: 1px solid var(--co-border);
+	border-radius: 8px;
+	box-shadow: 0 1px 2px rgba( 0, 0, 0, 0.05 );
+	padding: 18px 20px;
+	margin: 0 0 20px;
+}
+
+.catalogops-card > h2,
+.catalogops-bulk-edit > h2,
+.catalogops-history > h2,
+.catalogops-retention > h2 {
+	margin: 0 0 4px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.catalogops-card > .description,
+.catalogops-bulk-edit > .description,
+.catalogops-history > .description {
+	margin: 0 0 14px;
+	color: var(--co-muted);
+}
+
+/* --- Scope segmented switch -------------------------------------------- */
+
+.catalogops-scope {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 14px;
+}
+
+.catalogops-scope__label {
+	font-weight: 600;
+	color: var(--co-muted);
+}
+
+.catalogops-segmented {
+	display: inline-flex;
+	border: 1px solid var(--co-border-strong);
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+.catalogops-segmented__btn {
+	appearance: none;
+	border: 0;
+	border-left: 1px solid var(--co-border-strong);
+	background: #f6f7f7;
+	color: #1d2327;
+	padding: 6px 16px;
+	font-size: 13px;
+	line-height: 1.6;
+	cursor: pointer;
+}
+
+.catalogops-segmented__btn:first-child {
+	border-left: 0;
+}
+
+.catalogops-segmented__btn:hover {
+	background: #f0f0f1;
+}
+
+.catalogops-segmented__btn.is-active {
+	background: var(--co-blue);
+	color: #fff;
+	font-weight: 600;
+}
+
+/* --- Filter bar -------------------------------------------------------- */
+
+.catalogops-filters {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 14px;
+	margin-bottom: 12px;
+}
+
+.catalogops-filters label {
+	font-weight: 600;
+	color: var(--co-muted);
+}
+
+.catalogops-filters input[type='number'] {
+	width: 7em;
+}
+
+.catalogops-filters .button-primary {
+	margin-left: auto;
+}
+
+.catalogops-status {
+	margin: 4px 0 12px;
+	color: var(--co-muted);
+	font-style: italic;
+}
+
+/* --- Tables ------------------------------------------------------------ */
+
+.catalogops table.wp-list-table {
+	margin-top: 4px;
+}
+
+.catalogops table.wp-list-table th {
+	font-weight: 600;
+}
+
+.catalogops-num {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.catalogops-empty td {
+	color: var(--co-muted);
+	font-style: italic;
+	padding: 18px 10px;
+}
+
+/* --- Badges ------------------------------------------------------------ */
+
+.catalogops-badge {
+	display: inline-block;
+	padding: 1px 8px;
+	border-radius: 10px;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1.7;
+	text-transform: capitalize;
+	background: #f0f0f1;
+	color: #1d2327;
+}
+
+.catalogops-badge--in {
+	background: #edfaef;
+	color: var(--co-green);
+}
+
+.catalogops-badge--out {
+	background: #fcebec;
+	color: var(--co-red);
+}
+
+.catalogops-badge--neutral {
+	background: #f0f0f1;
+	color: var(--co-muted);
+}
+
+/* Operation status badges. */
+.catalogops-status-badge.is-completed {
+	background: #edfaef;
+	color: var(--co-green);
+}
+
+.catalogops-status-badge.is-running,
+.catalogops-status-badge.is-queued {
+	background: #e7f2fb;
+	color: var(--co-blue);
+}
+
+.catalogops-status-badge.is-failed {
+	background: #fcebec;
+	color: var(--co-red);
+}
+
+.catalogops-status-badge.is-reverted,
+.catalogops-status-badge.is-paused {
+	background: #fcf5e6;
+	color: var(--co-amber);
+}
+
+/* --- Progress bar ------------------------------------------------------ */
+
+.catalogops-progress {
+	margin-top: 10px;
+}
+
+.catalogops-progress p {
+	margin: 0 0 6px;
+	font-weight: 600;
+}
+
+.catalogops-progress__track {
+	background: #e0e0e0;
+	border-radius: 4px;
+	overflow: hidden;
+	height: 18px;
+}
+
+.catalogops-progress__fill {
+	width: 0;
+	height: 100%;
+	background: var(--co-blue);
+	transition: width 0.3s ease;
+}
+
+.catalogops-progress.is-completed .catalogops-progress__fill {
+	background: var(--co-green);
+}
+
+.catalogops-progress.is-failed .catalogops-progress__fill {
+	background: var(--co-red);
+}
+
+.catalogops-progress.is-reverted .catalogops-progress__fill,
+.catalogops-progress.is-paused .catalogops-progress__fill {
+	background: var(--co-amber);
+}
+
+/* --- Preview / undo ---------------------------------------------------- */
+
+.catalogops-preview {
+	margin-top: 12px;
+}
+
+.catalogops-preview > p {
+	margin: 0 0 8px;
+}
+
+.catalogops-preview .button-primary {
+	margin-top: 10px;
+}
+
+.catalogops-undo fieldset {
+	border: 1px solid var(--co-border);
+	border-radius: 6px;
+	padding: 10px 14px;
+	margin-bottom: 12px;
+}
+
+.catalogops-undo legend {
+	padding: 0 6px;
+	color: var(--co-muted);
+}
+
+tr.is-drift td {
+	background: #fcf5e6;
+}
+
+/* --- History row actions ---------------------------------------------- */
+
+.catalogops-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.catalogops-detail td {
+	background: #fbfbfc;
+	padding: 14px 16px;
+}
+
+/* --- Pagination -------------------------------------------------------- */
+
+.catalogops-pagination {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.catalogops-page {
+	color: var(--co-muted);
+}
+
+/* --- Retention --------------------------------------------------------- */
+
+.catalogops-retention input[type='number'] {
+	width: 6em;
+}
