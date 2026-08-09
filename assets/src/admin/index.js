@@ -38,12 +38,14 @@ const EDITABLE_FIELDS = [
 const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
 
 /**
- * Build the filter payload from the form state.
+ * Build the filter payload from the form state and target scope.
  *
- * @param {Object} form Form values.
- * @return {Object} Filter in the API's shape.
+ * @param {Object} form  Form values.
+ * @param {string} scope 'product' or 'variation'.
+ * @return {Object} Filter in the API's shape (scope included, so the same filter
+ * drives the query, the preview, and the operation).
  */
-function buildFilter( form ) {
+function buildFilter( form, scope ) {
 	const conditions = [];
 
 	if ( form.priceMin !== '' ) {
@@ -68,7 +70,7 @@ function buildFilter( form ) {
 		} );
 	}
 
-	return { relation: 'AND', conditions };
+	return { relation: 'AND', scope, conditions };
 }
 
 /**
@@ -186,7 +188,7 @@ function BulkEdit( { filter, onDone } ) {
 
 	const runApply = () => {
 		const message = __(
-			'Apply this change to all matching products? Take a backup first.',
+			'Apply this change to all matching items? Take a backup first.',
 			'catalogops'
 		);
 		// eslint-disable-next-line no-alert
@@ -212,7 +214,7 @@ function BulkEdit( { filter, onDone } ) {
 			<h2>{ __( 'Bulk edit', 'catalogops' ) }</h2>
 			<p className="description">
 				{ __(
-					'Applies to every product matching the filter above.',
+					'Applies to every item matching the filter above (products or variations).',
 					'catalogops'
 				) }
 			</p>
@@ -281,9 +283,9 @@ function BulkEdit( { filter, onDone } ) {
 				<div className="catalogops-preview">
 					<p>
 						{ sprintf(
-							/* translators: %d: number of products that would change. */
+							/* translators: %d: number of items that would change. */
 							__(
-								'%d products would change. Sample:',
+								'%d items would change. Sample:',
 								'catalogops'
 							),
 							preview.target_count
@@ -756,15 +758,21 @@ function App() {
 	const [ loading, setLoading ] = useState( false );
 	const [ error, setError ] = useState( '' );
 	const [ historyKey, setHistoryKey ] = useState( 0 );
+	// Whether the filter, table, and bulk edit target parent products or their
+	// variations (CONTEXT §4).
+	const [ scope, setScope ] = useState( 'product' );
 	// The filter that was actually applied to the table (frozen on Apply), so
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
-		buildFilter( { priceMin: '', priceMax: '', stockStatus: '' } )
+		buildFilter(
+			{ priceMin: '', priceMax: '', stockStatus: '' },
+			'product'
+		)
 	);
 
 	const run = useCallback(
 		( toPage ) => {
-			const filter = buildFilter( form );
+			const filter = buildFilter( form, scope );
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
@@ -789,14 +797,14 @@ function App() {
 				)
 				.finally( () => setLoading( false ) );
 		},
-		[ form ]
+		[ form, scope ]
 	);
 
 	useEffect( () => {
 		run( 1 );
-		// Load the whole catalog once on mount.
+		// Reload on mount and whenever the scope toggles.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [] );
+	}, [ scope ] );
 
 	// Refresh the product table and the history list after any operation.
 	const refreshAll = useCallback( () => {
@@ -813,6 +821,24 @@ function App() {
 			<h1 className="wp-heading-inline">
 				{ __( 'CatalogOps', 'catalogops' ) }
 			</h1>
+
+			<div className="catalogops-scope">
+				<label htmlFor="catalogops-scope">
+					{ __( 'Target', 'catalogops' ) }
+				</label>
+				<select
+					id="catalogops-scope"
+					value={ scope }
+					onChange={ ( e ) => setScope( e.target.value ) }
+				>
+					<option value="product">
+						{ __( 'Products', 'catalogops' ) }
+					</option>
+					<option value="variation">
+						{ __( 'Variations', 'catalogops' ) }
+					</option>
+				</select>
+			</div>
 
 			<div className="catalogops-filters">
 				<label htmlFor="catalogops-price-min">
@@ -862,13 +888,21 @@ function App() {
 			</div>
 
 			<p className="catalogops-status">
-				{ loading
-					? __( 'Loading…', 'catalogops' )
-					: sprintf(
-							/* translators: %d: number of matching products. */
-							__( '%d matching products', 'catalogops' ),
-							total
-					  ) }
+				{ loading && __( 'Loading…', 'catalogops' ) }
+				{ ! loading &&
+					scope === 'variation' &&
+					sprintf(
+						/* translators: %d: number of matching variations. */
+						__( '%d matching variations', 'catalogops' ),
+						total
+					) }
+				{ ! loading &&
+					scope !== 'variation' &&
+					sprintf(
+						/* translators: %d: number of matching products. */
+						__( '%d matching products', 'catalogops' ),
+						total
+					) }
 			</p>
 
 			{ error && (
