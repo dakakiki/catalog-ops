@@ -1097,7 +1097,11 @@ function App() {
 					</div>
 				) }
 
-				<table className="wp-list-table widefat fixed striped">
+				<table
+					className={ `wp-list-table widefat fixed striped${
+						loading ? ' catalogops-loading-dim' : ''
+					}` }
+				>
 					<thead>
 						<tr>
 							<th>{ __( 'ID', 'catalogops' ) }</th>
