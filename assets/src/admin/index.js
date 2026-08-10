@@ -156,26 +156,32 @@ function buildFilter( form, scope, brandField ) {
 			value: form.sku.trim(),
 		} );
 	}
-	if ( form.category ) {
+	if ( form.category.length ) {
 		conditions.push( {
 			field: 'category',
 			operator: 'in',
-			value: [ Number( form.category ) ],
+			value: form.category.map( Number ),
 		} );
 	}
-	if ( form.brand && brandField ) {
+	if ( form.brand.length && brandField ) {
 		conditions.push( {
 			field: brandField,
-			operator: '=',
+			operator: 'in',
 			value: form.brand,
 		} );
 	}
-	if ( form.attribute && form.attributeValue ) {
-		conditions.push( {
-			field: form.attribute,
-			operator: '=',
-			value: form.attributeValue,
-		} );
+	if ( form.attribute ) {
+		// A value picked → match those attribute terms; none picked → match any
+		// object that has this attribute at all. Values are term ids.
+		if ( form.attributeValues.length ) {
+			conditions.push( {
+				field: form.attribute,
+				operator: 'in',
+				value: form.attributeValues.map( Number ),
+			} );
+		} else {
+			conditions.push( { field: form.attribute, operator: 'exists' } );
+		}
 	}
 
 	return { relation: 'AND', scope, conditions };
@@ -1394,10 +1400,10 @@ function App() {
 		priceMax: '',
 		stockStatus: '',
 		sku: '',
-		category: '',
-		brand: '',
+		category: [],
+		brand: [],
 		attribute: '',
-		attributeValue: '',
+		attributeValues: [],
 	} );
 	const [ items, setItems ] = useState( [] );
 	const [ total, setTotal ] = useState( 0 );
@@ -1425,8 +1431,10 @@ function App() {
 				priceMax: '',
 				stockStatus: '',
 				sku: '',
-				category: '',
-				brand: '',
+				category: [],
+				brand: [],
+				attribute: '',
+				attributeValues: [],
 			},
 			'product',
 			''
@@ -1499,6 +1507,15 @@ function App() {
 	const pages = Math.max( 1, Math.ceil( total / PER_PAGE ) );
 	const update = ( key ) => ( event ) =>
 		setForm( { ...form, [ key ]: event.target.value } );
+	// Collect every selected option of a <select multiple> into an array.
+	const multiUpdate = ( key ) => ( event ) =>
+		setForm( {
+			...form,
+			[ key ]: Array.from(
+				event.target.selectedOptions,
+				( o ) => o.value
+			),
+		} );
 
 	return (
 		<div className="catalogops">
@@ -1585,14 +1602,16 @@ function App() {
 							</label>
 							<select
 								id="catalogops-category"
+								multiple
+								size="4"
 								value={ form.category }
-								onChange={ update( 'category' ) }
+								onChange={ multiUpdate( 'category' ) }
 							>
-								<option value="">
-									{ __( 'Any', 'catalogops' ) }
-								</option>
 								{ categories.map( ( c ) => (
-									<option key={ c.id } value={ c.id }>
+									<option
+										key={ c.id }
+										value={ String( c.id ) }
+									>
 										{ c.name }
 									</option>
 								) ) }
@@ -1603,12 +1622,11 @@ function App() {
 							</label>
 							<select
 								id="catalogops-brand"
+								multiple
+								size="4"
 								value={ form.brand }
-								onChange={ update( 'brand' ) }
+								onChange={ multiUpdate( 'brand' ) }
 							>
-								<option value="">
-									{ __( 'Any', 'catalogops' ) }
-								</option>
 								{ brands.map( ( b ) => (
 									<option key={ b } value={ b }>
 										{ b }
@@ -1628,7 +1646,7 @@ function App() {
 											setForm( {
 												...form,
 												attribute: e.target.value,
-												attributeValue: '',
+												attributeValues: [],
 											} )
 										}
 									>
@@ -1648,26 +1666,22 @@ function App() {
 									{ selectedAttribute && (
 										<select
 											id="catalogops-attribute-value"
+											multiple
+											size="4"
 											aria-label={ __(
-												'Attribute value',
+												'Attribute values (none = any value)',
 												'catalogops'
 											) }
-											value={ form.attributeValue }
-											onChange={ update(
-												'attributeValue'
+											value={ form.attributeValues }
+											onChange={ multiUpdate(
+												'attributeValues'
 											) }
 										>
-											<option value="">
-												{ __(
-													'Any value',
-													'catalogops'
-												) }
-											</option>
 											{ selectedAttribute.terms.map(
 												( t ) => (
 													<option
-														key={ t.slug }
-														value={ t.slug }
+														key={ t.id }
+														value={ String( t.id ) }
 													>
 														{ t.name }
 													</option>

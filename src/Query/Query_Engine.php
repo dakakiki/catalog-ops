@@ -267,24 +267,47 @@ final class Query_Engine {
 	 * to the parent product, so under the variation scope the EXISTS correlates on
 	 * the variation's parent (p.post_parent) rather than the variation itself.
 	 *
+	 * Two forms:
+	 *   - IN / NOT_IN with a list of term ids — has (or lacks) one of those terms.
+	 *   - EXISTS / NOT_EXISTS with no value — has (or lacks) any term of the
+	 *     taxonomy at all, i.e. "filter by this attribute, any value" (M5 filter UI).
+	 *
 	 * @param string      $taxonomy  Taxonomy name, e.g. `product_cat` or `pa_color`.
-	 * @param Condition   $condition Value is a term id or a list of term ids.
+	 * @param Condition   $condition Term id(s) for IN/NOT_IN, or none for (NOT_)EXISTS.
 	 * @param Query_Scope $scope     The object type being queried.
 	 * @return array{0: string, 1: list<mixed>}
 	 */
 	private function taxonomy_clause( string $taxonomy, Condition $condition, Query_Scope $scope ): array {
-		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
-
-		if ( '' === $taxonomy || array() === $term_ids ) {
+		if ( '' === $taxonomy ) {
 			return array( '', array() );
 		}
 
 		$relationships = $this->wpdb->term_relationships;
 		$taxonomies    = $this->wpdb->term_taxonomy;
-		$placeholders  = implode( ', ', array_fill( 0, count( $term_ids ), '%d' ) );
-		$negate        = Operator::NOT_IN === $condition->operator || Operator::NOT_EXISTS === $condition->operator;
-		$keyword       = $negate ? 'NOT EXISTS' : 'EXISTS';
 		$object_column = $scope->is_variation() ? 'p.post_parent' : 'l.product_id';
+		$operator      = $condition->operator;
+
+		// "Has any term of this taxonomy" (an attribute chosen with no value), or none.
+		if ( Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator ) {
+			$keyword = Operator::NOT_EXISTS === $operator ? 'NOT EXISTS' : 'EXISTS';
+
+			$fragment = "{$keyword} (
+				SELECT 1 FROM {$relationships} tr
+				INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+				WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s
+			)";
+
+			return array( $fragment, array( $taxonomy ) );
+		}
+
+		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
+
+		if ( array() === $term_ids ) {
+			return array( '', array() );
+		}
+
+		$placeholders = implode( ', ', array_fill( 0, count( $term_ids ), '%d' ) );
+		$keyword      = Operator::NOT_IN === $operator ? 'NOT EXISTS' : 'EXISTS';
 
 		$fragment = "{$keyword} (
 			SELECT 1 FROM {$relationships} tr
@@ -304,13 +327,33 @@ final class Query_Engine {
 	 * class). The condition's term ids are resolved to slugs to compare.
 	 *
 	 * @param string    $taxonomy  Attribute taxonomy, e.g. `pa_size`.
-	 * @param Condition $condition Value is a term id or a list of term ids.
+	 * @param Condition $condition Term id(s) for IN/NOT_IN, or none for (NOT_)EXISTS.
 	 * @return array{0: string, 1: list<mixed>}
 	 */
 	private function variation_attribute_clause( string $taxonomy, Condition $condition ): array {
+		if ( '' === $taxonomy ) {
+			return array( '', array() );
+		}
+
+		$postmeta = $this->wpdb->postmeta;
+		$meta_key = 'attribute_' . $taxonomy;
+		$operator = $condition->operator;
+
+		// "Has any value for this attribute" (chosen with no specific value), or none.
+		if ( Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator ) {
+			$keyword = Operator::NOT_EXISTS === $operator ? 'NOT EXISTS' : 'EXISTS';
+
+			$fragment = "{$keyword} (
+				SELECT 1 FROM {$postmeta} pm
+				WHERE pm.post_id = l.product_id AND pm.meta_key = %s AND pm.meta_value <> ''
+			)";
+
+			return array( $fragment, array( $meta_key ) );
+		}
+
 		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
 
-		if ( '' === $taxonomy || array() === $term_ids ) {
+		if ( array() === $term_ids ) {
 			return array( '', array() );
 		}
 
@@ -320,11 +363,8 @@ final class Query_Engine {
 			return array( '', array() );
 		}
 
-		$postmeta     = $this->wpdb->postmeta;
-		$meta_key     = 'attribute_' . $taxonomy;
 		$placeholders = implode( ', ', array_fill( 0, count( $slugs ), '%s' ) );
-		$negate       = Operator::NOT_IN === $condition->operator || Operator::NOT_EXISTS === $condition->operator;
-		$keyword      = $negate ? 'NOT EXISTS' : 'EXISTS';
+		$keyword      = Operator::NOT_IN === $operator ? 'NOT EXISTS' : 'EXISTS';
 
 		$fragment = "{$keyword} (
 			SELECT 1 FROM {$postmeta} pm

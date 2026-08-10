@@ -246,6 +246,7 @@ final class Fields_Controller {
 			if ( is_array( $terms ) ) {
 				foreach ( $terms as $term ) {
 					$values[] = array(
+						'id'   => (int) $term->term_id,
 						'slug' => $term->slug,
 						'name' => $term->name,
 					);

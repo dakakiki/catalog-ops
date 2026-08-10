@@ -121,6 +121,18 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 		$this->assertSame( 'Size', $size['label'] );
 		$this->assertContains( 'large', array_column( $size['terms'], 'slug' ) );
 
+		// Each value carries its term id, so the filter can send ids (what the
+		// query engine matches on), not slugs.
+		$large = null;
+		foreach ( $size['terms'] as $term ) {
+			if ( 'large' === $term['slug'] ) {
+				$large = $term;
+			}
+		}
+		$this->assertNotNull( $large );
+		$this->assertIsInt( $large['id'] );
+		$this->assertSame( (int) get_term_by( 'slug', 'large', $taxonomy )->term_id, $large['id'] );
+
 		// Clean up the global attribute so it does not leak into other tests.
 		wc_delete_attribute( $attribute_id );
 	}

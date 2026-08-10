@@ -133,6 +133,34 @@ final class VariationQueryTest extends WP_UnitTestCase {
 		$this->assertSame( array( $variations['Large'] ), $ids );
 	}
 
+	public function test_variation_attribute_exists_matches_any_value(): void {
+		list( , $variations ) = $this->make_variable_product(
+			array( 'Small' => 10, 'Medium' => 50, 'Large' => 90 )
+		);
+
+		// "Filter by Size, any value": every variation that carries a size.
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::EXISTS ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertEqualsCanonicalizing( array_values( $variations ), $ids );
+
+		// An attribute no variation carries matches nothing.
+		$none = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:pa_nonexistent', Operator::EXISTS ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertSame( array(), $none );
+	}
+
 	public function test_variation_meta_filters_on_the_variations_own_meta(): void {
 		list( , $variations ) = $this->make_variable_product( array( 'Small' => 10, 'Medium' => 50 ) );
 

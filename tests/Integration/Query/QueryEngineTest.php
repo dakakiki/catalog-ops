@@ -137,6 +137,67 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertNotContains( $blue_product, $ids );
 	}
 
+	public function test_attribute_in_multiple_terms(): void {
+		$red_product  = $this->make_product( array( 'color' => $this->red ) );
+		$blue_product = $this->make_product( array( 'color' => $this->blue ) );
+		$plain        = $this->make_product( array( 'price' => 10 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array(
+					new Condition( 'attribute:' . $this->color_tax, Operator::IN, array( $this->red, $this->blue ) ),
+				)
+			)
+		);
+
+		$this->assertEqualsCanonicalizing( array( $red_product, $blue_product ), $ids );
+		$this->assertNotContains( $plain, $ids );
+	}
+
+	public function test_attribute_exists_matches_any_value(): void {
+		$red_product  = $this->make_product( array( 'color' => $this->red ) );
+		$blue_product = $this->make_product( array( 'color' => $this->blue ) );
+		$plain        = $this->make_product( array( 'price' => 10 ) );
+
+		// "Filter by Colour, any value": every product that has a colour term.
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'attribute:' . $this->color_tax, Operator::EXISTS ) ) )
+		);
+
+		$this->assertEqualsCanonicalizing( array( $red_product, $blue_product ), $ids );
+		$this->assertNotContains( $plain, $ids );
+	}
+
+	public function test_category_in_multiple_terms(): void {
+		$in_a    = $this->make_product( array( 'category' => $this->cat_a ) );
+		$in_b    = $this->make_product( array( 'category' => $this->cat_b ) );
+		$neither = $this->make_product( array( 'price' => 10 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'category', Operator::IN, array( $this->cat_a, $this->cat_b ) ) )
+			)
+		);
+
+		$this->assertEqualsCanonicalizing( array( $in_a, $in_b ), $ids );
+		$this->assertNotContains( $neither, $ids );
+	}
+
+	public function test_meta_in_multiple_values(): void {
+		$acme   = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$globex = $this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
+		$hooli  = $this->make_product( array( 'meta' => array( '_brand' => 'Hooli' ) ) );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'meta:_brand', Operator::IN, array( 'Acme', 'Globex' ) ) )
+			)
+		);
+
+		$this->assertEqualsCanonicalizing( array( $acme, $globex ), $ids );
+		$this->assertNotContains( $hooli, $ids );
+	}
+
 	public function test_sku_contains_search(): void {
 		$alpha = $this->make_product( array( 'sku' => 'COPS-ALPHA-1' ) );
 		$beta  = $this->make_product( array( 'sku' => 'COPS-BETA-2' ) );
