@@ -37,9 +37,10 @@ final class Set_Value implements Action {
 	/**
 	 * Ignore the current value and return the literal target.
 	 *
-	 * @param mixed $current The object's current value (unused).
+	 * @param mixed         $current  The object's current value (unused).
+	 * @param callable|null $resolver Field resolver (unused; a literal reads nothing).
 	 */
-	public function apply( mixed $current ): mixed {
+	public function apply( mixed $current, ?callable $resolver = null ): mixed {
 		return $this->value;
 	}
 

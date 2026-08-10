@@ -33,10 +33,17 @@ interface Action {
 	 * empty or non-numeric field (CONTEXT §3: never coerce to zero). The runner
 	 * records skipped rows rather than writing.
 	 *
-	 * @param mixed $current The object's current value for {@see field()}.
+	 * A literal {@see Set_Value} needs only `$current` (and ignores even that). A
+	 * {@see Formula} reads other fields on the same object — `cost`, another price
+	 * — so the runner passes a `$resolver` that maps a field key to that object's
+	 * current value. It is optional so a value literal can still be applied with no
+	 * object in hand (previews, tests); a formula given no resolver skips.
+	 *
+	 * @param mixed         $current  The object's current value for {@see field()}.
+	 * @param callable|null $resolver Maps a provider field key to the object's value.
 	 * @return mixed The new value, or null to skip.
 	 */
-	public function apply( mixed $current ): mixed;
+	public function apply( mixed $current, ?callable $resolver = null ): mixed;
 
 	/**
 	 * Serialize to a JSON-friendly array (for actions_json). Must round-trip

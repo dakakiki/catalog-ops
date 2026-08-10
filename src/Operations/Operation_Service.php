@@ -157,6 +157,14 @@ final class Operation_Service {
 
 			$changes = array();
 
+			// Same resolver the runner uses, so a formula preview reads the object's
+			// other fields (cost, another price) exactly as execution will.
+			$resolver = function ( string $field_key ) use ( $product ): mixed {
+				$owner = $this->providers->for( $field_key );
+
+				return null === $owner ? null : $owner->read( $product, $field_key );
+			};
+
 			foreach ( $actions as $action ) {
 				$provider = $this->providers->for( $action->field() );
 
@@ -165,7 +173,7 @@ final class Operation_Service {
 				}
 
 				$current = $provider->read( $product, $action->field() );
-				$new     = $action->apply( $current );
+				$new     = $action->apply( $current, $resolver );
 
 				$changes[] = array(
 					'field' => $action->field(),

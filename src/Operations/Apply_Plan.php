@@ -64,6 +64,11 @@ final class Apply_Plan implements Chunk_Plan {
 			$row_for[ $row->field_type->value . '|' . $row->field_key ] = $row;
 		}
 
+		// A formula reads fields other than the one it writes; this resolver lets
+		// any action pull a current value off the already-loaded product by field
+		// key, without the plan knowing which fields a given action needs.
+		$resolver = fn( string $field_key ): mixed => $this->read_field( $product, $field_key );
+
 		foreach ( $this->actions as $action ) {
 			$provider = $this->providers->for( $action->field() );
 
@@ -79,7 +84,7 @@ final class Apply_Plan implements Chunk_Plan {
 
 			$row     = $row_for[ $key ];
 			$current = $provider->read( $product, $action->field() );
-			$new     = $action->apply( $current );
+			$new     = $action->apply( $current, $resolver );
 
 			if ( null === $new ) {
 				$outcome->record_skipped( $row, Values::to_string( $current ) );
@@ -91,5 +96,19 @@ final class Apply_Plan implements Chunk_Plan {
 		}
 
 		return $outcome;
+	}
+
+	/**
+	 * Read a single field's current value off a loaded product by its field key,
+	 * or null when no provider owns the key. This is the seam a formula reads its
+	 * inputs through.
+	 *
+	 * @param WC_Product $product   The loaded product.
+	 * @param string     $field_key The field key to read.
+	 */
+	private function read_field( WC_Product $product, string $field_key ): mixed {
+		$provider = $this->providers->for( $field_key );
+
+		return null === $provider ? null : $provider->read( $product, $field_key );
 	}
 }

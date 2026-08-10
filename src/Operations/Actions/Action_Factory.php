@@ -35,6 +35,8 @@ final class Action_Factory {
 		switch ( $type ) {
 			case Set_Value::TYPE:
 				return new Set_Value( $field, $data['value'] ?? null );
+			case Formula::TYPE:
+				return Formula::from_source( $field, (string) ( $data['expression'] ?? '' ) );
 			default:
 				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message, never rendered as web output.
 				throw new InvalidArgumentException( sprintf( 'Unknown action type "%s".', $type ) );
