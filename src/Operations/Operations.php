@@ -91,6 +91,25 @@ final class Operations {
 	}
 
 	/**
+	 * Delete an operation row. Used to discard a draft that could not be queued
+	 * (e.g. a scheduled fire that lost the single-writer lock in a race), so
+	 * dead drafts do not accumulate. Never used on an operation with recorded
+	 * changes — those are the audit log.
+	 *
+	 * @param int $id Operation id.
+	 * @return bool Whether a row was deleted.
+	 */
+	public function delete( int $id ): bool {
+		$deleted = $this->wpdb->delete(
+			$this->schema->operations_table(),
+			array( 'id' => $id ),
+			array( '%d' )
+		);
+
+		return false !== $deleted && $deleted > 0;
+	}
+
+	/**
 	 * Find an operation by id.
 	 *
 	 * @param int $id Operation id.

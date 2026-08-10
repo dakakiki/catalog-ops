@@ -34,6 +34,11 @@ final class Scheduler implements Operation_Scheduler {
 	public const RETENTION_HOOK = 'catalogops_retention';
 
 	/**
+	 * Hook fired periodically to fire due schedules (M5).
+	 */
+	public const SCHEDULES_HOOK = 'catalogops_run_schedules';
+
+	/**
 	 * Action Scheduler group for the watchdog and other plugin-wide actions.
 	 */
 	private const GROUP = 'catalogops';
@@ -47,6 +52,13 @@ final class Scheduler implements Operation_Scheduler {
 	 * How often the retention purge runs, in seconds.
 	 */
 	private const RETENTION_INTERVAL = DAY_IN_SECONDS;
+
+	/**
+	 * How often the schedule supervisor runs, in seconds. Interval presets are
+	 * hourly at the finest, so a 5-minute cadence is timely without flooding the
+	 * queue; the exact firing time depends on the host's cron regardless.
+	 */
+	private const SCHEDULES_INTERVAL = 5 * MINUTE_IN_SECONDS;
 
 	/**
 	 * Enqueue the next chunk of an operation, in its own cancellable group.
@@ -119,6 +131,27 @@ final class Scheduler implements Operation_Scheduler {
 			time() + self::RETENTION_INTERVAL,
 			self::RETENTION_INTERVAL,
 			self::RETENTION_HOOK,
+			array(),
+			self::GROUP
+		);
+	}
+
+	/**
+	 * Ensure the recurring schedule supervisor is scheduled exactly once.
+	 */
+	public function ensure_schedules(): void {
+		if ( ! function_exists( 'as_has_scheduled_action' ) || ! function_exists( 'as_schedule_recurring_action' ) ) {
+			return;
+		}
+
+		if ( as_has_scheduled_action( self::SCHEDULES_HOOK, array(), self::GROUP ) ) {
+			return;
+		}
+
+		as_schedule_recurring_action(
+			time() + self::SCHEDULES_INTERVAL,
+			self::SCHEDULES_INTERVAL,
+			self::SCHEDULES_HOOK,
 			array(),
 			self::GROUP
 		);

@@ -162,7 +162,7 @@ Moduli (M7): `ACF_Provider`, `WPML_Provider`, `Yoast_Provider`, `Brands_Provider
 
 ### Formule
 
-Shunting-yard parser. Tokeni: brojevi, imena polja, `+ - * / ( )`, funkcije `round ceil floor roundto min max abs`.
+Shunting-yard parser (bez `eval()`, §2 pravilo 6). Tokeni: brojevi, imena polja, `+ - * / ( )`, unarni `+/-`, funkcije `round ceil floor roundto min max abs`.
 
 ```
 regular_price * 1.2
@@ -172,10 +172,11 @@ max( regular_price * 0.8, cost * 1.1 )
 
 Prazno ili nenumeričko polje → **preskoči objekat i zabeleži u log**. Nikad kao nula (tako se cene postavljaju na 0).
 
-> **TODO (M5, uz % / formule) — custom fields i atributi varijacija:** kada se u M5 dodaju procentualne/formulske izmene cene (npr. „skini 10% za kategoriju X"), tada rešiti i pitanje **custom polja** u adminu. U M4 su privremeno uklonjena iz bulk-edita i iz filtera (bila su zbunjujuća; brend je tada izdvojen u poseban dropdown). Odluke koje treba doneti u M5:
-> - Da li „custom fields" uopšte treba da postoje kao takvi, ili se preformulišu kao **filter po atributu varijacije** (npr. veličina/boja) — što je verovatno prirodnije i **pripada filteru**, ne bulk-editu.
-> - Ako ostaju kao proizvoljna meta polja: kako birati ključ i vrednost bez izlaganja internih WooCommerce ključeva (`attribute_*`, `_price`, …) — već postoji `/fields/meta-keys` endpoint kao osnova.
-> - Cilj scenarija: agencija filtrira po kategoriji + brendu (+ eventualno atributu varijacije) i primeni procentualnu izmenu cene.
+**Implementirano u M5 (Faza A):** `src/Operations/Formula/` — `Lexer → Parser (→ RPN) → Expression`, `Functions`, `Variables`; akcija `Actions\Formula` (tip `formula`). Sve greške (nepoznata promenljiva/funkcija, arnost, zagrade, zapete, dubina) su `Formula_Error` (→ 400) pri parsiranju, ne pri izvršenju. `null`-propagacija: prazno/nenumeričko polje, deljenje nulom, `roundto` sa korakom 0 → skip. Rezultat se zaokruži na 6 decimala (float šum). `roundto(x, korak) = round(x/korak)*korak` (MROUND). `Action::apply()` dobija opcioni resolver polja pa formula čita i polja koja ne piše.
+
+**Odluka M5 — promenljive = kurirana whitelist** (ne sirovi meta ključevi): `regular_price`, `sale_price`, `stock`→`stock_quantity`, `weight`, i `cost`→`meta:_catalogops_cost` (filterabilno preko `catalogops_cost_meta_key`, kao brend). Parser validira svako ime.
+
+> **TODO (M5) — RAZREŠENO kao reframe.** „Custom fields" se ne vraćaju kao koncept. Odluka: atributi varijacije (veličina/boja) **pripadaju filteru**, a %/formulske izmene cene idu u bulk-edit kao `Formula` akcija. Preostaje UI rad (Faza D): filter po atributu varijacije + izbor `Formula`/`%` akcije u adminu (React). Cilj scenarija (kategorija + brend [+ atribut] → procentualna izmena cene) pokriva se formulom `regular_price * 0.9`.
 
 ### ⚠ MySQL 5.7 ograničenja
 

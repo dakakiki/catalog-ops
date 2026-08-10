@@ -16,9 +16,12 @@ use CatalogOps\Operations\Fields\Core_Fields;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Operations\Fields\Meta_Fields;
 use CatalogOps\Operations\Lock;
+use CatalogOps\Operations\Notifier;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operations;
 use CatalogOps\Operations\Retention;
+use CatalogOps\Operations\Schedule_Runner;
+use CatalogOps\Operations\Schedules;
 use CatalogOps\Operations\Scheduler;
 use CatalogOps\Operations\Watchdog;
 use CatalogOps\Query\Query_Engine;
@@ -26,6 +29,7 @@ use CatalogOps\Query\Saved_Filters;
 use CatalogOps\Rest\Fields_Controller;
 use CatalogOps\Rest\Operations_Controller;
 use CatalogOps\Rest\Query_Controller;
+use CatalogOps\Rest\Schedules_Controller;
 use CatalogOps\Rest\Settings_Controller;
 
 /**
@@ -110,6 +114,7 @@ final class Plugin {
 				$this->container->get( Operations_Controller::class )->register_routes();
 				$this->container->get( Settings_Controller::class )->register_routes();
 				$this->container->get( Fields_Controller::class )->register_routes();
+				$this->container->get( Schedules_Controller::class )->register_routes();
 			}
 		);
 
@@ -336,6 +341,41 @@ final class Plugin {
 				return new Fields_Controller( $wpdb );
 			}
 		);
+
+		$this->container->singleton(
+			Schedules::class,
+			static function ( Container $container ): Schedules {
+				global $wpdb;
+
+				return new Schedules( $wpdb, $container->get( Schema::class ) );
+			}
+		);
+
+		$this->container->singleton(
+			Schedule_Runner::class,
+			static fn( Container $container ): Schedule_Runner => new Schedule_Runner(
+				$container->get( Schedules::class ),
+				$container->get( Operation_Service::class ),
+				$container->get( Operations::class )
+			)
+		);
+
+		$this->container->singleton(
+			Schedules_Controller::class,
+			static fn( Container $container ): Schedules_Controller => new Schedules_Controller(
+				$container->get( Schedules::class ),
+				$container->get( Schedule_Runner::class )
+			)
+		);
+
+		$this->container->singleton(
+			Notifier::class,
+			static fn( Container $container ): Notifier => new Notifier(
+				$container->get( Operations::class ),
+				$container->get( Changes::class ),
+				$container->get( Schedules::class )
+			)
+		);
 	}
 
 	/**
@@ -378,14 +418,29 @@ final class Plugin {
 			}
 		);
 
-		// Schedule the recurring watchdog and retention purge once Action
-		// Scheduler is ready.
+		add_action(
+			Scheduler::SCHEDULES_HOOK,
+			function (): void {
+				$this->container->get( Schedule_Runner::class )->run_due();
+			}
+		);
+
+		add_action(
+			'catalogops_operation_completed',
+			function ( $op_id = 0 ): void {
+				$this->container->get( Notifier::class )->notify( (int) $op_id );
+			}
+		);
+
+		// Schedule the recurring watchdog, retention purge, and schedule
+		// supervisor once Action Scheduler is ready.
 		add_action(
 			'action_scheduler_init',
 			function (): void {
 				$scheduler = $this->container->get( Scheduler::class );
 				$scheduler->ensure_watchdog();
 				$scheduler->ensure_retention();
+				$scheduler->ensure_schedules();
 			}
 		);
 	}

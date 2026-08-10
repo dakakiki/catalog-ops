@@ -256,6 +256,15 @@ final class Chunk_Runner {
 		}
 
 		$this->lock->release( $operation->id );
+
+		/**
+		 * Fires once an operation has settled as completed. The M5 notifier listens
+		 * here to email a report for scheduled operations (CONTEXT §4). Passing the
+		 * id (not the stale snapshot) lets listeners read the final counters.
+		 *
+		 * @param int $op_id The completed operation's id.
+		 */
+		do_action( 'catalogops_operation_completed', $operation->id );
 	}
 
 	/**

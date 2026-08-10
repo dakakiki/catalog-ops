@@ -11,6 +11,7 @@ use CatalogOps\Database\Migrations\Add_Conflict_Policy_Column;
 use CatalogOps\Database\Migrations\Add_Operation_Progress_Columns;
 use CatalogOps\Database\Migrations\Create_Core_Tables;
 use CatalogOps\Database\Migrations\Create_Saved_Filters_Table;
+use CatalogOps\Database\Migrations\Create_Schedules_Table;
 use CatalogOps\Database\Migrations\Migration;
 use wpdb;
 
@@ -57,6 +58,7 @@ final class Schema {
 			new Create_Saved_Filters_Table(),
 			new Add_Operation_Progress_Columns(),
 			new Add_Conflict_Policy_Column(),
+			new Create_Schedules_Table(),
 		);
 
 		usort(
@@ -84,6 +86,13 @@ final class Schema {
 	 */
 	public function saved_filters_table(): string {
 		return $this->wpdb->prefix . 'catalogops_saved_filters';
+	}
+
+	/**
+	 * Fully-qualified name of the schedules table.
+	 */
+	public function schedules_table(): string {
+		return $this->wpdb->prefix . 'catalogops_schedules';
 	}
 
 	/**
@@ -133,8 +142,10 @@ final class Schema {
 		$operations    = $this->operations_table();
 		$changes       = $this->changes_table();
 		$saved_filters = $this->saved_filters_table();
+		$schedules     = $this->schedules_table();
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange
+		$this->wpdb->query( "DROP TABLE IF EXISTS {$schedules}" );
 		$this->wpdb->query( "DROP TABLE IF EXISTS {$saved_filters}" );
 		$this->wpdb->query( "DROP TABLE IF EXISTS {$changes}" );
 		$this->wpdb->query( "DROP TABLE IF EXISTS {$operations}" );
