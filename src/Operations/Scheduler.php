@@ -158,6 +158,19 @@ final class Scheduler implements Operation_Scheduler {
 	}
 
 	/**
+	 * Cancel the plugin's recurring actions (watchdog, retention, schedules) in
+	 * the shared group. Best-effort cleanup for uninstall; per-operation groups
+	 * are transient and left to Action Scheduler's own housekeeping.
+	 */
+	public function unschedule_all(): void {
+		if ( ! function_exists( 'as_unschedule_all_actions' ) ) {
+			return;
+		}
+
+		as_unschedule_all_actions( '', array(), self::GROUP );
+	}
+
+	/**
 	 * The per-operation group name (enables mass cancellation).
 	 *
 	 * @param int $op_id Operation id.

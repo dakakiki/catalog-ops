@@ -104,3 +104,57 @@ jobs:
 
       - name: PHPUnit (integration)
         run: composer run test:integration
+
+  integration-multisite:
+    name: Integration tests (multisite)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      WP_TESTS_DIR: /tmp/wordpress-tests-lib
+      WP_CORE_DIR: /tmp/wordpress
+      WC_PLUGIN_DIR: /tmp/wordpress/wp-content/plugins/woocommerce
+      # Runs the whole integration suite under a network install so the plugin's
+      # multisite paths (network activation, per-site schema, the wp_initialize_site
+      # hook, uninstall) are exercised — plus the @group ms test that self-skips
+      # on single site. The WP test bootstrap reads this at runtime.
+      WP_MULTISITE: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mysqli, mbstring
+          coverage: none
+          tools: composer
+
+      - name: Install subversion (for the WP test library)
+        run: sudo apt-get update && sudo apt-get install -y subversion
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Install the WordPress test suite (MySQL 5.7)
+        run: bash bin/install-wp-tests.sh wordpress_test root root 127.0.0.1:3306 latest true
+
+      - name: Install WooCommerce
+        run: |
+          mkdir -p "${WP_CORE_DIR}/wp-content/plugins"
+          curl -sL https://downloads.wordpress.org/plugin/woocommerce.latest-stable.zip -o /tmp/woocommerce.zip
+          unzip -q /tmp/woocommerce.zip -d "${WP_CORE_DIR}/wp-content/plugins/"
+
+      - name: PHPUnit (integration, multisite)
+        run: composer run test:integration

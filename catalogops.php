@@ -75,12 +75,14 @@ if ( ! is_readable( $catalogops_autoloader ) ) {
 require $catalogops_autoloader;
 
 /*
- * Create/upgrade the database schema on activation.
+ * Create/upgrade the database schema on activation. On a network-wide activation
+ * WordPress passes $network_wide = true, so the schema is installed on every site
+ * in the network rather than just the one that ran the activation.
  */
 register_activation_hook(
 	CATALOGOPS_FILE,
-	static function (): void {
-		\CatalogOps\Plugin::instance( CATALOGOPS_FILE )->activate();
+	static function ( bool $network_wide = false ): void {
+		\CatalogOps\Plugin::instance( CATALOGOPS_FILE )->activate( $network_wide );
 	}
 );
 

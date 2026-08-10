@@ -120,6 +120,9 @@ final class Plugin {
 
 		$this->register_operation_hooks();
 
+		// Install the schema on any site created while the plugin is network active.
+		add_action( 'wp_initialize_site', array( $this, 'on_new_site' ), 20 );
+
 		if ( is_admin() ) {
 			$admin_page = $this->container->get( Admin_Page::class );
 			add_action( 'admin_menu', array( $admin_page, 'register_menu' ) );
@@ -137,10 +140,47 @@ final class Plugin {
 	/**
 	 * Activation hook: ensure services are wired, then create/upgrade the
 	 * schema. Registered in the main plugin file via register_activation_hook().
+	 *
+	 * On a network-wide activation the schema is installed on every existing
+	 * site; per-site tables (the plugin's data is per-site, keyed by $wpdb->prefix)
+	 * are what a network of independent shops needs. A single-site activation, or
+	 * a per-site activation within a network, installs only the current site.
+	 *
+	 * @param bool $network_wide Whether the plugin was network-activated.
 	 */
-	public function activate(): void {
+	public function activate( bool $network_wide = false ): void {
 		$this->boot();
+
+		if ( $network_wide && is_multisite() ) {
+			$this->install_on_all_sites();
+
+			return;
+		}
+
 		$this->container->get( Schema::class )->install();
+	}
+
+	/**
+	 * Install (or upgrade) the schema on a newly created site, but only when the
+	 * plugin is network active — otherwise a new site that isn't running the
+	 * plugin would get orphan tables. Hooked to wp_initialize_site.
+	 *
+	 * @param \WP_Site $new_site The site just created.
+	 */
+	public function on_new_site( \WP_Site $new_site ): void {
+		$active = (array) get_site_option( 'active_sitewide_plugins', array() );
+
+		if ( ! isset( $active[ plugin_basename( $this->file ) ] ) ) {
+			return;
+		}
+
+		switch_to_blog( (int) $new_site->blog_id );
+
+		try {
+			$this->container->get( Schema::class )->install();
+		} finally {
+			restore_current_blog();
+		}
 	}
 
 	/**
@@ -170,6 +210,30 @@ final class Plugin {
 	 */
 	public function version(): string {
 		return CATALOGOPS_VERSION;
+	}
+
+	/**
+	 * Install the schema on every site in the network. Used for a network-wide
+	 * activation; the same schema is created per site because each site keeps its
+	 * own catalog and operation history under its own table prefix.
+	 */
+	private function install_on_all_sites(): void {
+		$schema = $this->container->get( Schema::class );
+
+		foreach ( get_sites(
+			array(
+				'fields' => 'ids',
+				'number' => 0,
+			)
+		) as $site_id ) {
+			switch_to_blog( (int) $site_id );
+
+			try {
+				$schema->install();
+			} finally {
+				restore_current_blog();
+			}
+		}
 	}
 
 	/**
