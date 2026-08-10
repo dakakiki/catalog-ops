@@ -1,0 +1,98 @@
+# CatalogOps — Serbian (sr_RS) starter translation.
+# A representative subset (the first-run onboarding, the backup gate, and the
+# core action controls) that proves the translation pipeline end to end; every
+# other string falls back to the English source until translated.
+msgid ""
+msgstr ""
+"Project-Id-Version: CatalogOps\n"
+"Report-Msgid-Bugs-To: https://github.com/dakakiki/catalog-ops/issues\n"
+"Language: sr_RS\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : 2);\n"
+"X-Domain: catalogops\n"
+
+#: catalogops.php
+msgid "CatalogOps requires PHP %1$s or newer. This site runs PHP %2$s."
+msgstr "CatalogOps zahteva PHP %1$s ili noviji. Ovaj sajt koristi PHP %2$s."
+
+#: assets/src/admin/index.js:1533
+msgid "Welcome to CatalogOps"
+msgstr "Dobrodošli u CatalogOps"
+
+#: assets/src/admin/index.js:1557
+msgid "Change thousands of products at once — safely. Every change is previewed before it is written, and any operation can be undone for %d days."
+msgstr "Izmenite hiljade proizvoda odjednom — bezbedno. Svaka izmena se pregleda pre upisa, a svaka operacija se može poništiti u roku od %d dana."
+
+#: assets/src/admin/index.js:1570
+msgid "1. Filter"
+msgstr "1. Filter"
+
+#: assets/src/admin/index.js:1573
+msgid "Choose exactly which products or variations to change — by category, brand, price, stock, attribute, or SKU."
+msgstr "Izaberite tačno koje proizvode ili varijacije menjate — po kategoriji, brendu, ceni, zalihama, atributu ili SKU."
+
+#: assets/src/admin/index.js:1581
+msgid "2. Preview"
+msgstr "2. Pregled"
+
+#: assets/src/admin/index.js:1584
+msgid "See every old → new value before anything happens. Nothing is written until you choose Apply."
+msgstr "Vidite svaku staru → novu vrednost pre nego što se bilo šta desi. Ništa se ne upisuje dok ne izaberete Primeni."
+
+#: assets/src/admin/index.js:1592
+msgid "3. Apply & undo"
+msgstr "3. Primeni i poništi"
+
+#: assets/src/admin/index.js:1595
+msgid "Run it as a background operation. Changed your mind? Undo the whole thing from History below."
+msgstr "Pokrenite kao pozadinsku operaciju. Predomislili ste se? Poništite sve iz Istorije ispod."
+
+#: assets/src/admin/index.js:1604
+msgid "Got it — start with a filter"
+msgstr "Razumem — počnite sa filterom"
+
+#: assets/src/admin/index.js:1548
+msgid "Dismiss"
+msgstr "Odbaci"
+
+#: assets/src/admin/index.js:601
+msgid "Before your first change: CatalogOps is safe, but it is not a backup."
+msgstr "Pre prve izmene: CatalogOps je bezbedan, ali nije zamena za rezervnu kopiju."
+
+#: assets/src/admin/index.js:623
+msgid "I have a recent backup, and I understand this change can be undone for %d days from History."
+msgstr "Imam skorašnju rezervnu kopiju i razumem da se ova izmena može poništiti u roku od %d dana iz Istorije."
+
+#: assets/src/admin/index.js:633
+msgid "Apply this change to every matching item?"
+msgstr "Primeniti ovu izmenu na svaku podudarnu stavku?"
+
+#: assets/src/admin/index.js:647
+msgid "Apply now"
+msgstr "Primeni sada"
+
+#: assets/src/admin/index.js:654
+msgid "Cancel"
+msgstr "Otkaži"
+
+#: assets/src/admin/index.js:439
+msgid "Bulk edit"
+msgstr "Masovna izmena"
+
+#: assets/src/admin/index.js:560
+msgid "Preview"
+msgstr "Pregled"
+
+#: assets/src/admin/index.js:567
+msgid "Apply"
+msgstr "Primeni"
+
+#: assets/src/admin/index.js:1571
+msgid "Products"
+msgstr "Proizvodi"
+
+#: assets/src/admin/index.js:1580
+msgid "Variations"
+msgstr "Varijacije"

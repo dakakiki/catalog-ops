@@ -104,6 +104,16 @@ final class Plugin {
 		$this->register_services();
 		$this->register_cli();
 
+		// Load translations. On `init` (not earlier) to satisfy WP 6.7's just-in-time
+		// loading guard; the .mo/.json files live under /languages (Domain Path).
+		$languages_rel_path = dirname( plugin_basename( $this->file ) ) . '/languages';
+		add_action(
+			'init',
+			static function () use ( $languages_rel_path ): void {
+				load_plugin_textdomain( 'catalogops', false, $languages_rel_path );
+			}
+		);
+
 		// Apply pending migrations after a plugin update (no reactivation needed).
 		add_action( 'admin_init', array( $this, 'maybe_upgrade_database' ) );
 

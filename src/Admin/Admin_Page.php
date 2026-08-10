@@ -79,6 +79,11 @@ final class Admin_Page {
 
 		wp_enqueue_script( 'catalogops-admin', $url . 'admin.js', $meta['dependencies'], $meta['version'], true );
 
+		// Load the app's translations (the __()/sprintf calls in index.js). WP reads
+		// languages/catalogops-{locale}-{md5}.json, built from the .po via
+		// `wp i18n make-json`.
+		wp_set_script_translations( 'catalogops-admin', 'catalogops', plugin_dir_path( $this->plugin_file ) . 'languages' );
+
 		// wp-scripts extracts styles imported from the entry to `style-admin.css`.
 		// Depend on wp-components so the FormTokenField controls in the filter get
 		// their WordPress styling (the script dependency is added automatically via

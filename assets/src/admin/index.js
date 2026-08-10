@@ -1189,7 +1189,7 @@ function OperationRow( { op, onChanged } ) {
 					{ op.failed > 0 &&
 						' ' +
 							sprintf(
-								/* translators: %d: failed count. */
+								/* translators: %d: number of failed objects. */
 								__( '(%d failed)', 'catalogops' ),
 								op.failed
 							) }
