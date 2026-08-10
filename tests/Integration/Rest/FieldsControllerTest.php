@@ -95,6 +95,18 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 			$this->markTestSkipped( 'WooCommerce attribute helpers are not available.' );
 		}
 
+		// Global attributes live in a custom table that does not roll back with the
+		// per-test transaction, so a leftover "size" from another test/run would
+		// make creation fail — remove it first for a clean slate. Clear the cache
+		// so the lookup reads the table, not a stale transient.
+		delete_transient( 'wc_attribute_taxonomies' );
+		foreach ( wc_get_attribute_taxonomies() as $existing_attribute ) {
+			if ( 'size' === $existing_attribute->attribute_name ) {
+				wc_delete_attribute( (int) $existing_attribute->attribute_id );
+			}
+		}
+		delete_transient( 'wc_attribute_taxonomies' );
+
 		$attribute_id = wc_create_attribute(
 			array(
 				'name' => 'Size',
@@ -135,6 +147,24 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 
 		// Clean up the global attribute so it does not leak into other tests.
 		wc_delete_attribute( $attribute_id );
+	}
+
+	public function test_category_names_are_returned_without_html_entities(): void {
+		$term = wp_insert_term( 'Home & Kitchen', 'product_cat' );
+		$id   = (int) $term['term_id'];
+
+		$categories = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/fields/categories' ) )->get_data()['categories'];
+
+		$name = '';
+		foreach ( $categories as $category ) {
+			if ( $id === $category['id'] ) {
+				$name = $category['name'];
+			}
+		}
+
+		// WordPress stores the name entity-encoded ("Home &amp; Kitchen"); the
+		// endpoint returns the plain form so it does not show literally in the UI.
+		$this->assertSame( 'Home & Kitchen', $name );
 	}
 
 	public function test_endpoint_requires_a_capability(): void {

@@ -209,7 +209,7 @@ final class Fields_Controller {
 			foreach ( $terms as $term ) {
 				$categories[] = array(
 					'id'    => (int) $term->term_id,
-					'name'  => $term->name,
+					'name'  => $this->decode( $term->name ),
 					'count' => (int) $term->count,
 				);
 			}
@@ -248,7 +248,7 @@ final class Fields_Controller {
 					$values[] = array(
 						'id'   => (int) $term->term_id,
 						'slug' => $term->slug,
-						'name' => $term->name,
+						'name' => $this->decode( $term->name ),
 					);
 				}
 			}
@@ -260,12 +260,25 @@ final class Fields_Controller {
 			$attributes[] = array(
 				'field'    => 'attribute:' . $taxonomy,
 				'taxonomy' => $taxonomy,
-				'label'    => '' !== $attribute->attribute_label ? $attribute->attribute_label : $attribute->attribute_name,
+				'label'    => $this->decode( '' !== $attribute->attribute_label ? $attribute->attribute_label : $attribute->attribute_name ),
 				'terms'    => $values,
 			);
 		}
 
 		return new WP_REST_Response( array( 'attributes' => $attributes ) );
+	}
+
+	/**
+	 * Decode HTML entities in a taxonomy/attribute label. WordPress stores term
+	 * names with entities encoded ("Home &amp; Kitchen"); the admin app renders
+	 * the value as React text (escaped again on output), so it needs the plain
+	 * form or the entity shows literally. Safe for these fields because they are
+	 * display-only — the filter matches categories and attributes by id, not name.
+	 *
+	 * @param string $text Possibly entity-encoded text.
+	 */
+	private function decode( string $text ): string {
+		return html_entity_decode( $text, ENT_QUOTES, 'UTF-8' );
 	}
 
 	/**
