@@ -1,0 +1,35 @@
+# MySQL 8.0 verification harness for CatalogOps (CONTEXT §3 / §9, risk row
+# "Upit brz na 5.7, spor na 8.0"). The dev box runs MySQL 5.7.36; this brings up
+# an 8.0 instance so the query engine's plans can be checked against the newer
+# optimizer before release.
+#
+# Port 3307 on the host avoids clashing with WAMP's 5.7 on 3306. The tuning
+# matches the tuned dev 5.7 (buffer pool 1G) so the comparison is apples to
+# apples rather than default-vs-tuned.
+#
+# Usage: see README.md in this directory.
+
+services:
+  mysql8:
+    image: mysql:8.0
+    container_name: catalogops-mysql8
+    command:
+      - --innodb-buffer-pool-size=1G
+      - --max-allowed-packet=64M
+      - --innodb-flush-log-at-trx-commit=2   # local verification only, speeds import
+      - --local-infile=1
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: catalogops_verify
+    ports:
+      - "3307:3306"
+    volumes:
+      - catalogops_mysql8_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  catalogops_mysql8_data:

@@ -11,3 +11,9 @@ Thumbs.db
 /.idea/
 /.vscode/
 /.claude/settings.local.json
+
+# MySQL 8.0 verification harness — large dump + generated plan output (docs/mysql8/README.md)
+/docker/mysql8/catalogops-live.sql
+/docker/mysql8/explain-queries.generated.sql
+/docker/mysql8/explain-8.0.txt
+/docker/mysql8/explain-5.7.txt
