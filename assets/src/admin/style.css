@@ -577,3 +577,107 @@ tr.is-drift td {
 .catalogops-schedules {
 	margin-top: 20px;
 }
+
+/* --- Onboarding (first-run tour) --------------------------------------- */
+
+.catalogops-onboarding {
+	position: relative;
+	border-left: 4px solid var(--co-blue);
+	background: #f0f6fc;
+}
+
+.catalogops-onboarding__close {
+	position: absolute;
+	top: 10px;
+	right: 12px;
+	border: 0;
+	background: transparent;
+	color: var(--co-muted);
+	font-size: 20px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 2px 6px;
+}
+
+.catalogops-onboarding__close:hover {
+	color: var(--co-red);
+}
+
+.catalogops-onboarding__title {
+	margin: 0 0 6px;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.catalogops-onboarding__lead {
+	margin: 0 0 14px;
+	max-width: 70ch;
+	color: #1d2327;
+}
+
+.catalogops-onboarding__steps {
+	list-style: none;
+	margin: 0 0 16px;
+	padding: 0;
+	display: grid;
+	gap: 10px;
+	grid-template-columns: repeat( 3, 1fr );
+}
+
+.catalogops-onboarding__steps li {
+	margin: 0;
+	padding: 12px 14px;
+	background: #fff;
+	border: 1px solid var(--co-border);
+	border-radius: 6px;
+}
+
+.catalogops-onboarding__steps strong {
+	display: block;
+	margin-bottom: 4px;
+	color: var(--co-blue);
+}
+
+.catalogops-onboarding__steps span {
+	color: var(--co-muted);
+	font-size: 13px;
+}
+
+@media ( max-width: 782px ) {
+	.catalogops-onboarding__steps {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* --- Apply confirmation / backup gate ---------------------------------- */
+
+.catalogops-confirm {
+	margin: 12px 0 4px;
+	padding: 14px 16px;
+	background: #fcf9e8;
+	border: 1px solid var(--co-amber);
+	border-radius: 6px;
+}
+
+.catalogops-confirm__lead {
+	margin: 0 0 10px;
+	font-weight: 600;
+}
+
+.catalogops-confirm__ack {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0 0 12px;
+	max-width: 70ch;
+	line-height: 1.5;
+}
+
+.catalogops-confirm__ack input {
+	margin-top: 3px;
+}
+
+.catalogops-confirm__actions {
+	display: flex;
+	gap: 8px;
+}

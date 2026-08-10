@@ -301,8 +301,18 @@ function ProgressBar( { op } ) {
  * @param {Object}   props.filter            The current filter payload.
  * @param {Function} props.onDone            Called when an operation finishes (to refresh).
  * @param {Function} props.onScheduleCreated Called after a schedule is created.
+ * @param {boolean}  props.backupAck         Whether the backup reminder is already acknowledged.
+ * @param {Function} props.onBackupAck       Called once the reminder is acknowledged.
+ * @param {number}   props.retentionDays     Days an operation stays reversible (for the copy).
  */
-function BulkEdit( { filter, onDone, onScheduleCreated } ) {
+function BulkEdit( {
+	filter,
+	onDone,
+	onScheduleCreated,
+	backupAck,
+	onBackupAck,
+	retentionDays,
+} ) {
 	const [ mode, setMode ] = useState( 'set' );
 	const [ field, setField ] = useState( 'regular_price' );
 	const [ value, setValue ] = useState( '' );
@@ -312,6 +322,12 @@ function BulkEdit( { filter, onDone, onScheduleCreated } ) {
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
 	const [ busy, setBusy ] = useState( false );
+
+	// The apply confirmation. Before the very first operation the backup reminder
+	// is mandatory (CONTEXT §9): a required acknowledgement, not a throwaway
+	// dialog. Once acknowledged, applying just asks for a plain confirmation.
+	const [ confirming, setConfirming ] = useState( false );
+	const [ backupChecked, setBackupChecked ] = useState( false );
 
 	// Scheduling: the same filter + action, deferred and possibly recurring.
 	const [ showSchedule, setShowSchedule ] = useState( false );
@@ -377,15 +393,10 @@ function BulkEdit( { filter, onDone, onScheduleCreated } ) {
 			.finally( () => setBusy( false ) );
 	};
 
-	const runApply = () => {
-		const message = __(
-			'Apply this change to all matching items? Take a backup first.',
-			'catalogops'
-		);
-		// eslint-disable-next-line no-alert
-		if ( ! window.confirm( message ) ) {
-			return;
-		}
+	// Actually queue the operation. Reached only after the apply confirmation
+	// (and, the first time, the backup acknowledgement) is satisfied.
+	const doApply = () => {
+		setConfirming( false );
 		setBusy( true );
 		setError( '' );
 		apiFetch( {
@@ -396,6 +407,26 @@ function BulkEdit( { filter, onDone, onScheduleCreated } ) {
 			.then( setOperation )
 			.catch( ( err ) => setError( err.message ) )
 			.finally( () => setBusy( false ) );
+	};
+
+	// Confirm the apply. The first time (no backup acknowledgement yet) the
+	// checkbox is required and the acknowledgement is recorded so the reminder
+	// does not nag on every later operation.
+	const confirmApply = () => {
+		if ( ! backupAck ) {
+			if ( ! backupChecked ) {
+				return;
+			}
+			apiFetch( {
+				path: '/catalogops/v1/settings/onboarding',
+				method: 'POST',
+				data: { backup_ack: true },
+			} ).catch( () => {} );
+			if ( onBackupAck ) {
+				onBackupAck();
+			}
+		}
+		doApply();
 	};
 
 	const createSchedule = () => {
@@ -561,12 +592,73 @@ function BulkEdit( { filter, onDone, onScheduleCreated } ) {
 				</button>
 				<button
 					className="button button-primary"
-					onClick={ runApply }
-					disabled={ busy || running || ! ready }
+					onClick={ () => setConfirming( true ) }
+					disabled={ busy || running || ! ready || confirming }
 				>
 					{ __( 'Apply', 'catalogops' ) }
 				</button>
 			</div>
+
+			{ confirming && (
+				<div className="catalogops-confirm">
+					{ ! backupAck ? (
+						<>
+							<p className="catalogops-confirm__lead">
+								{ __(
+									'Before your first change: CatalogOps is safe, but it is not a backup.',
+									'catalogops'
+								) }
+							</p>
+							<label
+								className="catalogops-confirm__ack"
+								htmlFor="catalogops-backup-ack"
+							>
+								<input
+									id="catalogops-backup-ack"
+									type="checkbox"
+									checked={ backupChecked }
+									onChange={ ( e ) =>
+										setBackupChecked( e.target.checked )
+									}
+								/>
+								{ sprintf(
+									/* translators: %d: the number of days changes remain reversible. */
+									__(
+										'I have a recent backup, and I understand this change can be undone for %d days from History.',
+										'catalogops'
+									),
+									retentionDays || 30
+								) }
+							</label>
+						</>
+					) : (
+						<p className="catalogops-confirm__lead">
+							{ __(
+								'Apply this change to every matching item?',
+								'catalogops'
+							) }
+						</p>
+					) }
+					<div className="catalogops-confirm__actions">
+						<button
+							className="button button-primary"
+							onClick={ confirmApply }
+							disabled={
+								busy || ( ! backupAck && ! backupChecked )
+							}
+						>
+							{ __( 'Apply now', 'catalogops' ) }
+						</button>
+						<button
+							className="button"
+							onClick={ () => setConfirming( false ) }
+							disabled={ busy }
+						>
+							{ __( 'Cancel', 'catalogops' ) }
+						</button>
+					</div>
+				</div>
+			) }
 
 			{ ( mode === 'formula' || mode === 'percent' ) && (
 				<p className="description catalogops-formula-help">
@@ -1434,6 +1526,90 @@ function Schedules( { refreshKey, onRan } ) {
 	);
 }
 
+/**
+ * First-run walkthrough. Shows once per user (until dismissed) and teaches the
+ * three-step pipeline so a newcomer can run their first operation unaided
+ * (CONTEXT §4 M6 DoD). Dismissal is recorded server-side.
+ *
+ * @param {Object}      props           Component props.
+ * @param {Object|null} props.data      Onboarding state ({ tour_done, retention_days }).
+ * @param {Function}    props.onDismiss Called when the tour is dismissed.
+ */
+function Onboarding( { data, onDismiss } ) {
+	if ( ! data || data.tour_done ) {
+		return null;
+	}
+
+	const dismiss = () => {
+		apiFetch( {
+			path: '/catalogops/v1/settings/onboarding',
+			method: 'POST',
+			data: { tour_done: true },
+		} ).catch( () => {} );
+		onDismiss();
+	};
+
+	const days = data.retention_days || 30;
+
+	return (
+		<div className="catalogops-card catalogops-onboarding">
+			<button
+				type="button"
+				className="catalogops-onboarding__close"
+				aria-label={ __( 'Dismiss', 'catalogops' ) }
+				onClick={ dismiss }
+			>
+				×
+			</button>
+			<h2 className="catalogops-onboarding__title">
+				{ __( 'Welcome to CatalogOps', 'catalogops' ) }
+			</h2>
+			<p className="catalogops-onboarding__lead">
+				{ sprintf(
+					/* translators: %d: the number of days changes remain reversible. */
+					__(
+						'Change thousands of products at once — safely. Every change is previewed before it is written, and any operation can be undone for %d days.',
+						'catalogops'
+					),
+					days
+				) }
+			</p>
+			<ol className="catalogops-onboarding__steps">
+				<li>
+					<strong>{ __( '1. Filter', 'catalogops' ) }</strong>
+					<span>
+						{ __(
+							'Choose exactly which products or variations to change — by category, brand, price, stock, attribute, or SKU.',
+							'catalogops'
+						) }
+					</span>
+				</li>
+				<li>
+					<strong>{ __( '2. Preview', 'catalogops' ) }</strong>
+					<span>
+						{ __(
+							'See every old → new value before anything happens. Nothing is written until you choose Apply.',
+							'catalogops'
+						) }
+					</span>
+				</li>
+				<li>
+					<strong>{ __( '3. Apply & undo', 'catalogops' ) }</strong>
+					<span>
+						{ __(
+							'Run it as a background operation. Changed your mind? Undo the whole thing from History below.',
+							'catalogops'
+						) }
+					</span>
+				</li>
+			</ol>
+			<button className="button button-primary" onClick={ dismiss }>
+				{ __( 'Got it — start with a filter', 'catalogops' ) }
+			</button>
+		</div>
+	);
+}
+
 function App() {
 	const [ form, setForm ] = useState( {
 		priceMin: '',
@@ -1480,6 +1656,22 @@ function App() {
 			''
 		)
 	);
+
+	// First-run onboarding + the mandatory backup acknowledgement (CONTEXT §9).
+	// Fetched once; on error, fail safe — skip the tour but still show the
+	// first-operation backup reminder.
+	const [ onboarding, setOnboarding ] = useState( null );
+	useEffect( () => {
+		apiFetch( { path: '/catalogops/v1/settings/onboarding' } )
+			.then( setOnboarding )
+			.catch( () =>
+				setOnboarding( {
+					tour_done: true,
+					backup_ack: false,
+					retention_days: 30,
+				} )
+			);
+	}, [] );
 
 	// Load the category and brand dropdowns once.
 	useEffect( () => {
@@ -1553,6 +1745,13 @@ function App() {
 			<h1 className="wp-heading-inline">
 				{ __( 'CatalogOps', 'catalogops' ) }
 			</h1>
+
+			<Onboarding
+				data={ onboarding }
+				onDismiss={ () =>
+					setOnboarding( ( o ) => ( { ...o, tour_done: true } ) )
+				}
+			/>
 
 			<div className="catalogops-card catalogops-browse">
 				<div className="catalogops-controls">
@@ -1885,6 +2084,11 @@ function App() {
 				filter={ appliedFilter }
 				onDone={ refreshAll }
 				onScheduleCreated={ () => setSchedulesKey( ( k ) => k + 1 ) }
+				backupAck={ onboarding ? onboarding.backup_ack : true }
+				onBackupAck={ () =>
+					setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) )
+				}
+				retentionDays={ onboarding ? onboarding.retention_days : 30 }
 			/>
 
 			<Schedules refreshKey={ schedulesKey } onRan={ refreshAll } />

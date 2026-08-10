@@ -28,6 +28,12 @@ $catalogops_cleanup = static function (): void {
 
 	( new \CatalogOps\Database\Schema( $wpdb ) )->drop();
 	( new \CatalogOps\Operations\Scheduler() )->unschedule_all();
+
+	// Plugin options and the per-user onboarding flag (the schema version option
+	// is removed by Schema::drop()).
+	delete_option( \CatalogOps\Operations\Retention::OPTION );
+	delete_option( \CatalogOps\Rest\Settings_Controller::BACKUP_OPTION );
+	delete_metadata( 'user', 0, \CatalogOps\Rest\Settings_Controller::TOUR_META, '', true );
 };
 
 if ( is_multisite() ) {
