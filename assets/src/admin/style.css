@@ -171,12 +171,21 @@
 	color: var(--co-muted);
 }
 
-/* One height for every control so the row reads as a single band. */
+/* Token fields nest their label, so the flex row gap does not apply; give the
+   label the same 4px space to its control that the plain fields get. */
+.catalogops-field--token .components-form-token-field__label {
+	margin-bottom: 4px;
+}
+
+/* One height for every control so the row reads as a single band. The explicit
+   line-height keeps a select's text vertically centred: WordPress ships selects
+   with a ~38px line-height, which sits low inside the 30px box. */
 .catalogops-field select,
 .catalogops-field input[type='number'],
 .catalogops-field .components-form-token-field__input-container {
 	height: var(--co-control-h);
 	min-height: var(--co-control-h);
+	line-height: normal;
 	box-sizing: border-box;
 }
 
