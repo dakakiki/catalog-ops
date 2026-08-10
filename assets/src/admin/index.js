@@ -1585,107 +1585,96 @@ function App() {
 						<span className="catalogops-group-label">
 							{ __( 'Filter', 'catalogops' ) }
 						</span>
-						<div className="catalogops-filters">
-							<label htmlFor="catalogops-price-min">
-								{ __( 'Min', 'catalogops' ) }
-							</label>
-							<input
-								id="catalogops-price-min"
-								className="small-text"
-								type="number"
-								value={ form.priceMin }
-								onChange={ update( 'priceMin' ) }
-							/>
-
-							<label htmlFor="catalogops-price-max">
-								{ __( 'Max', 'catalogops' ) }
-							</label>
-							<input
-								id="catalogops-price-max"
-								className="small-text"
-								type="number"
-								value={ form.priceMax }
-								onChange={ update( 'priceMax' ) }
-							/>
-
-							<label htmlFor="catalogops-stock">
-								{ __( 'Stock', 'catalogops' ) }
-							</label>
-							<select
-								id="catalogops-stock"
-								value={ form.stockStatus }
-								onChange={ update( 'stockStatus' ) }
-							>
-								<option value="">
-									{ __( 'Any', 'catalogops' ) }
-								</option>
-								<option value="instock">
-									{ __( 'In stock', 'catalogops' ) }
-								</option>
-								<option value="outofstock">
-									{ __( 'Out of stock', 'catalogops' ) }
-								</option>
-							</select>
-
-							<div className="catalogops-token">
-								<TokenSelect
-									label={ __( 'Category', 'catalogops' ) }
-									options={ categories }
-									value={ form.category }
-									onChange={ ( ids ) =>
-										setForm( {
-											...form,
-											category: ids,
-										} )
-									}
-								/>
-							</div>
-
-							<div className="catalogops-token">
-								<TokenSelect
-									label={ __( 'Brand', 'catalogops' ) }
-									options={ brands.map( ( b ) => ( {
-										id: b,
-										name: b,
-									} ) ) }
-									value={ form.brand }
-									onChange={ ( ids ) =>
-										setForm( { ...form, brand: ids } )
-									}
-								/>
-							</div>
-
-							{ attributes.length > 0 && (
-								<>
-									<label htmlFor="catalogops-attribute">
-										{ __( 'Attribute', 'catalogops' ) }
-									</label>
-									<select
-										id="catalogops-attribute"
-										value={ form.attribute }
-										onChange={ ( e ) =>
+						<div className="catalogops-filter-rows">
+							<div className="catalogops-filter-row">
+								<div className="catalogops-field catalogops-field--token">
+									<TokenSelect
+										label={ __( 'Category', 'catalogops' ) }
+										options={ categories }
+										value={ form.category }
+										onChange={ ( ids ) =>
 											setForm( {
 												...form,
-												attribute: e.target.value,
-												attributeValues: [],
+												category: ids,
 											} )
 										}
+									/>
+								</div>
+
+								<div className="catalogops-field catalogops-field--token">
+									<TokenSelect
+										label={ __( 'Brand', 'catalogops' ) }
+										options={ brands.map( ( b ) => ( {
+											id: b,
+											name: b,
+										} ) ) }
+										value={ form.brand }
+										onChange={ ( ids ) =>
+											setForm( { ...form, brand: ids } )
+										}
+									/>
+								</div>
+
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-stock">
+										{ __( 'Stock', 'catalogops' ) }
+									</label>
+									<select
+										id="catalogops-stock"
+										value={ form.stockStatus }
+										onChange={ update( 'stockStatus' ) }
 									>
 										<option value="">
 											{ __( 'Any', 'catalogops' ) }
 										</option>
-										{ attributes.map( ( a ) => (
-											<option
-												key={ a.field }
-												value={ a.field }
-											>
-												{ a.label }
-											</option>
-										) ) }
+										<option value="instock">
+											{ __( 'In stock', 'catalogops' ) }
+										</option>
+										<option value="outofstock">
+											{ __(
+												'Out of stock',
+												'catalogops'
+											) }
+										</option>
 									</select>
+								</div>
+							</div>
 
-									{ selectedAttribute && (
-										<div className="catalogops-token">
+							<div className="catalogops-filter-row">
+								{ attributes.length > 0 && (
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-attribute">
+											{ __( 'Attribute', 'catalogops' ) }
+										</label>
+										<select
+											id="catalogops-attribute"
+											value={ form.attribute }
+											onChange={ ( e ) =>
+												setForm( {
+													...form,
+													attribute: e.target.value,
+													attributeValues: [],
+												} )
+											}
+										>
+											<option value="">
+												{ __( 'Any', 'catalogops' ) }
+											</option>
+											{ attributes.map( ( a ) => (
+												<option
+													key={ a.field }
+													value={ a.field }
+												>
+													{ a.label }
+												</option>
+											) ) }
+										</select>
+									</div>
+								) }
+
+								{ attributes.length > 0 &&
+									selectedAttribute && (
+										<div className="catalogops-field catalogops-field--token">
 											<TokenSelect
 												label={ __(
 													'Values (any if empty)',
@@ -1704,18 +1693,55 @@ function App() {
 											/>
 										</div>
 									) }
-								</>
-							) }
 
-							<button
-								className="button button-primary"
-								onClick={ () => run( 1 ) }
-								disabled={ loading }
-							>
-								{ scope === 'variation'
-									? __( 'Show variations', 'catalogops' )
-									: __( 'Show products', 'catalogops' ) }
-							</button>
+								<div className="catalogops-field catalogops-field--price">
+									<label htmlFor="catalogops-price-min">
+										{ __( 'Price range', 'catalogops' ) }
+									</label>
+									<div className="catalogops-price-inputs">
+										<input
+											id="catalogops-price-min"
+											type="number"
+											placeholder={ __(
+												'Min',
+												'catalogops'
+											) }
+											aria-label={ __(
+												'Minimum price',
+												'catalogops'
+											) }
+											value={ form.priceMin }
+											onChange={ update( 'priceMin' ) }
+										/>
+										<input
+											id="catalogops-price-max"
+											type="number"
+											placeholder={ __(
+												'Max',
+												'catalogops'
+											) }
+											aria-label={ __(
+												'Maximum price',
+												'catalogops'
+											) }
+											value={ form.priceMax }
+											onChange={ update( 'priceMax' ) }
+										/>
+									</div>
+								</div>
+							</div>
+
+							<div className="catalogops-filter-row">
+								<button
+									className="button button-primary"
+									onClick={ () => run( 1 ) }
+									disabled={ loading }
+								>
+									{ scope === 'variation'
+										? __( 'Show variations', 'catalogops' )
+										: __( 'Show products', 'catalogops' ) }
+								</button>
+							</div>
 						</div>
 					</div>
 					<div className="catalogops-control-group">

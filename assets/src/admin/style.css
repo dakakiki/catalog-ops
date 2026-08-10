@@ -16,6 +16,7 @@
 	--co-green: #1a7f37;
 	--co-red: #d63638;
 	--co-amber: #bd8600;
+	--co-control-h: 40px;
 	max-width: 1180px;
 }
 
@@ -132,16 +133,112 @@
 
 /* --- Filter bar -------------------------------------------------------- */
 
-.catalogops-filters {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 10px;
+/* The filter group stacks several rows, so its label sits at the top rather
+   than vertically centred against a single row. */
+.catalogops-control-group:has( .catalogops-filter-rows ) {
+	align-items: flex-start;
 }
 
-.catalogops-filters label {
+.catalogops-filter-rows {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	flex: 1;
+}
+
+.catalogops-filter-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 16px;
+}
+
+/* A labelled field: its label sits above the control. */
+.catalogops-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.catalogops-field > label,
+.catalogops-field .components-form-token-field__label {
+	margin: 0;
+	font-size: 11px;
 	font-weight: 600;
+	line-height: 1.4;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
 	color: var(--co-muted);
+}
+
+/* One height for every control so the row reads as a single band. */
+.catalogops-field select,
+.catalogops-field input[type='number'],
+.catalogops-field .components-form-token-field__input-container {
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	box-sizing: border-box;
+}
+
+.catalogops-field select {
+	min-width: 160px;
+	max-width: 220px;
+}
+
+/* Token fields need room for pills and grow to share the row. */
+.catalogops-field--token {
+	position: relative;
+	flex: 1 1 220px;
+	min-width: 220px;
+	max-width: 340px;
+}
+
+.catalogops-field--token .components-form-token-field__input-container {
+	display: flex;
+	align-items: center;
+	flex-wrap: nowrap;
+	overflow-x: auto;
+}
+
+/* Float the suggestions over the content instead of pushing the rows below
+   it down when the list opens. */
+.catalogops-field--token .components-form-token-field {
+	position: relative;
+}
+
+.catalogops-field--token .components-form-token-field__suggestions-list {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 100%;
+	z-index: 30;
+	margin-top: 2px;
+	max-height: 240px;
+	overflow-y: auto;
+	background: #fff;
+	border: 1px solid var(--co-border-strong);
+	border-radius: 4px;
+	box-shadow: 0 4px 14px rgba( 0, 0, 0, 0.14 );
+}
+
+.catalogops-price-inputs {
+	display: flex;
+	gap: 8px;
+}
+
+.catalogops-price-inputs input[type='number'] {
+	width: 88px;
+}
+
+.catalogops-field--action {
+	justify-content: flex-end;
+}
+
+/* Match the primary button to the control height. */
+.catalogops-filter-row .button-primary {
+	height: var(--co-control-h);
+	display: inline-flex;
+	align-items: center;
 }
 
 .catalogops-status {
