@@ -16,7 +16,7 @@
 	--co-green: #1a7f37;
 	--co-red: #d63638;
 	--co-amber: #bd8600;
-	--co-control-h: 40px;
+	--co-control-h: 30px;
 	max-width: 1180px;
 }
 
@@ -149,7 +149,7 @@
 .catalogops-filter-row {
 	display: flex;
 	flex-wrap: wrap;
-	align-items: flex-end;
+	align-items: flex-start;
 	gap: 16px;
 }
 
@@ -197,7 +197,10 @@
 	display: flex;
 	align-items: center;
 	flex-wrap: nowrap;
+	padding-top: 0;
+	padding-bottom: 0;
 	overflow-x: auto;
+	overflow-y: hidden;
 }
 
 /* Float the suggestions over the content instead of pushing the rows below

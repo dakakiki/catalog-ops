@@ -149,6 +149,7 @@ function TokenSelect( { label, options, value, onChange } ) {
 				)
 			}
 			__experimentalExpandOnFocus
+			__experimentalShowHowTo={ false }
 			__nextHasNoMarginBottom
 			__next40pxDefaultSize
 		/>
