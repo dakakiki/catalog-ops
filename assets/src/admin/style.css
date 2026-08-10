@@ -438,3 +438,33 @@ tr.is-drift td {
 .catalogops-retention input[type='number'] {
 	width: 6em;
 }
+
+/* --- Formulas & percentage (bulk edit) --------------------------------- */
+
+.catalogops-formula-input {
+	flex: 1 1 22em;
+	min-width: 16em;
+	font-family: Menlo, Consolas, monospace;
+}
+
+.catalogops-formula-help {
+	margin-top: 6px;
+}
+
+.catalogops-saved {
+	color: var(--co-green, #1a7f37);
+	font-weight: 600;
+}
+
+/* --- Schedules --------------------------------------------------------- */
+
+.catalogops-schedule-form {
+	margin: 8px 0 4px;
+	padding: 10px 12px;
+	background: var(--co-tint, #f6f7f7);
+	border-radius: 4px;
+}
+
+.catalogops-schedules {
+	margin-top: 20px;
+}

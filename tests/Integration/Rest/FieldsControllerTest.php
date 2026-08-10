@@ -90,6 +90,41 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 		$this->assertContains( $id, $ids );
 	}
 
+	public function test_attributes_lists_global_attributes_with_their_terms(): void {
+		if ( ! function_exists( 'wc_create_attribute' ) ) {
+			$this->markTestSkipped( 'WooCommerce attribute helpers are not available.' );
+		}
+
+		$attribute_id = wc_create_attribute(
+			array(
+				'name' => 'Size',
+				'slug' => 'size',
+				'type' => 'select',
+			)
+		);
+		$this->assertIsInt( $attribute_id );
+
+		$taxonomy = wc_attribute_taxonomy_name( 'size' );
+		register_taxonomy( $taxonomy, array( 'product' ), array() );
+		wp_insert_term( 'Large', $taxonomy, array( 'slug' => 'large' ) );
+
+		$data = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/fields/attributes' ) )->get_data();
+
+		$size = null;
+		foreach ( $data['attributes'] as $attribute ) {
+			if ( 'attribute:' . $taxonomy === $attribute['field'] ) {
+				$size = $attribute;
+			}
+		}
+
+		$this->assertNotNull( $size, 'The created attribute should be listed.' );
+		$this->assertSame( 'Size', $size['label'] );
+		$this->assertContains( 'large', array_column( $size['terms'], 'slug' ) );
+
+		// Clean up the global attribute so it does not leak into other tests.
+		wc_delete_attribute( $attribute_id );
+	}
+
 	public function test_endpoint_requires_a_capability(): void {
 		wp_set_current_user( 0 );
 

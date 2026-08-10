@@ -117,6 +117,16 @@ final class Fields_Controller {
 				'permission_callback' => array( $this, 'can_manage' ),
 			)
 		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/fields/attributes',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'attributes' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
 	}
 
 	/**
@@ -206,6 +216,55 @@ final class Fields_Controller {
 		}
 
 		return new WP_REST_Response( array( 'categories' => $categories ) );
+	}
+
+	/**
+	 * The global product attributes and their terms, for the filter's
+	 * attribute/value dropdowns (the M5 reframe: filtering variations by
+	 * size/colour belongs in the filter, CONTEXT §3). Each attribute maps to the
+	 * `attribute:<taxonomy>` filter field the query engine understands; a
+	 * variation matches on its own chosen value, a product on having the term.
+	 */
+	public function attributes(): WP_REST_Response {
+		$attributes = array();
+
+		if ( ! function_exists( 'wc_get_attribute_taxonomies' ) ) {
+			return new WP_REST_Response( array( 'attributes' => $attributes ) );
+		}
+
+		foreach ( wc_get_attribute_taxonomies() as $attribute ) {
+			$taxonomy = wc_attribute_taxonomy_name( $attribute->attribute_name );
+			$terms    = get_terms(
+				array(
+					'taxonomy'   => $taxonomy,
+					'hide_empty' => false,
+					'orderby'    => 'name',
+				)
+			);
+
+			$values = array();
+			if ( is_array( $terms ) ) {
+				foreach ( $terms as $term ) {
+					$values[] = array(
+						'slug' => $term->slug,
+						'name' => $term->name,
+					);
+				}
+			}
+
+			if ( array() === $values ) {
+				continue;
+			}
+
+			$attributes[] = array(
+				'field'    => 'attribute:' . $taxonomy,
+				'taxonomy' => $taxonomy,
+				'label'    => '' !== $attribute->attribute_label ? $attribute->attribute_label : $attribute->attribute_name,
+				'terms'    => $values,
+			);
+		}
+
+		return new WP_REST_Response( array( 'attributes' => $attributes ) );
 	}
 
 	/**

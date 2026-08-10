@@ -6,6 +6,9 @@
  * polls its progress.
  * M3: operation history with undo (drift preview + conflict policy), an audit
  * detail view of a run's recorded changes, and the retention-window setting.
+ * M5: bulk edit gains formula and percentage modes; scheduled/recurring
+ * operations (create from bulk edit, manage in the Schedules list); a
+ * variation-attribute filter.
  *
  * Deliberately rough — functionality first (see project notes); visual polish
  * comes later.
@@ -43,13 +46,73 @@ function stockBadge( status ) {
 /** Statuses at which an operation stops moving and polling can end. */
 const TERMINAL_STATUSES = [ 'completed', 'failed', 'reverted', 'paused' ];
 
-/** Fields the bulk editor can set. `meta` reveals a key input. */
+/** Fields the bulk editor can set. */
 const EDITABLE_FIELDS = [
 	{ key: 'regular_price', label: __( 'Regular price', 'catalogops' ) },
 	{ key: 'sale_price', label: __( 'Sale price', 'catalogops' ) },
 	{ key: 'stock_quantity', label: __( 'Stock quantity', 'catalogops' ) },
 	{ key: 'stock_status', label: __( 'Stock status', 'catalogops' ) },
+	{ key: 'weight', label: __( 'Weight', 'catalogops' ) },
 ];
+
+/**
+ * The numeric fields a formula or percentage change can target, mapped to the
+ * formula variable each reads (the backend whitelist: stock_quantity is `stock`).
+ */
+const NUMERIC_FIELDS = [
+	{
+		key: 'regular_price',
+		variable: 'regular_price',
+		label: __( 'Regular price', 'catalogops' ),
+	},
+	{
+		key: 'sale_price',
+		variable: 'sale_price',
+		label: __( 'Sale price', 'catalogops' ),
+	},
+	{
+		key: 'stock_quantity',
+		variable: 'stock',
+		label: __( 'Stock quantity', 'catalogops' ),
+	},
+	{ key: 'weight', variable: 'weight', label: __( 'Weight', 'catalogops' ) },
+];
+
+/**
+ * The formula variable a numeric field key reads under.
+ *
+ * @param {string} key A numeric field key (e.g. stock_quantity).
+ * @return {string} The formula variable name (e.g. stock).
+ */
+const fieldVariable = ( key ) =>
+	( NUMERIC_FIELDS.find( ( f ) => f.key === key ) || {} ).variable || key;
+
+/** A short, human hint of what a formula may reference. */
+const FORMULA_HELP = __(
+	'Variables: regular_price, sale_price, stock, weight, cost. Functions: round, ceil, floor, roundto, min, max, abs. Empty fields are skipped, never set to 0.',
+	'catalogops'
+);
+
+/** The recurrence presets a schedule can use (mirrors the Recurrence enum). */
+const RECURRENCES = [
+	{ value: 'once', label: __( 'Once', 'catalogops' ) },
+	{ value: 'hourly', label: __( 'Hourly', 'catalogops' ) },
+	{ value: 'daily', label: __( 'Daily', 'catalogops' ) },
+	{ value: 'weekly', label: __( 'Weekly', 'catalogops' ) },
+	{ value: 'monthly', label: __( 'Monthly', 'catalogops' ) },
+];
+
+/**
+ * Build the percentage-change factor as a clean decimal string, so a "-10%"
+ * becomes the formula `<field> * 0.9` with no floating-point noise in the text.
+ *
+ * @param {number|string} percent The percentage delta (e.g. -10 or 15).
+ * @return {string} The multiplier as a trimmed decimal string.
+ */
+function percentFactor( percent ) {
+	const factor = 1 + Number( percent ) / 100;
+	return String( Number( factor.toFixed( 6 ) ) );
+}
 
 const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
 
@@ -105,6 +168,13 @@ function buildFilter( form, scope, brandField ) {
 			field: brandField,
 			operator: '=',
 			value: form.brand,
+		} );
+	}
+	if ( form.attribute && form.attributeValue ) {
+		conditions.push( {
+			field: form.attribute,
+			operator: '=',
+			value: form.attributeValue,
 		} );
 	}
 
@@ -181,19 +251,69 @@ function ProgressBar( { op } ) {
  * The bulk-edit panel: pick a field and value, preview the change over the
  * current filter, then apply it and watch progress.
  *
- * @param {Object}   props        Component props.
- * @param {Object}   props.filter The current filter payload.
- * @param {Function} props.onDone Called when an operation finishes (to refresh).
+ * @param {Object}   props                   Component props.
+ * @param {Object}   props.filter            The current filter payload.
+ * @param {Function} props.onDone            Called when an operation finishes (to refresh).
+ * @param {Function} props.onScheduleCreated Called after a schedule is created.
  */
-function BulkEdit( { filter, onDone } ) {
+function BulkEdit( { filter, onDone, onScheduleCreated } ) {
+	const [ mode, setMode ] = useState( 'set' );
 	const [ field, setField ] = useState( 'regular_price' );
 	const [ value, setValue ] = useState( '' );
+	const [ expression, setExpression ] = useState( '' );
+	const [ percent, setPercent ] = useState( '' );
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
 	const [ busy, setBusy ] = useState( false );
 
-	const buildActions = () => [ { type: 'set', field, value } ];
+	// Scheduling: the same filter + action, deferred and possibly recurring.
+	const [ showSchedule, setShowSchedule ] = useState( false );
+	const [ name, setName ] = useState( '' );
+	const [ recurrence, setRecurrence ] = useState( 'once' );
+	const [ startsAt, setStartsAt ] = useState( '' );
+	const [ notifyEmail, setNotifyEmail ] = useState( '' );
+	const [ scheduleMsg, setScheduleMsg ] = useState( '' );
+
+	// Percentage change is expressed as a formula, so it flows through the exact
+	// same action path (and preview/skip semantics) as a typed formula.
+	const percentExpression =
+		percent === '' || Number.isNaN( Number( percent ) )
+			? ''
+			: `${ fieldVariable( field ) } * ${ percentFactor( percent ) }`;
+
+	const buildActions = () => {
+		if ( mode === 'formula' ) {
+			return [ { type: 'formula', field, expression } ];
+		}
+		if ( mode === 'percent' ) {
+			return [
+				{ type: 'formula', field, expression: percentExpression },
+			];
+		}
+		return [ { type: 'set', field, value } ];
+	};
+
+	// Whether the current inputs form a runnable action.
+	const ready =
+		( mode === 'set' && value !== '' ) ||
+		( mode === 'formula' && expression.trim() !== '' ) ||
+		( mode === 'percent' && percentExpression !== '' );
+
+	// Switching to a numeric-only mode off a non-numeric field (stock_status)
+	// falls back to a sensible numeric field.
+	const changeMode = ( next ) => {
+		setMode( next );
+		setPreview( null );
+		if (
+			next !== 'set' &&
+			! NUMERIC_FIELDS.some( ( f ) => f.key === field )
+		) {
+			setField( 'regular_price' );
+		}
+	};
+
+	const fieldOptions = mode === 'set' ? EDITABLE_FIELDS : NUMERIC_FIELDS;
 
 	useOperationPoll( operation, setOperation, onDone );
 
@@ -232,6 +352,32 @@ function BulkEdit( { filter, onDone } ) {
 			.finally( () => setBusy( false ) );
 	};
 
+	const createSchedule = () => {
+		setBusy( true );
+		setError( '' );
+		setScheduleMsg( '' );
+		apiFetch( {
+			path: '/catalogops/v1/schedules',
+			method: 'POST',
+			data: {
+				name,
+				filter,
+				actions: buildActions(),
+				recurrence,
+				starts_at: startsAt,
+				notify_email: notifyEmail,
+			},
+		} )
+			.then( () => {
+				setScheduleMsg( __( 'Schedule created.', 'catalogops' ) );
+				if ( onScheduleCreated ) {
+					onScheduleCreated();
+				}
+			} )
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusy( false ) );
+	};
+
 	const running = operation && ! isTerminal( operation );
 
 	return (
@@ -239,73 +385,240 @@ function BulkEdit( { filter, onDone } ) {
 			<h2>{ __( 'Bulk edit', 'catalogops' ) }</h2>
 			<p className="description">
 				{ __(
-					'Sets the chosen field to this exact value for every item in the filter above — it overwrites whatever they hold now (no percentages or formulas yet). Use Preview to see old → new; nothing is written until you Apply.',
+					'Change a field for every item in the filter above. Preview shows old → new; nothing is written until you Apply. You can also schedule it to run later or on a recurring basis.',
 					'catalogops'
 				) }
 			</p>
 
+			<div className="catalogops-segmented" role="group">
+				<button
+					type="button"
+					className={ `catalogops-segmented__btn${
+						mode === 'set' ? ' is-active' : ''
+					}` }
+					onClick={ () => changeMode( 'set' ) }
+				>
+					{ __( 'Set to', 'catalogops' ) }
+				</button>
+				<button
+					type="button"
+					className={ `catalogops-segmented__btn${
+						mode === 'percent' ? ' is-active' : ''
+					}` }
+					onClick={ () => changeMode( 'percent' ) }
+				>
+					{ __( 'Percent', 'catalogops' ) }
+				</button>
+				<button
+					type="button"
+					className={ `catalogops-segmented__btn${
+						mode === 'formula' ? ' is-active' : ''
+					}` }
+					onClick={ () => changeMode( 'formula' ) }
+				>
+					{ __( 'Formula', 'catalogops' ) }
+				</button>
+			</div>
+
 			<div className="catalogops-bulk-controls">
 				<label htmlFor="catalogops-field">
-					{ __( 'Set field', 'catalogops' ) }
+					{ __( 'Field', 'catalogops' ) }
 				</label>
 				<select
 					id="catalogops-field"
 					value={ field }
 					onChange={ ( e ) => setField( e.target.value ) }
 				>
-					{ EDITABLE_FIELDS.map( ( f ) => (
+					{ fieldOptions.map( ( f ) => (
 						<option key={ f.key } value={ f.key }>
 							{ f.label }
 						</option>
 					) ) }
 				</select>
 
-				<label htmlFor="catalogops-value">
-					{ __( 'to', 'catalogops' ) }
-				</label>
-				{ field === 'stock_status' ? (
-					<select
-						id="catalogops-value"
-						value={ value }
-						onChange={ ( e ) => setValue( e.target.value ) }
-					>
-						<option value="">
-							{ __( 'Choose…', 'catalogops' ) }
-						</option>
-						<option value="instock">
-							{ __( 'In stock', 'catalogops' ) }
-						</option>
-						<option value="outofstock">
-							{ __( 'Out of stock', 'catalogops' ) }
-						</option>
-						<option value="onbackorder">
-							{ __( 'On backorder', 'catalogops' ) }
-						</option>
-					</select>
-				) : (
-					<input
-						id="catalogops-value"
-						type="text"
-						value={ value }
-						onChange={ ( e ) => setValue( e.target.value ) }
-					/>
+				{ mode === 'set' && (
+					<>
+						<label htmlFor="catalogops-value">
+							{ __( 'to', 'catalogops' ) }
+						</label>
+						{ field === 'stock_status' ? (
+							<select
+								id="catalogops-value"
+								value={ value }
+								onChange={ ( e ) => setValue( e.target.value ) }
+							>
+								<option value="">
+									{ __( 'Choose…', 'catalogops' ) }
+								</option>
+								<option value="instock">
+									{ __( 'In stock', 'catalogops' ) }
+								</option>
+								<option value="outofstock">
+									{ __( 'Out of stock', 'catalogops' ) }
+								</option>
+								<option value="onbackorder">
+									{ __( 'On backorder', 'catalogops' ) }
+								</option>
+							</select>
+						) : (
+							<input
+								id="catalogops-value"
+								type="text"
+								value={ value }
+								onChange={ ( e ) => setValue( e.target.value ) }
+							/>
+						) }
+					</>
+				) }
+
+				{ mode === 'percent' && (
+					<>
+						<label htmlFor="catalogops-percent">
+							{ __( 'by', 'catalogops' ) }
+						</label>
+						<input
+							id="catalogops-percent"
+							className="small-text"
+							type="number"
+							step="any"
+							value={ percent }
+							onChange={ ( e ) => setPercent( e.target.value ) }
+						/>
+						<span>{ __( '%', 'catalogops' ) }</span>
+					</>
+				) }
+
+				{ mode === 'formula' && (
+					<>
+						<label htmlFor="catalogops-expression">
+							{ __( '=', 'catalogops' ) }
+						</label>
+						<input
+							id="catalogops-expression"
+							className="catalogops-formula-input"
+							type="text"
+							placeholder="roundto( cost * 1.35, 0.99 )"
+							value={ expression }
+							onChange={ ( e ) =>
+								setExpression( e.target.value )
+							}
+						/>
+					</>
 				) }
 
 				<button
 					className="button"
 					onClick={ runPreview }
-					disabled={ busy || running }
+					disabled={ busy || running || ! ready }
 				>
 					{ __( 'Preview', 'catalogops' ) }
 				</button>
 				<button
 					className="button button-primary"
 					onClick={ runApply }
-					disabled={ busy || running || value === '' }
+					disabled={ busy || running || ! ready }
 				>
 					{ __( 'Apply', 'catalogops' ) }
 				</button>
 			</div>
+
+			{ ( mode === 'formula' || mode === 'percent' ) && (
+				<p className="description catalogops-formula-help">
+					{ mode === 'percent' && percentExpression
+						? sprintf(
+								/* translators: %s: the generated formula. */
+								__( 'Applies: %s', 'catalogops' ),
+								percentExpression
+						  ) + '. '
+						: '' }
+					{ FORMULA_HELP }
+				</p>
+			) }
+
+			<p>
+				<button
+					type="button"
+					className="button-link"
+					onClick={ () => setShowSchedule( ! showSchedule ) }
+				>
+					{ showSchedule
+						? __( 'Hide scheduling', 'catalogops' )
+						: __( 'Schedule instead…', 'catalogops' ) }
+				</button>
+			</p>
+
+			{ showSchedule && (
+				<div className="catalogops-schedule-form">
+					<div className="catalogops-bulk-controls">
+						<label htmlFor="catalogops-sched-name">
+							{ __( 'Name', 'catalogops' ) }
+						</label>
+						<input
+							id="catalogops-sched-name"
+							type="text"
+							value={ name }
+							onChange={ ( e ) => setName( e.target.value ) }
+						/>
+
+						<label htmlFor="catalogops-sched-recur">
+							{ __( 'Repeat', 'catalogops' ) }
+						</label>
+						<select
+							id="catalogops-sched-recur"
+							value={ recurrence }
+							onChange={ ( e ) =>
+								setRecurrence( e.target.value )
+							}
+						>
+							{ RECURRENCES.map( ( r ) => (
+								<option key={ r.value } value={ r.value }>
+									{ r.label }
+								</option>
+							) ) }
+						</select>
+
+						<label htmlFor="catalogops-sched-start">
+							{ __( 'Start', 'catalogops' ) }
+						</label>
+						<input
+							id="catalogops-sched-start"
+							type="datetime-local"
+							value={ startsAt }
+							onChange={ ( e ) => setStartsAt( e.target.value ) }
+						/>
+
+						<label htmlFor="catalogops-sched-email">
+							{ __( 'Email report to', 'catalogops' ) }
+						</label>
+						<input
+							id="catalogops-sched-email"
+							type="email"
+							placeholder={ __( 'site admin', 'catalogops' ) }
+							value={ notifyEmail }
+							onChange={ ( e ) =>
+								setNotifyEmail( e.target.value )
+							}
+						/>
+
+						<button
+							className="button"
+							onClick={ createSchedule }
+							disabled={ busy || ! ready }
+						>
+							{ __( 'Create schedule', 'catalogops' ) }
+						</button>
+					</div>
+					<p className="description">
+						{ __(
+							'The filter is re-evaluated each time it runs, so a recurring schedule always acts on whatever matches then. Leave Start empty to run at the next opportunity.',
+							'catalogops'
+						) }
+					</p>
+					{ scheduleMsg && (
+						<p className="catalogops-saved">{ scheduleMsg }</p>
+					) }
+				</div>
+			) }
 
 			{ error && (
 				<div className="notice notice-error">
@@ -922,6 +1235,159 @@ function RetentionSetting() {
 	);
 }
 
+/**
+ * The list of scheduled operations, with pause/resume, run-now, and delete.
+ *
+ * @param {Object}   props            Component props.
+ * @param {number}   props.refreshKey Bumping this reloads the list.
+ * @param {Function} props.onRan      Called after a run-now, to refresh history.
+ */
+function Schedules( { refreshKey, onRan } ) {
+	const [ items, setItems ] = useState( [] );
+	const [ error, setError ] = useState( '' );
+	const [ localKey, setLocalKey ] = useState( 0 );
+
+	useEffect( () => {
+		apiFetch( { path: '/catalogops/v1/schedules' } )
+			.then( ( res ) => setItems( res.items ) )
+			.catch( ( err ) => setError( err.message ) );
+	}, [ refreshKey, localKey ] );
+
+	const reload = () => setLocalKey( ( k ) => k + 1 );
+
+	const act = ( id, verb ) => {
+		setError( '' );
+		apiFetch( {
+			path: `/catalogops/v1/schedules/${ id }/${ verb }`,
+			method: 'POST',
+		} )
+			.then( () => {
+				reload();
+				if ( verb === 'run' && onRan ) {
+					onRan();
+				}
+			} )
+			.catch( ( err ) => setError( err.message ) );
+	};
+
+	const remove = ( id ) => {
+		// eslint-disable-next-line no-alert
+		if ( ! window.confirm( __( 'Delete this schedule?', 'catalogops' ) ) ) {
+			return;
+		}
+		setError( '' );
+		apiFetch( {
+			path: `/catalogops/v1/schedules/${ id }`,
+			method: 'DELETE',
+		} )
+			.then( reload )
+			.catch( ( err ) => setError( err.message ) );
+	};
+
+	return (
+		<div className="catalogops-card catalogops-schedules">
+			<h2>{ __( 'Schedules', 'catalogops' ) }</h2>
+			<p className="description">
+				{ __(
+					'Operations set to run later or on a recurring basis. Create one from the Bulk edit panel above (“Schedule instead…”). A completion report is emailed for each run.',
+					'catalogops'
+				) }
+			</p>
+
+			{ error && (
+				<div className="notice notice-error">
+					<p>{ error }</p>
+				</div>
+			) }
+
+			<table className="wp-list-table widefat fixed striped">
+				<thead>
+					<tr>
+						<th>{ __( 'Name', 'catalogops' ) }</th>
+						<th>{ __( 'Repeat', 'catalogops' ) }</th>
+						<th>{ __( 'Status', 'catalogops' ) }</th>
+						<th>{ __( 'Next run', 'catalogops' ) }</th>
+						<th>{ __( 'Last run', 'catalogops' ) }</th>
+						<th>{ __( 'Actions', 'catalogops' ) }</th>
+					</tr>
+				</thead>
+				<tbody>
+					{ items.length === 0 ? (
+						<tr className="catalogops-empty">
+							<td colSpan="6">
+								{ __( 'No schedules yet.', 'catalogops' ) }
+							</td>
+						</tr>
+					) : (
+						items.map( ( s ) => (
+							<tr key={ s.id }>
+								<td>{ s.name || `#${ s.id }` }</td>
+								<td>{ s.recurrence }</td>
+								<td>
+									<span
+										className={ `catalogops-badge catalogops-status-badge is-${ s.status }` }
+									>
+										{ s.status }
+									</span>
+								</td>
+								<td>
+									{ s.status === 'completed'
+										? '—'
+										: s.next_run }
+								</td>
+								<td>{ s.last_run || '—' }</td>
+								<td>
+									<div className="catalogops-actions">
+										<button
+											className="button button-small"
+											onClick={ () => act( s.id, 'run' ) }
+											disabled={
+												s.status === 'completed'
+											}
+										>
+											{ __( 'Run now', 'catalogops' ) }
+										</button>
+										{ s.status === 'active' ? (
+											<button
+												className="button button-small"
+												onClick={ () =>
+													act( s.id, 'pause' )
+												}
+											>
+												{ __( 'Pause', 'catalogops' ) }
+											</button>
+										) : (
+											s.status === 'paused' && (
+												<button
+													className="button button-small"
+													onClick={ () =>
+														act( s.id, 'resume' )
+													}
+												>
+													{ __(
+														'Resume',
+														'catalogops'
+													) }
+												</button>
+											)
+										) }
+										<button
+											className="button button-small button-link-delete"
+											onClick={ () => remove( s.id ) }
+										>
+											{ __( 'Delete', 'catalogops' ) }
+										</button>
+									</div>
+								</td>
+							</tr>
+						) )
+					) }
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
 function App() {
 	const [ form, setForm ] = useState( {
 		priceMin: '',
@@ -930,6 +1396,8 @@ function App() {
 		sku: '',
 		category: '',
 		brand: '',
+		attribute: '',
+		attributeValue: '',
 	} );
 	const [ items, setItems ] = useState( [] );
 	const [ total, setTotal ] = useState( 0 );
@@ -942,6 +1410,9 @@ function App() {
 	const [ categories, setCategories ] = useState( [] );
 	const [ brands, setBrands ] = useState( [] );
 	const [ brandField, setBrandField ] = useState( '' );
+	const [ attributes, setAttributes ] = useState( [] );
+	// Bumped whenever a schedule is created or acted on, to reload the list.
+	const [ schedulesKey, setSchedulesKey ] = useState( 0 );
 	// Whether the filter, table, and bulk edit target parent products or their
 	// variations (CONTEXT §4).
 	const [ scope, setScope ] = useState( 'product' );
@@ -973,7 +1444,15 @@ function App() {
 				setBrandField( res.field || '' );
 			} )
 			.catch( () => {} );
+		apiFetch( { path: '/catalogops/v1/fields/attributes' } )
+			.then( ( res ) => setAttributes( res.attributes || [] ) )
+			.catch( () => {} );
 	}, [] );
+
+	// The terms of the currently-selected attribute, for the value dropdown.
+	const selectedAttribute = attributes.find(
+		( a ) => a.field === form.attribute
+	);
 
 	const run = useCallback(
 		( toPage ) => {
@@ -1137,6 +1616,68 @@ function App() {
 								) ) }
 							</select>
 
+							{ attributes.length > 0 && (
+								<>
+									<label htmlFor="catalogops-attribute">
+										{ __( 'Attribute', 'catalogops' ) }
+									</label>
+									<select
+										id="catalogops-attribute"
+										value={ form.attribute }
+										onChange={ ( e ) =>
+											setForm( {
+												...form,
+												attribute: e.target.value,
+												attributeValue: '',
+											} )
+										}
+									>
+										<option value="">
+											{ __( 'Any', 'catalogops' ) }
+										</option>
+										{ attributes.map( ( a ) => (
+											<option
+												key={ a.field }
+												value={ a.field }
+											>
+												{ a.label }
+											</option>
+										) ) }
+									</select>
+
+									{ selectedAttribute && (
+										<select
+											id="catalogops-attribute-value"
+											aria-label={ __(
+												'Attribute value',
+												'catalogops'
+											) }
+											value={ form.attributeValue }
+											onChange={ update(
+												'attributeValue'
+											) }
+										>
+											<option value="">
+												{ __(
+													'Any value',
+													'catalogops'
+												) }
+											</option>
+											{ selectedAttribute.terms.map(
+												( t ) => (
+													<option
+														key={ t.slug }
+														value={ t.slug }
+													>
+														{ t.name }
+													</option>
+												)
+											) }
+										</select>
+									) }
+								</>
+							) }
+
 							<button
 								className="button button-primary"
 								onClick={ () => run( 1 ) }
@@ -1284,7 +1825,13 @@ function App() {
 				</div>
 			</div>
 
-			<BulkEdit filter={ appliedFilter } onDone={ refreshAll } />
+			<BulkEdit
+				filter={ appliedFilter }
+				onDone={ refreshAll }
+				onScheduleCreated={ () => setSchedulesKey( ( k ) => k + 1 ) }
+			/>
+
+			<Schedules refreshKey={ schedulesKey } onRan={ refreshAll } />
 
 			<History refreshKey={ historyKey } onChanged={ refreshAll } />
 
