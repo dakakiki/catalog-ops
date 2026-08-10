@@ -22,6 +22,7 @@ import {
 	useRef,
 } from '@wordpress/element';
 import apiFetch from '@wordpress/api-fetch';
+import { FormTokenField } from '@wordpress/components';
 import { __, sprintf } from '@wordpress/i18n';
 import './style.css';
 
@@ -115,6 +116,44 @@ function percentFactor( percent ) {
 }
 
 const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
+
+/**
+ * A WordPress token-field multiselect bound to an array of ids.
+ *
+ * {@link FormTokenField} works in label strings; this wraps it so the caller
+ * keeps working with ids (what the filter sends). Unknown tokens are dropped, so
+ * only real options end up selected.
+ *
+ * @param {Object}   props          Component props.
+ * @param {string}   props.label    Field label.
+ * @param {Array}    props.options  Selectable options as { id, name }.
+ * @param {string[]} props.value    Currently-selected ids.
+ * @param {Function} props.onChange Called with the new array of id strings.
+ */
+function TokenSelect( { label, options, value, onChange } ) {
+	const nameById = {};
+	const idByName = {};
+	options.forEach( ( o ) => {
+		nameById[ o.id ] = o.name;
+		idByName[ o.name ] = String( o.id );
+	} );
+
+	return (
+		<FormTokenField
+			label={ label }
+			value={ value.map( ( id ) => nameById[ id ] ).filter( Boolean ) }
+			suggestions={ options.map( ( o ) => o.name ) }
+			onChange={ ( tokens ) =>
+				onChange(
+					tokens.map( ( name ) => idByName[ name ] ).filter( Boolean )
+				)
+			}
+			__experimentalExpandOnFocus
+			__nextHasNoMarginBottom
+			__next40pxDefaultSize
+		/>
+	);
+}
 
 /**
  * Build the filter payload from the form state and target scope.
@@ -1507,15 +1546,6 @@ function App() {
 	const pages = Math.max( 1, Math.ceil( total / PER_PAGE ) );
 	const update = ( key ) => ( event ) =>
 		setForm( { ...form, [ key ]: event.target.value } );
-	// Collect every selected option of a <select multiple> into an array.
-	const multiUpdate = ( key ) => ( event ) =>
-		setForm( {
-			...form,
-			[ key ]: Array.from(
-				event.target.selectedOptions,
-				( o ) => o.value
-			),
-		} );
 
 	return (
 		<div className="catalogops">
@@ -1597,42 +1627,33 @@ function App() {
 								</option>
 							</select>
 
-							<label htmlFor="catalogops-category">
-								{ __( 'Category', 'catalogops' ) }
-							</label>
-							<select
-								id="catalogops-category"
-								multiple
-								size="4"
-								value={ form.category }
-								onChange={ multiUpdate( 'category' ) }
-							>
-								{ categories.map( ( c ) => (
-									<option
-										key={ c.id }
-										value={ String( c.id ) }
-									>
-										{ c.name }
-									</option>
-								) ) }
-							</select>
+							<div className="catalogops-token">
+								<TokenSelect
+									label={ __( 'Category', 'catalogops' ) }
+									options={ categories }
+									value={ form.category }
+									onChange={ ( ids ) =>
+										setForm( {
+											...form,
+											category: ids,
+										} )
+									}
+								/>
+							</div>
 
-							<label htmlFor="catalogops-brand">
-								{ __( 'Brand', 'catalogops' ) }
-							</label>
-							<select
-								id="catalogops-brand"
-								multiple
-								size="4"
-								value={ form.brand }
-								onChange={ multiUpdate( 'brand' ) }
-							>
-								{ brands.map( ( b ) => (
-									<option key={ b } value={ b }>
-										{ b }
-									</option>
-								) ) }
-							</select>
+							<div className="catalogops-token">
+								<TokenSelect
+									label={ __( 'Brand', 'catalogops' ) }
+									options={ brands.map( ( b ) => ( {
+										id: b,
+										name: b,
+									} ) ) }
+									value={ form.brand }
+									onChange={ ( ids ) =>
+										setForm( { ...form, brand: ids } )
+									}
+								/>
+							</div>
 
 							{ attributes.length > 0 && (
 								<>
@@ -1664,30 +1685,24 @@ function App() {
 									</select>
 
 									{ selectedAttribute && (
-										<select
-											id="catalogops-attribute-value"
-											multiple
-											size="4"
-											aria-label={ __(
-												'Attribute values (none = any value)',
-												'catalogops'
-											) }
-											value={ form.attributeValues }
-											onChange={ multiUpdate(
-												'attributeValues'
-											) }
-										>
-											{ selectedAttribute.terms.map(
-												( t ) => (
-													<option
-														key={ t.id }
-														value={ String( t.id ) }
-													>
-														{ t.name }
-													</option>
-												)
-											) }
-										</select>
+										<div className="catalogops-token">
+											<TokenSelect
+												label={ __(
+													'Values (any if empty)',
+													'catalogops'
+												) }
+												options={
+													selectedAttribute.terms
+												}
+												value={ form.attributeValues }
+												onChange={ ( ids ) =>
+													setForm( {
+														...form,
+														attributeValues: ids,
+													} )
+												}
+											/>
+										</div>
 									) }
 								</>
 							) }

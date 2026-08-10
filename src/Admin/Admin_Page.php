@@ -80,8 +80,11 @@ final class Admin_Page {
 		wp_enqueue_script( 'catalogops-admin', $url . 'admin.js', $meta['dependencies'], $meta['version'], true );
 
 		// wp-scripts extracts styles imported from the entry to `style-admin.css`.
+		// Depend on wp-components so the FormTokenField controls in the filter get
+		// their WordPress styling (the script dependency is added automatically via
+		// the import; the stylesheet is not, so it is named here).
 		if ( file_exists( $base . 'style-admin.css' ) ) {
-			wp_enqueue_style( 'catalogops-admin', $url . 'style-admin.css', array(), $meta['version'] );
+			wp_enqueue_style( 'catalogops-admin', $url . 'style-admin.css', array( 'wp-components' ), $meta['version'] );
 			wp_style_add_data( 'catalogops-admin', 'rtl', 'replace' );
 		}
 
