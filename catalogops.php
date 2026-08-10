@@ -3,7 +3,7 @@
  * Plugin Name:       CatalogOps
  * Plugin URI:        https://github.com/dakakiki/catalog-ops
  * Description:       Bulk operations for large WooCommerce catalogs — filter, preview, snapshot, execute, undo.
- * Version:           0.0.1
+ * Version:           0.6.0
  * Requires PHP:      8.1
  * Requires at least: 6.0
  * Requires Plugins:  woocommerce
@@ -17,7 +17,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CATALOGOPS_VERSION', '0.0.1' );
+define( 'CATALOGOPS_VERSION', '0.6.0' );
 define( 'CATALOGOPS_MIN_PHP', '8.1' );
 define( 'CATALOGOPS_FILE', __FILE__ );
 define( 'CATALOGOPS_PATH', plugin_dir_path( __FILE__ ) );

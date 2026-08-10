@@ -379,26 +379,18 @@ catalogops/
 | 4 | Fast režim | **v1.1**, ne v1.0 — udvostručuje površinu za bugove tačno u fazi izgradnje reputacije |
 | 5 | Retencija delta zapisa | **30 dana**, podesivo 7–180 |
 | 6 | ACF/WPML moduli | **Uključeni u Studio i više.** Solo dobija samo core providere — logičan razlog za nadogradnju |
-| 7 | Ime proizvoda i domen | **OTVORENO.** Kandidati: BulkForge, CatalogKit, Massfold, StockPilot, Reforge. `CatalogOps` ostaje interni naziv. Rok: pre M6 |
+| 7 | Ime proizvoda i domen | **ZATVORENO (2026-08-10).** Zadržan **CatalogOps** i kao javni naziv — nulti rizik preimenovanja (slug/text-domain/tabele/hukovi ostaju `catalogops`), bez pronađene kolizije. StockPilot i Reforge otpali kao zauzeti; BulkForge/CatalogKit/Massfold čisti ali odbačeni u korist već ugrađenog imena. Domen/trademark potvrditi pre wp.org submisije (nedelja 18). |
 
 ---
 
 ## 8. Trenutni status
 
-**Faza: M0 — okruženje i repo gotovi, kod nije počet.**
+**Faza: M6 u toku (v0.6.0).** M0–M5 gotovi i verifikovani; DoD svake faze ispunjen pre sledeće.
 
-Urađeno: WAMP verifikovan, WooCommerce i Query Monitor aktivni, simlink radi, CA bundle rešen, Xdebug isključen, Git repo povezan i push-ovan.
+- **M0–M5** — skelet/DI/migracije/seed; query engine; write engine (Action Scheduler, snapshot, watchdog); undo/drift/konflikt/audit/retencija; varijacije prvoklasne; formule (shunting-yard) + zakazane/ponavljajuće operacije + obaveštenja. Živa baza: 68.246 proizvoda + 50.000 varijacija.
+- **M6 (go-to-market)** — urađeno: multisite (network aktivacija, per-site schema, `uninstall.php`); onboarding (prvi-put tur + obavezni backup podsetnik, §9) — DoD dokazan uživo; i18n (text-domain + `wp_set_script_translations`, `.pot`, srpski starter) — round-trip dokazan uživo; dokumentacija (`readme.txt`, USER-GUIDE, README); MySQL 8.0 EXPLAIN harness (`docker/mysql8/`) napisan — pokretanje čeka Docker. **Odloženo za posle:** Freemius licenciranje + auto-update (čeka Freemius nalog/ključeve; §5/§7 #3 kanal ostaje Freemius).
 
-Postoji samo `catalogops.php` sa plugin header-om (v0.0.1, aktivan u WP-u). **Nijedna linija funkcionalnog koda.**
-
-### Sledeći koraci
-
-1. `composer.json` + bootstrap + PSR-4 skelet + DI kontejner
-2. `Schema.php` i migracije — obe tabele iz sekcije 3
-3. WP-CLI komanda `catalogops seed` — generator test kataloga (500 / 5.000 / 50.000)
-4. Podići `innodb_buffer_pool_size` pre prvog merenja
-
-Tek nakon toga M1 — bez 50.000 proizvoda u bazi nemamo na čemu da merimo.
+Istorija po fazama je u git-u i u agentskoj memoriji; ovaj odeljak drži samo tekući presek.
 
 ### Repozitorijum — POVEZAN ✅
 
