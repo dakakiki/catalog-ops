@@ -43,9 +43,31 @@ final class Admin_Page {
 			self::CAPABILITY,
 			self::MENU_SLUG,
 			array( $this, 'render' ),
-			'dashicons-editor-table',
+			$this->menu_icon(),
 			56
 		);
+
+		// The icon is a white badge; WordPress dims an inactive menu icon to ~0.6,
+		// which would grey it out. One rule keeps it crisp in every state.
+		add_action( 'admin_head', array( $this, 'print_menu_icon_style' ) );
+	}
+
+	/**
+	 * The admin-menu icon: a black-and-white version of the brand "layers" mark,
+	 * shipped as a static SVG file (assets/menu-icon.svg). A linked file renders its
+	 * colours exactly as authored — the solid dark top layer survives admin
+	 * environments that recolour inline data-URI menu-icon fills.
+	 */
+	private function menu_icon(): string {
+		return plugins_url( 'assets/menu-icon.svg', $this->plugin_file );
+	}
+
+	/**
+	 * Keep the white brand badge at full opacity whether or not CatalogOps is the
+	 * current screen. Hooked to admin_head from {@see register_menu()}.
+	 */
+	public function print_menu_icon_style(): void {
+		echo '<style id="catalogops-menu-icon">#adminmenu #toplevel_page_' . esc_attr( self::MENU_SLUG ) . ' .wp-menu-image img{opacity:1;display:block;box-sizing:content-box;padding:7px 0;margin:0 auto}</style>';
 	}
 
 	/**
