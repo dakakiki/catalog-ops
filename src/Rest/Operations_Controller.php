@@ -418,6 +418,7 @@ final class Operations_Controller {
 			array(
 				'items'  => $rows,
 				'counts' => $this->changes->counts( $id ),
+				'total'  => $this->changes->count_page( $id, $object_id, $sku ),
 				'page'   => $page,
 			)
 		);

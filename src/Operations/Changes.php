@@ -260,6 +260,46 @@ final class Changes {
 	}
 
 	/**
+	 * Count the changes matching a {@see page()} filter (operation + optional
+	 * object / SKU) — the total the audit pager needs to show "page X of Y".
+	 *
+	 * @param int    $operation_id Operation id.
+	 * @param int    $object_id    When > 0, only this object's rows.
+	 * @param string $sku          When non-empty, the SKU substring filter.
+	 */
+	public function count_page( int $operation_id, int $object_id = 0, string $sku = '' ): int {
+		$table = $this->schema->changes_table();
+
+		$where = 'operation_id = %d';
+		$args  = array( $operation_id );
+		if ( $object_id > 0 ) {
+			$where .= ' AND object_id = %d';
+			$args[] = $object_id;
+		}
+		if ( '' !== $sku ) {
+			$lookup = $this->wpdb->prefix . 'wc_product_meta_lookup';
+			$posts  = $this->wpdb->posts;
+			$like   = '%' . $this->wpdb->esc_like( $sku ) . '%';
+			$where .= " AND object_id IN (
+				SELECT product_id FROM {$lookup} WHERE sku LIKE %s
+				UNION
+				SELECT p.ID FROM {$posts} p INNER JOIN {$lookup} pl ON pl.product_id = p.post_parent WHERE pl.sku LIKE %s
+			)";
+			$args[] = $like;
+			$args[] = $like;
+		}
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		return (int) $this->wpdb->get_var(
+			$this->wpdb->prepare(
+				"SELECT COUNT(*) FROM {$table} WHERE {$where}",
+				...$args
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	}
+
+	/**
 	 * The next slice of still-pending rows for an operation, in frozen order
 	 * (by object, then by seed order) so an object's fields stay together.
 	 *
