@@ -1,27 +1,78 @@
 /**
  * CatalogOps admin styles.
  *
- * A light pass over the functionality-first app: sections become cards, the
- * scope control becomes a segmented switch, tables read cleaner (right-aligned
- * numbers, status/stock badges), and progress/undo get status colour. Palette
- * follows the WordPress admin (blue #2271b1, green #1a7f37, red #d63638,
- * amber #dba617) so it sits natively in wp-admin.
+ * The brand accent is indigo — distinct from the WordPress admin blue so
+ * CatalogOps reads as a product, not just a plugin — while status colours
+ * (green/red/amber) and the overall wp-admin structure stay native. Sections
+ * are cards, the scope control is a segmented switch, tables read cleaner
+ * (right-aligned numbers, status/stock badges), and progress/undo get colour.
  */
 
 .catalogops {
 	--co-border: #dcdcde;
 	--co-border-strong: #c3c4c7;
 	--co-muted: #646970;
-	--co-blue: #2271b1;
+	--co-ink: #1d2327;
+	/* Brand accent — indigo. */
+	--co-accent: #4338ca;        /* indigo-700 */
+	--co-accent-hover: #3730a3;  /* indigo-800 */
+	--co-accent-tint: #eef2ff;   /* indigo-50 — accent surfaces */
+	--co-accent-border: #c7d2fe; /* indigo-200 */
+	/* Legacy alias: existing accent rules retheme to indigo through this. */
+	--co-blue: var(--co-accent);
 	--co-green: #1a7f37;
 	--co-red: #d63638;
 	--co-amber: #bd8600;
+	--co-tint: #f6f7f7;
 	--co-control-h: 30px;
 	max-width: 1180px;
 }
 
 .catalogops h1 {
 	margin-bottom: 16px;
+}
+
+/* --- Brand header ------------------------------------------------------ */
+
+.catalogops-brand {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 4px 0 18px;
+}
+
+.catalogops-brand__mark {
+	flex: 0 0 auto;
+	width: 40px;
+	height: 40px;
+	border-radius: 9px;
+	box-shadow: 0 2px 6px rgba( 67, 56, 202, 0.28 );
+}
+
+.catalogops-brand__text {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.15;
+}
+
+.catalogops-brand__name {
+	font-size: 21px;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	color: var(--co-ink);
+}
+
+.catalogops-brand__name b {
+	font-weight: 700;
+	color: var(--co-accent);
+}
+
+.catalogops-brand__tag {
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: var(--co-muted);
 }
 
 /* --- Cards -------------------------------------------------------------- */
@@ -161,6 +212,7 @@
 }
 
 .catalogops-field > label,
+.catalogops-field > .catalogops-field-label,
 .catalogops-field .components-form-token-field__label {
 	margin: 0;
 	font-size: 11px;
@@ -182,6 +234,9 @@
    with a ~38px line-height, which sits low inside the 30px box. */
 .catalogops-field select,
 .catalogops-field input[type='number'],
+.catalogops-field input[type='text'],
+.catalogops-field input[type='email'],
+.catalogops-field input[type='datetime-local'],
 .catalogops-field .components-form-token-field__input-container {
 	height: var(--co-control-h);
 	min-height: var(--co-control-h);
@@ -246,9 +301,11 @@
 	justify-content: flex-end;
 }
 
-/* Match the primary button to the control height. */
-.catalogops-filter-row .button-primary {
+/* Match the row's buttons to the control height. */
+.catalogops-filter-row .button {
 	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	box-sizing: border-box;
 	display: inline-flex;
 	align-items: center;
 }
@@ -274,22 +331,111 @@
 	color: var(--co-muted);
 }
 
+/* Bulk edit reuses the filter's control layout (group label + stacked rows).
+   The value input keeps a modest width; the formula field grows to fill. */
+.catalogops-field input[type='text'] {
+	width: 200px;
+}
+
+/* The formula element (textarea + help) sits beside the field select, like the
+   other value options, growing to fill the rest of the row. */
+.catalogops-field--formula {
+	flex: 1 1 320px;
+	min-width: 18em;
+}
+
+/* Contextual, mode-aware hint under the value control (what the change does). */
+.catalogops-field-hint {
+	margin: 2px 0 0;
+	max-width: 52em;
+	color: var(--co-muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+/* Detailed formula help, shown under the formula input. */
+.catalogops-formula-guide {
+	margin-top: 10px;
+	max-width: 640px;
+	color: var(--co-muted);
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.catalogops-formula-guide p {
+	margin: 0 0 4px;
+}
+
+.catalogops-formula-guide ul {
+	margin: 0 0 8px;
+	padding-left: 18px;
+	list-style: disc;
+}
+
+.catalogops-formula-guide li {
+	margin: 0 0 2px;
+}
+
+.catalogops-formula-guide code {
+	background: var(--co-accent-tint);
+	color: var(--co-accent);
+	padding: 1px 5px;
+	border-radius: 3px;
+	font-size: 12px;
+}
+
 /* --- Search ------------------------------------------------------------ */
+
+/* Divider between the filter and the results/search row below it. */
+.catalogops-divider {
+	border: 0;
+	border-top: 1px solid var(--co-border);
+	margin: 14px 0;
+}
+
+/* Result count on the left, a compact SKU search on the right, sitting just
+   above the table and aligned to its right edge. */
+.catalogops-results-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin: 8px 0 12px;
+}
+
+.catalogops-results-bar .catalogops-status {
+	margin: 0;
+}
+
+/* Search-only bar (audit detail): push the search to the right edge. */
+.catalogops-results-bar--end {
+	justify-content: flex-end;
+}
 
 .catalogops-search {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	margin: 4px 0 12px;
-}
-
-.catalogops-search label {
-	font-weight: 600;
-	color: var(--co-muted);
+	gap: 6px;
 }
 
 .catalogops-search input[type='search'] {
-	min-width: 220px;
+	width: 200px;
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	box-sizing: border-box;
+	line-height: normal;
+	margin: 0;
+}
+
+.catalogops-search .button {
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	box-sizing: border-box;
+	display: inline-flex;
+	align-items: center;
+	line-height: normal;
+	padding-top: 0;
+	padding-bottom: 0;
 }
 
 /* --- Tables ------------------------------------------------------------ */
@@ -318,7 +464,7 @@
 }
 
 .catalogops table.wp-list-table > tbody > tr:hover {
-	background: #f0f6fc;
+	background: var(--co-accent-tint);
 }
 
 .catalogops-num {
@@ -551,9 +697,13 @@ tr.is-drift td {
 /* --- Formulas & percentage (bulk edit) --------------------------------- */
 
 .catalogops-formula-input {
-	flex: 1 1 22em;
-	min-width: 16em;
+	width: 100%;
+	box-sizing: border-box;
+	padding: 6px 8px;
+	resize: vertical;
 	font-family: Menlo, Consolas, monospace;
+	font-size: 13px;
+	line-height: 1.5;
 }
 
 .catalogops-formula-help {
@@ -567,11 +717,65 @@ tr.is-drift td {
 
 /* --- Schedules --------------------------------------------------------- */
 
+/* Collapsible "Scheduling": the group label itself is the show/hide toggle
+   (text + arrow), so the rows sit beside it like every other group. */
+.catalogops-collapse-toggle {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto; /* override the group label's fixed 60px so "Scheduling" fits */
+	background: none;
+	border: 0;
+	padding: 0;
+	margin: 0;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.catalogops-collapse-toggle svg {
+	display: block;
+	flex: none;
+}
+
+.catalogops-collapse-toggle__arrow {
+	color: var(--co-muted);
+	width: 12px;
+	height: 12px;
+}
+
+.catalogops-collapse-toggle:hover,
+.catalogops-collapse-toggle:hover .catalogops-collapse-toggle__arrow {
+	color: var(--co-accent);
+}
+
 .catalogops-schedule-form {
-	margin: 8px 0 4px;
-	padding: 10px 12px;
-	background: var(--co-tint, #f6f7f7);
-	border-radius: 4px;
+	margin: 4px 0;
+}
+
+.catalogops-schedule-form input[type='text'],
+.catalogops-schedule-form input[type='email'] {
+	width: 440px;
+	max-width: 100%;
+}
+
+.catalogops-schedule-form input[type='datetime-local'] {
+	width: 220px;
+}
+
+/* Repeat: a slightly wider select whose hint is only as wide as the select, so
+   the description doesn't stretch the field and push Start away. */
+.catalogops-field--repeat {
+	flex: 0 0 auto;
+	width: 240px;
+}
+
+.catalogops-field--repeat select {
+	width: 240px;
+	max-width: 240px;
+}
+
+.catalogops-field--repeat .catalogops-field-hint {
+	max-width: 240px;
 }
 
 .catalogops-schedules {
@@ -582,8 +786,9 @@ tr.is-drift td {
 
 .catalogops-onboarding {
 	position: relative;
-	border-left: 4px solid var(--co-blue);
-	background: #f0f6fc;
+	border: 1px solid var(--co-accent-border);
+	border-left: 4px solid var(--co-accent);
+	background: var(--co-accent-tint);
 }
 
 .catalogops-onboarding__close {
@@ -605,7 +810,7 @@ tr.is-drift td {
 
 .catalogops-onboarding__title {
 	margin: 0 0 6px;
-	font-size: 16px;
+	font-size: 15px;
 	font-weight: 600;
 }
 
@@ -680,4 +885,81 @@ tr.is-drift td {
 .catalogops-confirm__actions {
 	display: flex;
 	gap: 8px;
+}
+
+/* --- Cosmetic polish (M6 brand pass) ----------------------------------- */
+
+/* Primary buttons carry the indigo accent (WordPress ships them admin-blue). */
+.catalogops .button-primary {
+	background: var(--co-accent);
+	border-color: var(--co-accent);
+	color: #fff;
+	text-shadow: none;
+	box-shadow: none;
+}
+
+.catalogops .button-primary:hover,
+.catalogops .button-primary:focus {
+	background: var(--co-accent-hover);
+	border-color: var(--co-accent-hover);
+	color: #fff;
+}
+
+.catalogops .button-primary:disabled,
+.catalogops .button-primary[disabled] {
+	background: var(--co-accent) !important;
+	border-color: var(--co-accent) !important;
+	color: #fff !important;
+	opacity: 0.5;
+}
+
+/* Link-style buttons pick up the accent. */
+.catalogops .button-link {
+	color: var(--co-accent);
+}
+
+/* A consistent, accessible focus ring on interactive controls. */
+.catalogops .button:focus,
+.catalogops .button-primary:focus,
+.catalogops-field input:focus,
+.catalogops-field select:focus,
+.catalogops input[type='text']:focus,
+.catalogops input[type='number']:focus,
+.catalogops input[type='search']:focus,
+.catalogops select:focus {
+	border-color: var(--co-accent);
+	box-shadow: 0 0 0 1px var(--co-accent);
+	outline: 2px solid transparent;
+}
+
+/* Cards: a touch more radius and a softer, layered shadow. */
+.catalogops-card,
+.catalogops-bulk-edit,
+.catalogops-history,
+.catalogops-retention {
+	border-radius: 10px;
+	box-shadow: 0 1px 2px rgba( 16, 24, 40, 0.04 ), 0 1px 3px rgba( 16, 24, 40, 0.06 );
+}
+
+/* Section headings get a small accent tick for rhythm. */
+.catalogops-browse > h2,
+.catalogops-bulk-edit > h2,
+.catalogops-history > h2,
+.catalogops-retention > h2,
+.catalogops-schedules > h2,
+.catalogops-onboarding__title {
+	padding-left: 10px;
+	border-left: 3px solid var(--co-accent);
+}
+
+/* Re-tint the info / in-progress surfaces to the indigo accent for cohesion. */
+.catalogops-status-badge.is-running,
+.catalogops-status-badge.is-queued,
+.catalogops-change-pending {
+	background: var(--co-accent-tint);
+	color: var(--co-accent);
+}
+
+.catalogops-detail table.wp-list-table > tbody > tr:hover {
+	background: var(--co-accent-tint);
 }

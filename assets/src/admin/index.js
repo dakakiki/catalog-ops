@@ -53,12 +53,12 @@ const EDITABLE_FIELDS = [
 	{ key: 'sale_price', label: __( 'Sale price', 'catalogops' ) },
 	{ key: 'stock_quantity', label: __( 'Stock quantity', 'catalogops' ) },
 	{ key: 'stock_status', label: __( 'Stock status', 'catalogops' ) },
-	{ key: 'weight', label: __( 'Weight', 'catalogops' ) },
 ];
 
 /**
- * The numeric fields a formula or percentage change can target, mapped to the
- * formula variable each reads (the backend whitelist: stock_quantity is `stock`).
+ * The fields a formula or percentage change can target — prices only. Percentage
+ * and formula edits don't make sense for stock quantity or status, so those are
+ * "Set to" only; `stock` is still available as a formula variable to read.
  */
 const NUMERIC_FIELDS = [
 	{
@@ -71,12 +71,6 @@ const NUMERIC_FIELDS = [
 		variable: 'sale_price',
 		label: __( 'Sale price', 'catalogops' ),
 	},
-	{
-		key: 'stock_quantity',
-		variable: 'stock',
-		label: __( 'Stock quantity', 'catalogops' ),
-	},
-	{ key: 'weight', variable: 'weight', label: __( 'Weight', 'catalogops' ) },
 ];
 
 /**
@@ -88,11 +82,63 @@ const NUMERIC_FIELDS = [
 const fieldVariable = ( key ) =>
 	( NUMERIC_FIELDS.find( ( f ) => f.key === key ) || {} ).variable || key;
 
-/** A short, human hint of what a formula may reference. */
-const FORMULA_HELP = __(
-	'Variables: regular_price, sale_price, stock, weight, cost. Functions: round, ceil, floor, roundto, min, max, abs. Empty fields are skipped, never set to 0.',
-	'catalogops'
-);
+/** A short description of each editable field, for the contextual change hint. */
+const FIELD_NOUNS = {
+	regular_price: __( 'the regular price', 'catalogops' ),
+	sale_price: __( 'the sale price', 'catalogops' ),
+	stock_quantity: __( 'the stock quantity (inventory level)', 'catalogops' ),
+	stock_status: __( 'the stock status', 'catalogops' ),
+};
+
+/**
+ * A one-line, mode-aware explanation of what applying the change does to the
+ * selected field, shown under the value control.
+ *
+ * @param {string} field The selected field key.
+ * @param {string} mode  'set' | 'percent' | 'formula'.
+ * @return {string} The hint sentence.
+ */
+function changeHint( field, mode ) {
+	const noun = FIELD_NOUNS[ field ] || field;
+	let sentence;
+	if ( mode === 'percent' ) {
+		sentence = sprintf(
+			/* translators: %s: the field being changed, e.g. "the regular price". */
+			__(
+				'Changes %s by the percentage above, for every matching product.',
+				'catalogops'
+			),
+			noun
+		);
+	} else if ( mode === 'formula' ) {
+		sentence = sprintf(
+			/* translators: %s: the field being changed, e.g. "the regular price". */
+			__(
+				'Recalculates %s with the formula, for every matching product.',
+				'catalogops'
+			),
+			noun
+		);
+	} else {
+		sentence = sprintf(
+			/* translators: %s: the field being changed, e.g. "the regular price". */
+			__(
+				'Sets %s to the value above, for every matching product.',
+				'catalogops'
+			),
+			noun
+		);
+	}
+	if ( 'stock_quantity' === field ) {
+		sentence +=
+			' ' +
+			__(
+				'Only products with “Manage stock” enabled are affected.',
+				'catalogops'
+			);
+	}
+	return sentence;
+}
 
 /** The recurrence presets a schedule can use (mirrors the Recurrence enum). */
 const RECURRENCES = [
@@ -467,136 +513,281 @@ function BulkEdit( {
 				) }
 			</p>
 
-			<div className="catalogops-segmented" role="group">
-				<button
-					type="button"
-					className={ `catalogops-segmented__btn${
-						mode === 'set' ? ' is-active' : ''
-					}` }
-					onClick={ () => changeMode( 'set' ) }
-				>
-					{ __( 'Set to', 'catalogops' ) }
-				</button>
-				<button
-					type="button"
-					className={ `catalogops-segmented__btn${
-						mode === 'percent' ? ' is-active' : ''
-					}` }
-					onClick={ () => changeMode( 'percent' ) }
-				>
-					{ __( 'Percent', 'catalogops' ) }
-				</button>
-				<button
-					type="button"
-					className={ `catalogops-segmented__btn${
-						mode === 'formula' ? ' is-active' : ''
-					}` }
-					onClick={ () => changeMode( 'formula' ) }
-				>
-					{ __( 'Formula', 'catalogops' ) }
-				</button>
-			</div>
+			<div className="catalogops-controls">
+				<div className="catalogops-control-group">
+					<span className="catalogops-group-label">
+						{ __( 'Change', 'catalogops' ) }
+					</span>
+					<div className="catalogops-filter-rows">
+						<div className="catalogops-filter-row">
+							<div className="catalogops-segmented" role="group">
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										mode === 'set' ? ' is-active' : ''
+									}` }
+									onClick={ () => changeMode( 'set' ) }
+								>
+									{ __( 'Set to', 'catalogops' ) }
+								</button>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										mode === 'percent' ? ' is-active' : ''
+									}` }
+									onClick={ () => changeMode( 'percent' ) }
+								>
+									{ __( 'Percent', 'catalogops' ) }
+								</button>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										mode === 'formula' ? ' is-active' : ''
+									}` }
+									onClick={ () => changeMode( 'formula' ) }
+								>
+									{ __( 'Formula', 'catalogops' ) }
+								</button>
+							</div>
+						</div>
 
-			<div className="catalogops-bulk-controls">
-				<label htmlFor="catalogops-field">
-					{ __( 'Field', 'catalogops' ) }
-				</label>
-				<select
-					id="catalogops-field"
-					value={ field }
-					onChange={ ( e ) => setField( e.target.value ) }
-				>
-					{ fieldOptions.map( ( f ) => (
-						<option key={ f.key } value={ f.key }>
-							{ f.label }
-						</option>
-					) ) }
-				</select>
+						<div className="catalogops-filter-row">
+							<div className="catalogops-field">
+								<label htmlFor="catalogops-field">
+									{ __( 'Field', 'catalogops' ) }
+								</label>
+								<select
+									id="catalogops-field"
+									value={ field }
+									onChange={ ( e ) => {
+										setField( e.target.value );
+										setValue( '' );
+										setPreview( null );
+									} }
+								>
+									{ fieldOptions.map( ( f ) => (
+										<option key={ f.key } value={ f.key }>
+											{ f.label }
+										</option>
+									) ) }
+								</select>
+							</div>
 
-				{ mode === 'set' && (
-					<>
-						<label htmlFor="catalogops-value">
-							{ __( 'to', 'catalogops' ) }
-						</label>
-						{ field === 'stock_status' ? (
-							<select
-								id="catalogops-value"
-								value={ value }
-								onChange={ ( e ) => setValue( e.target.value ) }
+							{ mode === 'set' && (
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-value">
+										{ __( 'To', 'catalogops' ) }
+									</label>
+									{ field === 'stock_status' ? (
+										<select
+											id="catalogops-value"
+											value={ value }
+											onChange={ ( e ) =>
+												setValue( e.target.value )
+											}
+										>
+											<option value="">
+												{ __(
+													'Choose…',
+													'catalogops'
+												) }
+											</option>
+											<option value="instock">
+												{ __(
+													'In stock',
+													'catalogops'
+												) }
+											</option>
+											<option value="outofstock">
+												{ __(
+													'Out of stock',
+													'catalogops'
+												) }
+											</option>
+											<option value="onbackorder">
+												{ __(
+													'On backorder',
+													'catalogops'
+												) }
+											</option>
+										</select>
+									) : (
+										<input
+											id="catalogops-value"
+											type="text"
+											value={ value }
+											onChange={ ( e ) =>
+												setValue( e.target.value )
+											}
+										/>
+									) }
+								</div>
+							) }
+
+							{ mode === 'percent' && (
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-percent">
+										{ __( 'By (%)', 'catalogops' ) }
+									</label>
+									<input
+										id="catalogops-percent"
+										type="number"
+										step="any"
+										value={ percent }
+										onChange={ ( e ) =>
+											setPercent( e.target.value )
+										}
+									/>
+								</div>
+							) }
+
+							{ mode === 'formula' && (
+								<div className="catalogops-field catalogops-field--formula">
+									<label htmlFor="catalogops-expression">
+										{ __( 'Formula', 'catalogops' ) }
+									</label>
+									<textarea
+										id="catalogops-expression"
+										className="catalogops-formula-input"
+										rows={ 3 }
+										placeholder="roundto( cost * 1.35, 0.99 )"
+										value={ expression }
+										onChange={ ( e ) =>
+											setExpression( e.target.value )
+										}
+									/>
+									<div className="catalogops-formula-guide">
+										<p>
+											{ __(
+												'Write a math expression. It is calculated for each product and becomes the new value of the field above.',
+												'catalogops'
+											) }
+										</p>
+										<ul>
+											<li>
+												<strong>
+													{ __(
+														'Values',
+														'catalogops'
+													) }
+													:
+												</strong>{ ' ' }
+												<code>regular_price</code>,{ ' ' }
+												<code>sale_price</code>,{ ' ' }
+												<code>cost</code>
+											</li>
+											<li>
+												<strong>
+													{ __(
+														'Math',
+														'catalogops'
+													) }
+													:
+												</strong>{ ' ' }
+												<code>+ - * / ( )</code>
+											</li>
+											<li>
+												<strong>
+													{ __(
+														'Functions',
+														'catalogops'
+													) }
+													:
+												</strong>{ ' ' }
+												<code>round</code>,{ ' ' }
+												<code>ceil</code>,{ ' ' }
+												<code>floor</code>,{ ' ' }
+												<code>
+													roundto(value, step)
+												</code>
+												, <code>min</code>,{ ' ' }
+												<code>max</code>,{ ' ' }
+												<code>abs</code>
+											</li>
+										</ul>
+										<p>
+											{ __(
+												'“cost” is your product cost (cost of goods). It needs a cost field — the _catalogops_cost meta, or a cost plugin mapped to it. Products with no cost are skipped.',
+												'catalogops'
+											) }
+										</p>
+										<p>
+											<strong>
+												{ __(
+													'Examples',
+													'catalogops'
+												) }
+												:
+											</strong>
+										</p>
+										<ul>
+											<li>
+												<code>regular_price * 1.2</code>{ ' ' }
+												—{ ' ' }
+												{ __(
+													'raise the price by 20%',
+													'catalogops'
+												) }
+											</li>
+											<li>
+												<code>
+													roundto( cost * 1.35, 0.99 )
+												</code>{ ' ' }
+												—{ ' ' }
+												{ __(
+													'35% markup on cost, rounded to end in .99',
+													'catalogops'
+												) }
+											</li>
+											<li>
+												<code>
+													max( regular_price * 0.8,
+													cost * 1.1 )
+												</code>{ ' ' }
+												—{ ' ' }
+												{ __(
+													'20% off, but never below cost + 10%',
+													'catalogops'
+												) }
+											</li>
+										</ul>
+										<p className="catalogops-muted">
+											{ __(
+												'Empty or non-numeric fields are skipped — never set to 0.',
+												'catalogops'
+											) }
+										</p>
+									</div>
+								</div>
+							) }
+						</div>
+
+						<div className="catalogops-filter-row">
+							<p className="catalogops-field-hint">
+								{ changeHint( field, mode ) }
+							</p>
+						</div>
+
+						<div className="catalogops-filter-row">
+							<button
+								className="button"
+								onClick={ runPreview }
+								disabled={ busy || running || ! ready }
 							>
-								<option value="">
-									{ __( 'Choose…', 'catalogops' ) }
-								</option>
-								<option value="instock">
-									{ __( 'In stock', 'catalogops' ) }
-								</option>
-								<option value="outofstock">
-									{ __( 'Out of stock', 'catalogops' ) }
-								</option>
-								<option value="onbackorder">
-									{ __( 'On backorder', 'catalogops' ) }
-								</option>
-							</select>
-						) : (
-							<input
-								id="catalogops-value"
-								type="text"
-								value={ value }
-								onChange={ ( e ) => setValue( e.target.value ) }
-							/>
-						) }
-					</>
-				) }
-
-				{ mode === 'percent' && (
-					<>
-						<label htmlFor="catalogops-percent">
-							{ __( 'by', 'catalogops' ) }
-						</label>
-						<input
-							id="catalogops-percent"
-							className="small-text"
-							type="number"
-							step="any"
-							value={ percent }
-							onChange={ ( e ) => setPercent( e.target.value ) }
-						/>
-						<span>{ __( '%', 'catalogops' ) }</span>
-					</>
-				) }
-
-				{ mode === 'formula' && (
-					<>
-						<label htmlFor="catalogops-expression">
-							{ __( '=', 'catalogops' ) }
-						</label>
-						<input
-							id="catalogops-expression"
-							className="catalogops-formula-input"
-							type="text"
-							placeholder="roundto( cost * 1.35, 0.99 )"
-							value={ expression }
-							onChange={ ( e ) =>
-								setExpression( e.target.value )
-							}
-						/>
-					</>
-				) }
-
-				<button
-					className="button"
-					onClick={ runPreview }
-					disabled={ busy || running || ! ready }
-				>
-					{ __( 'Preview', 'catalogops' ) }
-				</button>
-				<button
-					className="button button-primary"
-					onClick={ () => setConfirming( true ) }
-					disabled={ busy || running || ! ready || confirming }
-				>
-					{ __( 'Apply', 'catalogops' ) }
-				</button>
+								{ __( 'Preview', 'catalogops' ) }
+							</button>
+							<button
+								className="button button-primary"
+								onClick={ () => setConfirming( true ) }
+								disabled={
+									busy || running || ! ready || confirming
+								}
+							>
+								{ __( 'Apply', 'catalogops' ) }
+							</button>
+						</div>
+					</div>
+				</div>
 			</div>
 
 			{ confirming && (
@@ -660,103 +851,155 @@ function BulkEdit( {
 				</div>
 			) }
 
-			{ ( mode === 'formula' || mode === 'percent' ) && (
+			{ mode === 'percent' && percentExpression && (
 				<p className="description catalogops-formula-help">
-					{ mode === 'percent' && percentExpression
-						? sprintf(
-								/* translators: %s: the generated formula. */
-								__( 'Applies: %s', 'catalogops' ),
-								percentExpression
-						  ) + '. '
-						: '' }
-					{ FORMULA_HELP }
+					{ sprintf(
+						/* translators: %s: the generated formula. */
+						__( 'Applies: %s', 'catalogops' ),
+						percentExpression
+					) }
 				</p>
 			) }
 
-			<p>
-				<button
-					type="button"
-					className="button-link"
-					onClick={ () => setShowSchedule( ! showSchedule ) }
-				>
-					{ showSchedule
-						? __( 'Hide scheduling', 'catalogops' )
-						: __( 'Schedule instead…', 'catalogops' ) }
-				</button>
-			</p>
-
-			{ showSchedule && (
-				<div className="catalogops-schedule-form">
-					<div className="catalogops-bulk-controls">
-						<label htmlFor="catalogops-sched-name">
-							{ __( 'Name', 'catalogops' ) }
-						</label>
-						<input
-							id="catalogops-sched-name"
-							type="text"
-							value={ name }
-							onChange={ ( e ) => setName( e.target.value ) }
-						/>
-
-						<label htmlFor="catalogops-sched-recur">
-							{ __( 'Repeat', 'catalogops' ) }
-						</label>
-						<select
-							id="catalogops-sched-recur"
-							value={ recurrence }
-							onChange={ ( e ) =>
-								setRecurrence( e.target.value )
-							}
+			<div className="catalogops-controls catalogops-schedule-form">
+				<div className="catalogops-control-group">
+					<button
+						type="button"
+						className="catalogops-collapse-toggle catalogops-group-label"
+						onClick={ () => setShowSchedule( ! showSchedule ) }
+						aria-expanded={ showSchedule }
+					>
+						{ __( 'Scheduling', 'catalogops' ) }
+						<svg
+							className="catalogops-collapse-toggle__arrow"
+							width="12"
+							height="12"
+							viewBox="0 0 12 12"
+							aria-hidden="true"
+							focusable="false"
 						>
-							{ RECURRENCES.map( ( r ) => (
-								<option key={ r.value } value={ r.value }>
-									{ r.label }
-								</option>
-							) ) }
-						</select>
+							<path
+								d={
+									showSchedule
+										? 'M2.5 7.5 6 4 9.5 7.5'
+										: 'M2.5 4.5 6 8 9.5 4.5'
+								}
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="1.6"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							/>
+						</svg>
+					</button>
+					{ showSchedule && (
+						<div className="catalogops-filter-rows">
+							<div className="catalogops-filter-row">
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-sched-name">
+										{ __( 'Name', 'catalogops' ) }
+									</label>
+									<input
+										id="catalogops-sched-name"
+										type="text"
+										value={ name }
+										onChange={ ( e ) =>
+											setName( e.target.value )
+										}
+									/>
+								</div>
+							</div>
 
-						<label htmlFor="catalogops-sched-start">
-							{ __( 'Start', 'catalogops' ) }
-						</label>
-						<input
-							id="catalogops-sched-start"
-							type="datetime-local"
-							value={ startsAt }
-							onChange={ ( e ) => setStartsAt( e.target.value ) }
-						/>
+							<div className="catalogops-filter-row">
+								<div className="catalogops-field catalogops-field--repeat">
+									<label htmlFor="catalogops-sched-recur">
+										{ __( 'Repeat', 'catalogops' ) }
+									</label>
+									<select
+										id="catalogops-sched-recur"
+										value={ recurrence }
+										onChange={ ( e ) =>
+											setRecurrence( e.target.value )
+										}
+									>
+										{ RECURRENCES.map( ( r ) => (
+											<option
+												key={ r.value }
+												value={ r.value }
+											>
+												{ r.label }
+											</option>
+										) ) }
+									</select>
+									<p className="catalogops-field-hint">
+										{ __(
+											'The filter is re-checked each run, so a repeating schedule keeps applying to new or changed products that match — not just today’s. Use “Once” for a one-time change.',
+											'catalogops'
+										) }
+									</p>
+								</div>
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-sched-start">
+										{ __( 'Start', 'catalogops' ) }
+									</label>
+									<input
+										id="catalogops-sched-start"
+										type="datetime-local"
+										value={ startsAt }
+										onChange={ ( e ) =>
+											setStartsAt( e.target.value )
+										}
+									/>
+									<p className="catalogops-field-hint">
+										{ __(
+											'Leave empty to start at the next run.',
+											'catalogops'
+										) }
+									</p>
+								</div>
+							</div>
 
-						<label htmlFor="catalogops-sched-email">
-							{ __( 'Email report to', 'catalogops' ) }
-						</label>
-						<input
-							id="catalogops-sched-email"
-							type="email"
-							placeholder={ __( 'site admin', 'catalogops' ) }
-							value={ notifyEmail }
-							onChange={ ( e ) =>
-								setNotifyEmail( e.target.value )
-							}
-						/>
+							<div className="catalogops-filter-row">
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-sched-email">
+										{ __(
+											'Send notification to',
+											'catalogops'
+										) }
+									</label>
+									<input
+										id="catalogops-sched-email"
+										type="email"
+										placeholder={ __(
+											'site admin',
+											'catalogops'
+										) }
+										value={ notifyEmail }
+										onChange={ ( e ) =>
+											setNotifyEmail( e.target.value )
+										}
+									/>
+								</div>
+							</div>
 
-						<button
-							className="button"
-							onClick={ createSchedule }
-							disabled={ busy || ! ready }
-						>
-							{ __( 'Create schedule', 'catalogops' ) }
-						</button>
-					</div>
-					<p className="description">
-						{ __(
-							'The filter is re-evaluated each time it runs, so a recurring schedule always acts on whatever matches then. Leave Start empty to run at the next opportunity.',
-							'catalogops'
-						) }
-					</p>
-					{ scheduleMsg && (
-						<p className="catalogops-saved">{ scheduleMsg }</p>
+							<div className="catalogops-filter-row">
+								<button
+									className="button button-primary"
+									onClick={ createSchedule }
+									disabled={ busy || ! ready }
+								>
+									{ __( 'Create schedule', 'catalogops' ) }
+								</button>
+							</div>
+							{ scheduleMsg && (
+								<p className="catalogops-saved">
+									{ scheduleMsg }
+								</p>
+							) }
+						</div>
 					) }
 				</div>
-			) }
+			</div>
 
 			{ error && (
 				<div className="notice notice-error">
@@ -856,29 +1099,37 @@ function ChangesTable( { id } ) {
 		);
 	}
 
-	const hasMore = data.items.length === CHANGES_PER_PAGE;
+	const pages = Math.max(
+		1,
+		Math.ceil( ( data.total || 0 ) / CHANGES_PER_PAGE )
+	);
 
 	return (
 		<div>
-			<div className="catalogops-search">
-				<label htmlFor={ `changes-search-${ id }` }>
-					{ __( 'Find by SKU', 'catalogops' ) }
-				</label>
-				<input
-					id={ `changes-search-${ id }` }
-					type="search"
-					placeholder={ __( 'e.g. COPS-1234', 'catalogops' ) }
-					value={ draft }
-					onChange={ ( e ) => setDraft( e.target.value ) }
-					onKeyDown={ ( e ) => e.key === 'Enter' && applySearch() }
-				/>
-				<button
-					className="button"
-					onClick={ applySearch }
-					disabled={ loading }
-				>
-					{ __( 'Search', 'catalogops' ) }
-				</button>
+			<div className="catalogops-results-bar catalogops-results-bar--end">
+				<div className="catalogops-search">
+					<input
+						id={ `changes-search-${ id }` }
+						type="search"
+						placeholder={ __(
+							'SKU, e.g. COPS-1234',
+							'catalogops'
+						) }
+						aria-label={ __( 'Find by SKU', 'catalogops' ) }
+						value={ draft }
+						onChange={ ( e ) => setDraft( e.target.value ) }
+						onKeyDown={ ( e ) =>
+							e.key === 'Enter' && applySearch()
+						}
+					/>
+					<button
+						className="button"
+						onClick={ applySearch }
+						disabled={ loading }
+					>
+						{ __( 'Search', 'catalogops' ) }
+					</button>
+				</div>
 			</div>
 
 			{ loading && (
@@ -965,14 +1216,15 @@ function ChangesTable( { id } ) {
 				</button>
 				<span className="catalogops-page">
 					{ sprintf(
-						/* translators: %d: page number. */
-						__( 'Page %d', 'catalogops' ),
-						page
+						/* translators: 1: current page, 2: total pages. */
+						__( 'Page %1$d of %2$d', 'catalogops' ),
+						page,
+						pages
 					) }
 				</span>
 				<button
 					className="button"
-					disabled={ ! hasMore || loading }
+					disabled={ page >= pages || loading }
 					onClick={ () => setPage( page + 1 ) }
 				>
 					{ __( 'Next', 'catalogops' ) }
@@ -1742,9 +1994,68 @@ function App() {
 
 	return (
 		<div className="catalogops">
-			<h1 className="wp-heading-inline">
-				{ __( 'CatalogOps', 'catalogops' ) }
-			</h1>
+			<div className="catalogops-brand">
+				<svg
+					className="catalogops-brand__mark"
+					viewBox="0 0 40 40"
+					width="40"
+					height="40"
+					aria-hidden="true"
+					focusable="false"
+					xmlns="http://www.w3.org/2000/svg"
+				>
+					<defs>
+						<linearGradient
+							id="catalogops-brand-g"
+							x1="0"
+							y1="0"
+							x2="40"
+							y2="40"
+							gradientUnits="userSpaceOnUse"
+						>
+							<stop offset="0" stopColor="#4f46e5" />
+							<stop offset="1" stopColor="#4338ca" />
+						</linearGradient>
+					</defs>
+					<rect
+						width="40"
+						height="40"
+						rx="9"
+						fill="url(#catalogops-brand-g)"
+					/>
+					<path
+						d="M20 9 L31 15 L20 21 L9 15 Z"
+						fill="#fff"
+						fillOpacity="0.95"
+					/>
+					<path
+						d="M9 20 L20 26 L31 20"
+						fill="none"
+						stroke="#fff"
+						strokeWidth="2.2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						strokeOpacity="0.7"
+					/>
+					<path
+						d="M9 25 L20 31 L31 25"
+						fill="none"
+						stroke="#fff"
+						strokeWidth="2.2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						strokeOpacity="0.45"
+					/>
+				</svg>
+				<span className="catalogops-brand__text">
+					<span className="catalogops-brand__name">
+						Catalog<b>Ops</b>
+					</span>
+					<span className="catalogops-brand__tag">
+						{ __( 'Bulk catalog operations', 'catalogops' ) }
+					</span>
+				</span>
+			</div>
 
 			<Onboarding
 				data={ onboarding }
@@ -1754,6 +2065,7 @@ function App() {
 			/>
 
 			<div className="catalogops-card catalogops-browse">
+				<h2>{ __( 'Filter products', 'catalogops' ) }</h2>
 				<div className="catalogops-controls">
 					<div className="catalogops-control-group">
 						<span className="catalogops-group-label">
@@ -1944,53 +2256,50 @@ function App() {
 							</div>
 						</div>
 					</div>
-					<div className="catalogops-control-group">
-						<span className="catalogops-group-label">
-							{ __( 'Find', 'catalogops' ) }
-						</span>
-						<div className="catalogops-search">
-							<input
-								id="catalogops-sku"
-								type="search"
-								placeholder={ __(
-									'SKU, e.g. COPS-1234',
-									'catalogops'
-								) }
-								aria-label={ __( 'Find by SKU', 'catalogops' ) }
-								value={ form.sku }
-								onChange={ update( 'sku' ) }
-								onKeyDown={ ( e ) =>
-									e.key === 'Enter' && run( 1 )
-								}
-							/>
-							<button
-								className="button"
-								onClick={ () => run( 1 ) }
-								disabled={ loading }
-							>
-								{ __( 'Search', 'catalogops' ) }
-							</button>
-						</div>
-					</div>
 				</div>
 
-				<p className="catalogops-status">
-					{ loading && __( 'Loading…', 'catalogops' ) }
-					{ ! loading &&
-						scope === 'variation' &&
-						sprintf(
-							/* translators: %d: number of matching variations. */
-							__( '%d matching variations', 'catalogops' ),
-							total
-						) }
-					{ ! loading &&
-						scope !== 'variation' &&
-						sprintf(
-							/* translators: %d: number of matching products. */
-							__( '%d matching products', 'catalogops' ),
-							total
-						) }
-				</p>
+				<hr className="catalogops-divider" />
+
+				<div className="catalogops-results-bar">
+					<p className="catalogops-status">
+						{ loading && __( 'Loading…', 'catalogops' ) }
+						{ ! loading &&
+							scope === 'variation' &&
+							sprintf(
+								/* translators: %d: number of matching variations. */
+								__( '%d matching variations', 'catalogops' ),
+								total
+							) }
+						{ ! loading &&
+							scope !== 'variation' &&
+							sprintf(
+								/* translators: %d: number of matching products. */
+								__( '%d matching products', 'catalogops' ),
+								total
+							) }
+					</p>
+					<div className="catalogops-search">
+						<input
+							id="catalogops-sku"
+							type="search"
+							placeholder={ __(
+								'SKU, e.g. COPS-1234',
+								'catalogops'
+							) }
+							aria-label={ __( 'Find by SKU', 'catalogops' ) }
+							value={ form.sku }
+							onChange={ update( 'sku' ) }
+							onKeyDown={ ( e ) => e.key === 'Enter' && run( 1 ) }
+						/>
+						<button
+							className="button"
+							onClick={ () => run( 1 ) }
+							disabled={ loading }
+						>
+							{ __( 'Search', 'catalogops' ) }
+						</button>
+					</div>
+				</div>
 
 				{ error && (
 					<div className="notice notice-error">

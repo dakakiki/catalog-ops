@@ -44,10 +44,20 @@ from 7 to 180 days in the **Retention** panel.
 
 ## Scheduling
 
-From **Bulk edit**, choose **Schedule instead…** to run the same filter + change
-later, or on a recurring basis (hourly … monthly). Each run re-resolves the
-filter at run time and emails a completion report. Manage schedules in the
-**Schedules** panel.
+In **Bulk edit**, expand **Scheduling** to run the same filter + change later, or
+on a recurring basis (hourly … monthly). Set a **Start** time (leave it empty to
+start at the next run), optionally a name and an email to notify, then **Create
+schedule**. Manage schedules in the **Schedules** panel; each run emails a
+completion report.
+
+**Why repeat a change?** The filter is re-evaluated on *every* run — it is not
+frozen to the products that matched when you created the schedule. So a recurring
+schedule keeps enforcing a rule as the catalog changes: products added or edited
+later that match the filter get the change too, with no manual re-run. For
+example, a nightly `sale_price = regular_price * 0.9` on a *Clearance* category
+automatically discounts anything added to that category afterwards; a daily
+`roundto( cost * 1.35, 0.99 )` keeps prices in step with imported costs. For a
+genuine one-time change, use **Once** (optionally with a Start time).
 
 ## Plans
 
