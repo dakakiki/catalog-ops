@@ -1,4 +1,4 @@
-# Dump the tables the CatalogOps query engine touches from the live dev 5.7 DB,
+﻿# Dump the tables the CatalogOps query engine touches from the live dev 5.7 DB,
 # ready to import into the MySQL 8.0 verification container.
 #
 # Only the six tables the query engine reads are exported (not the whole DB):

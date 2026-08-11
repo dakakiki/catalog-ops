@@ -1,4 +1,4 @@
-# Run the CatalogOps query-engine EXPLAIN suite against the MySQL 8.0 container
+﻿# Run the CatalogOps query-engine EXPLAIN suite against the MySQL 8.0 container
 # (and optionally the live 5.7) so the plans can be compared before release.
 #
 #   .\docker\mysql8\run-explain.ps1                # run the suite on 8.0
@@ -29,7 +29,7 @@ $env:Path += ';C:\wamp64\wp-cli;C:\wamp64\bin\php\php8.1.29;C:\wamp64\bin\mysql\
 
 function Invoke-Mysql8([string]$sqlPathInContainer) {
   # -t gives table-formatted output (readable traditional EXPLAIN).
-  docker exec -i $container sh -c "mysql -t -uroot -proot $db < $sqlPathInContainer"
+  docker exec -e MYSQL_PWD=root -i $container sh -c "mysql -t -uroot $db < $sqlPathInContainer"
 }
 
 # --- 1. Regenerate the EXPLAIN SQL from the live query engine, if asked ---------
@@ -48,21 +48,22 @@ if (-not (Test-Path $sqlFile)) {
 Write-Host 'Waiting for MySQL 8.0 to be ready...'
 $ready = $false
 for ($i = 0; $i -lt 30; $i++) {
-  $ok = docker exec $container mysqladmin ping -uroot -proot 2>$null
+  $ok = docker exec -e MYSQL_PWD=root $container mysqladmin ping -uroot 2>$null
   if ($LASTEXITCODE -eq 0) { $ready = $true; break }
   Start-Sleep -Seconds 2
 }
 if (-not $ready) { throw "MySQL 8.0 container '$container' did not become ready. Is 'docker compose up -d' running?" }
 
 # --- 3. Import the live dump if empty (or forced) ------------------------------
-$rows = docker exec $container sh -c "mysql -N -uroot -proot -e `"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$db' AND table_name='co_posts'`" 2>$null"
+$countSql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$db' AND table_name='co_posts'"
+$rows = docker exec -e MYSQL_PWD=root $container mysql -N -uroot -e $countSql 2>$null
 if ($Import -or "$rows".Trim() -eq '0') {
   if (-not (Test-Path $dumpFile)) { throw "Missing $dumpFile — run .\docker\mysql8\dump-live-db.ps1 first." }
   Write-Host 'Importing the live dump into the 8.0 container (this can take several minutes)...'
   docker cp $dumpFile "${container}:/tmp/catalogops-live.sql"
-  docker exec $container sh -c "mysql -uroot -proot $db < /tmp/catalogops-live.sql"
+  docker exec -e MYSQL_PWD=root $container sh -c "mysql -uroot $db < /tmp/catalogops-live.sql"
   Write-Host 'Refreshing optimizer statistics (ANALYZE TABLE)...'
-  docker exec $container sh -c "mysql -uroot -proot $db -e 'ANALYZE TABLE co_posts, co_postmeta, co_wc_product_meta_lookup, co_term_relationships, co_term_taxonomy, co_terms;'" | Out-Null
+  docker exec -e MYSQL_PWD=root $container sh -c "mysql -uroot $db -e 'ANALYZE TABLE co_posts, co_postmeta, co_wc_product_meta_lookup, co_term_relationships, co_term_taxonomy, co_terms;'" | Out-Null
 }
 
 # --- 4. Run the suite on 8.0 ---------------------------------------------------
