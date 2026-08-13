@@ -16,6 +16,11 @@ Thumbs.db
 # the public repo (catalogops.php loads it conditionally).
 /freemius-secret.php
 
+# Freemius SDK — a large third-party dependency, added to the build at deploy
+# time (catalogops.php loads it only when present). Kept out of the public repo;
+# CI therefore runs SDK-absent, where the License resolves to unlimited.
+/freemius/
+
 # MySQL 8.0 verification harness — large dump + generated plan output (docs/mysql8/README.md)
 /docker/mysql8/catalogops-live.sql
 /docker/mysql8/explain-queries.generated.sql

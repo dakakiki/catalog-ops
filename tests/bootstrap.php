@@ -60,6 +60,22 @@ tests_add_filter(
 	}
 );
 
+// Run the suite as fully licensed. When the Freemius SDK is bundled locally it
+// reports the test site as free (no opt-in), which would gate the pipeline and
+// fail tests that exercise undo/formulas/large operations. Override the
+// container's License with an unlimited one once the plugin has booted; the
+// gating itself is covered by LicenseGatingTest, which builds services with
+// explicit free/unlimited licenses rather than the container's.
+tests_add_filter(
+	'catalogops_booted',
+	static function ( $catalogops_plugin ) {
+		$catalogops_plugin->container()->instance(
+			\CatalogOps\Licensing\License::class,
+			\CatalogOps\Licensing\License::unlimited()
+		);
+	}
+);
+
 // Install WooCommerce's own tables once WordPress is far enough along.
 tests_add_filter(
 	'setup_theme',
