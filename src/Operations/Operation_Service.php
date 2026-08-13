@@ -143,71 +143,70 @@ final class Operation_Service {
 	}
 
 	/**
-	 * Dry-run a filter and actions: count the targets and show what would change
-	 * for a small sample, without writing anything (CONTEXT §2, the Preview step).
-	 * Resolving here is a throwaway read, separate from the single resolution
-	 * queue() freezes.
+	 * Dry-run a filter and actions without writing (CONTEXT §2, the Preview step):
+	 * how many objects the filter matches, and of those how many the edit will
+	 * actually change versus omit.
+	 *
+	 * An object is omitted when the edit reads a field it does not carry: the
+	 * formula engine skips on any empty or non-numeric input (strict null
+	 * propagation), so requiring the read fields present up front makes the
+	 * "applicable" count equal what execution applies — and what an undo reverts.
+	 * A literal {@see Actions\Set_Value} reads nothing, so every match is applicable.
 	 *
 	 * @param Filter                                  $filter  Target filter.
 	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to apply.
-	 * @param int                                     $limit   Maximum sample rows.
-	 * @return array{target_count: int, sample: list<array{id: int, name: string, changes: list<array{field: string, old: ?string, new: ?string}>}>}
+	 * @return array{matched: int, applicable: int, omitted: int}
 	 *
 	 * @throws InvalidArgumentException When an action targets an unsupported field.
 	 */
-	public function preview( Filter $filter, array $actions, int $limit = 20 ): array {
+	public function preview( Filter $filter, array $actions ): array {
 		$this->assert_fields_supported( $actions );
 
-		$ids   = $this->engine->resolve( $filter );
-		$limit = max( 0, $limit );
+		$matched  = $this->engine->count( $filter );
+		$required = $this->required_meta_keys( $actions );
 
-		$sample = array();
-
-		foreach ( array_slice( $ids, 0, $limit ) as $object_id ) {
-			$product = wc_get_product( $object_id );
-
-			if ( ! $product instanceof \WC_Product ) {
-				continue;
-			}
-
-			$changes = array();
-
-			// Same resolver the runner uses, so a formula preview reads the object's
-			// other fields (cost, another price) exactly as execution will.
-			$resolver = function ( string $field_key ) use ( $product ): mixed {
-				$owner = $this->providers->for( $field_key );
-
-				return null === $owner ? null : $owner->read( $product, $field_key );
-			};
-
-			foreach ( $actions as $action ) {
-				$provider = $this->providers->for( $action->field() );
-
-				if ( null === $provider ) {
-					continue;
-				}
-
-				$current = $provider->read( $product, $action->field() );
-				$new     = $action->apply( $current, $resolver );
-
-				$changes[] = array(
-					'field' => $action->field(),
-					'old'   => Values::to_string( $current ),
-					'new'   => Values::to_string( $new ),
-				);
-			}
-
-			$sample[] = array(
-				'id'      => (int) $object_id,
-				'name'    => $product->get_name(),
-				'changes' => $changes,
-			);
-		}
+		$applicable = array() === $required
+			? $matched
+			: $this->engine->count( $filter, $required );
 
 		return array(
-			'target_count' => count( $ids ),
-			'sample'       => $sample,
+			'matched'    => $matched,
+			'applicable' => $applicable,
+			'omitted'    => $matched - $applicable,
 		);
+	}
+
+	/**
+	 * The postmeta keys an object must carry non-empty for the actions to compute
+	 * a value — the actions' read fields ({@see Actions\Action::reads()}) mapped to
+	 * where WooCommerce stores them. Core price/stock fields live under their `_`
+	 * meta keys; `meta:` fields under the bare key. Unknown reads impose no
+	 * constraint (their presence cannot be tested here), erring toward including.
+	 *
+	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to inspect.
+	 * @return list<string>
+	 */
+	private function required_meta_keys( array $actions ): array {
+		$core = array(
+			'regular_price'  => '_regular_price',
+			'sale_price'     => '_sale_price',
+			'stock_quantity' => '_stock',
+			'weight'         => '_weight',
+		);
+
+		$keys = array();
+
+		foreach ( $actions as $action ) {
+			foreach ( $action->reads() as $field ) {
+				if ( isset( $core[ $field ] ) ) {
+					$keys[] = $core[ $field ];
+				} elseif ( str_starts_with( $field, 'meta:' ) ) {
+					$keys[] = substr( $field, strlen( 'meta:' ) );
+				}
+			}
+		}
+
+		return array_values( array_unique( $keys ) );
 	}
 
 	/**
@@ -385,8 +384,12 @@ final class Operation_Service {
 
 		$filter = $operation->filter();
 
-		// The one-and-only filter resolution (CONTEXT §2).
-		$ids = $this->engine->resolve( $filter );
+		// The one-and-only filter resolution (CONTEXT §2), narrowed to the objects
+		// the edit can actually change: those carrying every field it reads. An
+		// object missing one would be skipped at execution, so leaving it out here
+		// makes the frozen target count equal what is applied — and what an undo
+		// later reverts — so progress never disagrees with the outcome.
+		$ids = $this->engine->resolve( $filter, $this->required_meta_keys( $actions ) );
 
 		if ( array() === $ids ) {
 			return 0;

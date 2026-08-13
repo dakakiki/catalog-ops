@@ -118,9 +118,9 @@ final class FormulaWriteTest extends Operations_Database_Case {
 		$this->assertSame( '13.86', $row->new_value );
 	}
 
-	public function test_empty_cost_field_is_skipped_and_logged_never_zeroed(): void {
+	public function test_a_product_missing_a_read_field_is_excluded_not_targeted(): void {
 		$priced   = $this->make_product( 100, '10' );  // cost present -> updated.
-		$costless = $this->make_product( 300, null );  // cost empty   -> skipped.
+		$costless = $this->make_product( 300, null );  // cost empty   -> excluded.
 
 		$op_id = $this->service->create(
 			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
@@ -132,19 +132,36 @@ final class FormulaWriteTest extends Operations_Database_Case {
 		$this->service->queue( $op_id );
 		$this->drive( $op_id );
 
-		// The one with a cost was rewritten; the one without keeps its price
-		// (CONTEXT §3: an empty input is never coerced to zero).
+		// The one with a cost was rewritten; the one without is left out of the
+		// operation entirely. The formula reads `cost`, so the costless product
+		// cannot produce a value — it is never targeted (CONTEXT §3: an empty input
+		// is never coerced to zero) rather than targeted and then skipped, so the
+		// operation's counted target equals what it applies.
 		$this->assertSame( '13.86', wc_get_product( $priced )->get_regular_price() );
 		$this->assertSame( '300', wc_get_product( $costless )->get_regular_price() );
 
 		$counts = $this->changes->counts( $op_id );
 		$this->assertSame( 1, $counts['applied'] );
-		$this->assertSame( 1, $counts['skipped'] );
+		$this->assertSame( 0, $counts['skipped'] );
+		$this->assertSame( 1, $this->operations->find( $op_id )->target_count );
+	}
 
-		// The skip is logged with the untouched old value, not a write.
-		$skipped = $this->skipped_row( $op_id, $costless );
-		$this->assertSame( '300', $skipped->old_value );
-		$this->assertNull( $skipped->new_value );
+	public function test_preview_counts_only_applicable_products_for_a_formula(): void {
+		$this->make_product( 100, '10' );   // cost present -> applicable.
+		$this->make_product( 200, '20' );   // cost present -> applicable.
+		$this->make_product( 300, null );   // cost empty   -> omitted.
+
+		$preview = $this->service->preview(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( Formula::from_source( 'regular_price', 'roundto( cost * 1.35, 0.99 )' ) )
+		);
+
+		// All three match the filter, but the formula reads `cost`, so only the two
+		// products that carry a cost are applicable; the third is omitted, not
+		// counted as a target it would silently skip.
+		$this->assertSame( 3, $preview['matched'] );
+		$this->assertSame( 2, $preview['applicable'] );
+		$this->assertSame( 1, $preview['omitted'] );
 	}
 
 	public function test_percentage_price_cut_formula_applies(): void {

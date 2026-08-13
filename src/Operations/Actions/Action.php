@@ -27,6 +27,18 @@ interface Action {
 	public function field(): string;
 
 	/**
+	 * The provider field keys this action reads to compute the new value. The
+	 * formula engine propagates null strictly — any empty or non-numeric input
+	 * makes the whole expression skip — so an object missing any read field is
+	 * always skipped. Reporting the read keys lets an operation target only the
+	 * objects that carry them, so its counted targets match what it actually
+	 * applies (and what an undo reverts). A literal {@see Set_Value} reads nothing.
+	 *
+	 * @return list<string>
+	 */
+	public function reads(): array;
+
+	/**
 	 * Compute the value to write from the object's current value.
 	 *
 	 * Returning `null` signals "skip this object" — for example a formula over an

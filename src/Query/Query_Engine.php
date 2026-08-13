@@ -40,11 +40,14 @@ final class Query_Engine {
 	/**
 	 * Resolve a filter to the matching product IDs, ascending.
 	 *
-	 * @param Filter $filter The filter to resolve.
+	 * @param Filter   $filter          The filter to resolve.
+	 * @param string[] $require_present Postmeta keys that must be non-empty on each
+	 *                                  match — the edit's read fields, so objects it
+	 *                                  cannot compute a value for are excluded.
 	 * @return list<int>
 	 */
-	public function resolve( Filter $filter ): array {
-		$sql = $this->select( 'l.product_id', $filter ) . ' ORDER BY l.product_id ASC';
+	public function resolve( Filter $filter, array $require_present = array() ): array {
+		$sql = $this->select( 'l.product_id', $filter, $require_present ) . ' ORDER BY l.product_id ASC';
 
 		// $sql is assembled in select() from trusted identifiers with all values
 		// bound via $wpdb->prepare().
@@ -55,12 +58,14 @@ final class Query_Engine {
 	/**
 	 * Count the products matching a filter without materializing the IDs.
 	 *
-	 * @param Filter $filter The filter to count.
+	 * @param Filter   $filter          The filter to count.
+	 * @param string[] $require_present Postmeta keys that must be non-empty (see
+	 *                                  {@see resolve()}).
 	 */
-	public function count( Filter $filter ): int {
+	public function count( Filter $filter, array $require_present = array() ): int {
 		// select() returns a prepared statement built from trusted identifiers.
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		return (int) $this->wpdb->get_var( $this->select( 'COUNT(*)', $filter ) );
+		return (int) $this->wpdb->get_var( $this->select( 'COUNT(*)', $filter, $require_present ) );
 	}
 
 	/**
@@ -70,13 +75,15 @@ final class Query_Engine {
 	 * the parent, and its chosen attribute value lives on the variation itself
 	 * (CONTEXT §4).
 	 *
-	 * @param string $projection The select list, e.g. `l.product_id`.
-	 * @param Filter $filter      The filter to translate.
+	 * @param string   $projection      The select list, e.g. `l.product_id`.
+	 * @param Filter   $filter          The filter to translate.
+	 * @param string[] $require_present Postmeta keys that must be non-empty on a match.
 	 */
-	private function select( string $projection, Filter $filter ): string {
-		$lookup = $this->wpdb->prefix . 'wc_product_meta_lookup';
-		$posts  = $this->wpdb->posts;
-		$scope  = $filter->scope();
+	private function select( string $projection, Filter $filter, array $require_present = array() ): string {
+		$lookup   = $this->wpdb->prefix . 'wc_product_meta_lookup';
+		$posts    = $this->wpdb->posts;
+		$postmeta = $this->wpdb->postmeta;
+		$scope    = $filter->scope();
 
 		$sql = "SELECT {$projection}
 			FROM {$lookup} l
@@ -91,11 +98,26 @@ final class Query_Engine {
 		// excludes those parents (and any unpriced product), so a Product-scope
 		// price edit never silently skips what it cannot compute (CONTEXT §4).
 		if ( ! $scope->is_variation() ) {
-			$postmeta = $this->wpdb->postmeta;
-			$sql     .= " AND l.product_id IN (
+			$sql .= " AND l.product_id IN (
 				SELECT pm.post_id FROM {$postmeta} pm
 				WHERE pm.meta_key = '_regular_price' AND pm.meta_value <> ''
 			)";
+		}
+
+		// Applicability: keep only objects that carry every field the edit reads,
+		// so a formula or percentage whose input is empty is excluded up front
+		// rather than counted and then skipped (Action::reads(); the formula engine
+		// skips on any empty input, so this makes targets match what is applied).
+		foreach ( $require_present as $meta_key ) {
+			if ( '' === (string) $meta_key ) {
+				continue;
+			}
+
+			$sql   .= " AND l.product_id IN (
+				SELECT pm.post_id FROM {$postmeta} pm
+				WHERE pm.meta_key = %s AND pm.meta_value <> ''
+			)";
+			$args[] = $meta_key;
 		}
 
 		list( $where, $where_args ) = $this->build_where( $filter );

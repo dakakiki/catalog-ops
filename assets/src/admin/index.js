@@ -547,14 +547,11 @@ function BulkEdit( {
 	const running = operation && ! isTerminal( operation );
 
 	// A formula whose source field is empty or non-numeric yields null for every
-	// object, so nothing gets written. Detect an all-skipped sample to explain it,
-	// rather than showing a table of blank "new" values that reads as a no-op.
-	const previewChanges = preview
-		? preview.sample.flatMap( ( r ) => r.changes )
-		: [];
+	// object, so it is omitted. The preview reports counts only: how many the
+	// filter matched, and of those how many the edit will actually change
+	// (applicable) versus omit. None-will-change is an all-omitted match.
 	const noneWillChange =
-		previewChanges.length > 0 &&
-		previewChanges.every( ( c ) => c.new === null || c.new === '' );
+		!! preview && preview.matched > 0 && preview.applicable === 0;
 
 	return (
 		<div className="catalogops-bulk-edit">
@@ -1086,38 +1083,59 @@ function BulkEdit( {
 
 			{ preview && ! operation && (
 				<div className="catalogops-preview">
-					{ noneWillChange ? (
+					{ preview.matched === 0 && (
+						<div className="notice notice-info">
+							<p>
+								{ __(
+									'No products match this filter.',
+									'catalogops'
+								) }
+							</p>
+						</div>
+					) }
+					{ noneWillChange && (
 						<div className="notice notice-warning">
 							<p>
 								{ sprintf(
 									/* translators: %d: number of matched products. */
 									__(
-										'Preview: none of the %d matching products would change. The value can’t be computed for them — a field the change reads is empty or non-numeric — so they are skipped, never set to 0.',
+										'Preview: none of the %d matching products will change — a field the change reads is empty or non-numeric for all of them, so they are omitted (never set to 0).',
 										'catalogops'
 									),
-									preview.target_count
+									preview.matched
 								) }
 							</p>
 							{ filter.scope === 'product' && (
 								<p>
 									{ __(
-										'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is skipped. Use the Products / Variations toggle above the results to switch to Variations and edit those. Otherwise, check that the change reads a field these products have a value in.',
+										'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those. Otherwise, check that the change reads a field these products have a value in.',
 										'catalogops'
 									) }
 								</p>
 							) }
 						</div>
-					) : (
+					) }
+					{ preview.matched > 0 && preview.applicable > 0 && (
 						<div className="notice notice-success">
 							<p>
-								{ sprintf(
-									/* translators: %d: number of products matched by the filter. */
-									__(
-										'Preview OK — %d products match and will be updated when you Apply. Any whose value can’t be computed (an empty or non-numeric source field) are skipped, never set to 0.',
-										'catalogops'
-									),
-									preview.target_count
-								) }
+								{ preview.omitted > 0
+									? sprintf(
+											/* translators: 1: products that will change, 2: products omitted. */
+											__(
+												'Preview OK — %1$d products will be updated when you Apply. %2$d omitted because a field the change reads is empty or non-numeric (never set to 0). Only these %1$d go to the operation, so its progress and undo always match.',
+												'catalogops'
+											),
+											preview.applicable,
+											preview.omitted
+									  )
+									: sprintf(
+											/* translators: %d: number of products that will be updated. */
+											__(
+												'Preview OK — %d products will be updated when you Apply.',
+												'catalogops'
+											),
+											preview.applicable
+									  ) }
 							</p>
 						</div>
 					) }

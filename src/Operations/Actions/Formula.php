@@ -61,6 +61,28 @@ final class Formula implements Action {
 	}
 
 	/**
+	 * The provider field keys the formula reads — its variables ({@see Variables})
+	 * mapped to the keys the resolver uses. An object missing any of these makes
+	 * the expression skip (strict null propagation), so these are exactly the
+	 * fields an object must carry for the formula to produce a value.
+	 *
+	 * @return list<string>
+	 */
+	public function reads(): array {
+		$keys = array();
+
+		foreach ( $this->expression->variables() as $variable ) {
+			$key = Variables::field_key( $variable );
+
+			if ( '' !== $key ) {
+				$keys[] = $key;
+			}
+		}
+
+		return array_values( array_unique( $keys ) );
+	}
+
+	/**
 	 * Evaluate the formula for one object, reading its inputs through $resolver.
 	 *
 	 * @param mixed         $current  The field's current value (unused; the formula

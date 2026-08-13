@@ -125,14 +125,7 @@ final class Operations_Controller {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'preview' ),
 				'permission_callback' => array( $this, 'can_manage' ),
-				'args'                => $writable + array(
-					'limit' => array(
-						'type'    => 'integer',
-						'default' => 20,
-						'minimum' => 0,
-						'maximum' => 100,
-					),
-				),
+				'args'                => $writable,
 			)
 		);
 
@@ -248,7 +241,7 @@ final class Operations_Controller {
 		}
 
 		try {
-			$preview = $this->service->preview( $filter, $actions, (int) $request->get_param( 'limit' ) );
+			$preview = $this->service->preview( $filter, $actions );
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		}

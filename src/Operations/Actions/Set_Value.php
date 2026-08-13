@@ -35,6 +35,15 @@ final class Set_Value implements Action {
 	}
 
 	/**
+	 * A literal reads nothing — it applies to every targeted object.
+	 *
+	 * @return list<string>
+	 */
+	public function reads(): array {
+		return array();
+	}
+
+	/**
 	 * Ignore the current value and return the literal target.
 	 *
 	 * @param mixed         $current  The object's current value (unused).

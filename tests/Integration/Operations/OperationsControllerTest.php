@@ -49,7 +49,7 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		parent::tear_down();
 	}
 
-	public function test_preview_reports_target_count_and_changes(): void {
+	public function test_preview_reports_matched_and_applicable_counts(): void {
 		$this->make_product( 10 );
 		$this->make_product( 30 );
 
@@ -63,10 +63,10 @@ final class OperationsControllerTest extends Operations_Database_Case {
 
 		$this->assertSame( 200, $response->get_status() );
 		$data = $response->get_data();
-		$this->assertSame( 1, $data['target_count'] );
-		$this->assertCount( 1, $data['sample'] );
-		$this->assertSame( 'regular_price', $data['sample'][0]['changes'][0]['field'] );
-		$this->assertSame( '9.99', $data['sample'][0]['changes'][0]['new'] );
+		// A literal Set reads nothing, so every match is applicable — none omitted.
+		$this->assertSame( 1, $data['matched'] );
+		$this->assertSame( 1, $data['applicable'] );
+		$this->assertSame( 0, $data['omitted'] );
 	}
 
 	public function test_create_queues_and_returns_201_with_progress(): void {
