@@ -85,6 +85,19 @@ final class Query_Engine {
 
 		$args = array( $scope->post_type() );
 
+		// Product scope targets simple, priced products. A variable product keeps
+		// its price on its variations — its own _regular_price is empty — so it
+		// belongs to the variation scope, not here. Requiring a regular price
+		// excludes those parents (and any unpriced product), so a Product-scope
+		// price edit never silently skips what it cannot compute (CONTEXT §4).
+		if ( ! $scope->is_variation() ) {
+			$postmeta = $this->wpdb->postmeta;
+			$sql     .= " AND l.product_id IN (
+				SELECT pm.post_id FROM {$postmeta} pm
+				WHERE pm.meta_key = '_regular_price' AND pm.meta_value <> ''
+			)";
+		}
+
 		list( $where, $where_args ) = $this->build_where( $filter );
 
 		if ( '' !== $where ) {
@@ -158,6 +171,11 @@ final class Query_Engine {
 		if ( 'category' === $field ) {
 			// A variation inherits its category from the parent product.
 			return $this->taxonomy_clause( 'product_cat', $condition, $scope );
+		}
+
+		if ( 'tag' === $field ) {
+			// Like category, a variation inherits its tags from the parent product.
+			return $this->taxonomy_clause( 'product_tag', $condition, $scope );
 		}
 
 		if ( str_starts_with( $field, 'attribute:' ) ) {

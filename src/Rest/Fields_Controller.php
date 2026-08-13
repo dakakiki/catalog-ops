@@ -127,6 +127,16 @@ final class Fields_Controller {
 				'permission_callback' => array( $this, 'can_manage' ),
 			)
 		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/fields/tags',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'tags' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
 	}
 
 	/**
@@ -216,6 +226,34 @@ final class Fields_Controller {
 		}
 
 		return new WP_REST_Response( array( 'categories' => $categories ) );
+	}
+
+	/**
+	 * The product tags, for the filter's tag picker. Tags are a flat taxonomy a
+	 * store uses for cross-cutting groupings ("sale", "collection", "clearance"),
+	 * which makes them a natural bulk-edit target alongside categories.
+	 */
+	public function tags(): WP_REST_Response {
+		$terms = get_terms(
+			array(
+				'taxonomy'   => 'product_tag',
+				'hide_empty' => false,
+				'orderby'    => 'name',
+			)
+		);
+
+		$tags = array();
+		if ( is_array( $terms ) ) {
+			foreach ( $terms as $term ) {
+				$tags[] = array(
+					'id'    => (int) $term->term_id,
+					'name'  => $this->decode( $term->name ),
+					'count' => (int) $term->count,
+				);
+			}
+		}
+
+		return new WP_REST_Response( array( 'tags' => $tags ) );
 	}
 
 	/**

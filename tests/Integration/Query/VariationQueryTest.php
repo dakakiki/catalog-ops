@@ -87,12 +87,15 @@ final class VariationQueryTest extends WP_UnitTestCase {
 		$this->assertNotContains( $variations['Small'], $ids );
 	}
 
-	public function test_product_scope_resolves_the_parent_not_its_variations(): void {
+	public function test_product_scope_excludes_an_unpriced_variable_parent(): void {
+		// A variable product's parent has no regular price of its own — the price
+		// lives on its variations — so Product scope, which targets priced simple
+		// products, excludes it (and its variations belong to the variation scope).
 		list( $parent, $variations ) = $this->make_variable_product();
 
 		$ids = $this->engine->resolve( new Filter() ); // default product scope
 
-		$this->assertContains( $parent, $ids );
+		$this->assertNotContains( $parent, $ids );
 		foreach ( $variations as $vid ) {
 			$this->assertNotContains( $vid, $ids );
 		}

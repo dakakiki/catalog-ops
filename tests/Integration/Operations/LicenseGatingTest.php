@@ -195,6 +195,9 @@ final class LicenseGatingTest extends Operations_Database_Case {
 
 			$this->created[] = (int) $id;
 			$wpdb->replace( $lookup, array( 'product_id' => (int) $id ), array( '%d' ) );
+			// A regular price so the product-scope query (which excludes unpriced,
+			// variable-style parents) still resolves these seeded products.
+			update_post_meta( (int) $id, '_regular_price', '9.99' );
 		}
 	}
 }

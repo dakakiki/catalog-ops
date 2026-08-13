@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Rest;
 
+use CatalogOps\Operations\Formula\Variables;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Query_Scope;
@@ -169,6 +170,7 @@ final class Query_Controller {
 		}
 
 		$attributes = $is_variation ? $this->variation_attributes( $ids ) : array();
+		$extra      = $this->sale_and_cost( $ids );
 
 		$items = array();
 		foreach ( $ids as $id ) {
@@ -189,12 +191,69 @@ final class Query_Controller {
 				'sku'            => (string) $row['sku'],
 				'price'          => $row['min_price'],
 				'max_price'      => $row['max_price'],
+				'sale_price'     => $extra[ $id ]['sale_price'] ?? null,
+				'cost'           => $extra[ $id ]['cost'] ?? null,
 				'stock_status'   => (string) $row['stock_status'],
 				'stock_quantity' => null === $row['stock_quantity'] ? null : (int) $row['stock_quantity'],
 			);
 		}
 
 		return $items;
+	}
+
+	/**
+	 * Read the sale price and cost for a page of ids in one pass, so the table can
+	 * show whether those fields carry data (and thus whether a formula reading
+	 * `sale_price` or `cost` would have something to work with). Sale price lives in
+	 * `_sale_price`; cost in the filterable cost meta key the `cost` formula
+	 * variable reads (default `_catalogops_cost`). Empty strings are normalized to
+	 * null so the UI can render a clear blank. No product objects are loaded (§9).
+	 *
+	 * @param int[] $ids Ids for this page.
+	 * @return array<int, array{sale_price: ?string, cost: ?string}>
+	 */
+	private function sale_and_cost( array $ids ): array {
+		$cost_key = (string) apply_filters( 'catalogops_cost_meta_key', Variables::DEFAULT_COST_META_KEY );
+		if ( '' === $cost_key ) {
+			$cost_key = Variables::DEFAULT_COST_META_KEY;
+		}
+
+		$postmeta     = $this->wpdb->postmeta;
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+		$args         = array( ...$ids, '_sale_price', $cost_key );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT post_id, meta_key, meta_value
+				FROM {$postmeta}
+				WHERE post_id IN ( {$placeholders} ) AND meta_key IN ( %s, %s )",
+				...$args
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$out = array();
+		foreach ( $rows as $row ) {
+			$id    = (int) $row['post_id'];
+			$value = '' === $row['meta_value'] ? null : (string) $row['meta_value'];
+
+			if ( ! isset( $out[ $id ] ) ) {
+				$out[ $id ] = array(
+					'sale_price' => null,
+					'cost'       => null,
+				);
+			}
+
+			if ( '_sale_price' === $row['meta_key'] ) {
+				$out[ $id ]['sale_price'] = $value;
+			} elseif ( $cost_key === $row['meta_key'] ) {
+				$out[ $id ]['cost'] = $value;
+			}
+		}
+
+		return $out;
 	}
 
 	/**
