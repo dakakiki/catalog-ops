@@ -75,6 +75,67 @@ if ( ! is_readable( $catalogops_autoloader ) ) {
 require $catalogops_autoloader;
 
 /*
+ * Freemius licensing bootstrap.
+ *
+ * The SDK ships only in the deployed premium build — the `freemius/` directory
+ * and the wp.org gatekeeper secret are absent from the (public) source repo and
+ * from CI, so both are loaded conditionally. When the SDK is missing the plugin
+ * boots without a licensing backend and {@see \CatalogOps\Licensing\License}
+ * resolves to unlimited, which is exactly what development and the test suite
+ * (tests/bootstrap.php requires this file) need.
+ *
+ * The init snippet lives here, in the main plugin file, so Freemius resolves the
+ * plugin's main file correctly. The `id`/`public_key` are public (they ship in
+ * every copy); only `wp_org_gatekeeper` is a secret, so it is read from the
+ * gitignored freemius-secret.php rather than committed.
+ */
+if ( is_readable( CATALOGOPS_PATH . 'freemius/start.php' ) && ! function_exists( 'cat_fs' ) ) {
+	if ( is_readable( CATALOGOPS_PATH . 'freemius-secret.php' ) ) {
+		require_once CATALOGOPS_PATH . 'freemius-secret.php';
+	}
+
+	/**
+	 * Freemius SDK accessor. Initialised once, on first call.
+	 */
+	function cat_fs() {
+		global $cat_fs;
+
+		if ( ! isset( $cat_fs ) ) {
+			require_once CATALOGOPS_PATH . 'freemius/start.php';
+
+			$catalogops_fs_config = array(
+				'id'                  => '36843',
+				'slug'                => 'catalogops',
+				'type'                => 'plugin',
+				'public_key'          => 'pk_2aa46393388f445fc0f3f53d8e650',
+				'is_premium'          => true,
+				'has_premium_version' => true,
+				'has_addons'          => false,
+				'has_paid_plans'      => true,
+				'is_org_compliant'    => true,
+				'menu'                => array(
+					'slug'    => 'catalogops',
+					'support' => false,
+				),
+			);
+
+			// The wp.org gatekeeper is secret and lives outside the public repo;
+			// present only in the deployed build (see freemius-secret.php).
+			if ( defined( 'CATALOGOPS_FS_GATEKEEPER' ) ) {
+				$catalogops_fs_config['wp_org_gatekeeper'] = CATALOGOPS_FS_GATEKEEPER;
+			}
+
+			$cat_fs = fs_dynamic_init( $catalogops_fs_config );
+		}
+
+		return $cat_fs;
+	}
+
+	cat_fs();
+	do_action( 'cat_fs_loaded' );
+}
+
+/*
  * Create/upgrade the database schema on activation. On a network-wide activation
  * WordPress passes $network_wide = true, so the schema is installed on every site
  * in the network rather than just the one that ran the activation.

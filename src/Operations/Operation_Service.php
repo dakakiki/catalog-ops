@@ -7,6 +7,9 @@
 
 namespace CatalogOps\Operations;
 
+use CatalogOps\Licensing\License;
+use CatalogOps\Licensing\License_Limited;
+use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
@@ -78,6 +81,13 @@ final class Operation_Service {
 	private Operation_Scheduler $scheduler;
 
 	/**
+	 * Plan gating (free-tier object cap, undo/formula availability).
+	 *
+	 * @var License
+	 */
+	private License $license;
+
+	/**
 	 * Build the service.
 	 *
 	 * @param Query_Engine        $engine     Query engine.
@@ -86,6 +96,8 @@ final class Operation_Service {
 	 * @param Field_Providers     $providers  Field provider registry.
 	 * @param Lock                $lock       Single-writer lock.
 	 * @param Operation_Scheduler $scheduler Scheduler for chunk hand-off/cancel.
+	 * @param License|null        $license    Plan gating; defaults to unlimited
+	 *                                        (unlicensed development and tests).
 	 */
 	public function __construct(
 		Query_Engine $engine,
@@ -93,7 +105,8 @@ final class Operation_Service {
 		Changes $changes,
 		Field_Providers $providers,
 		Lock $lock,
-		Operation_Scheduler $scheduler
+		Operation_Scheduler $scheduler,
+		?License $license = null
 	) {
 		$this->engine     = $engine;
 		$this->operations = $operations;
@@ -101,6 +114,7 @@ final class Operation_Service {
 		$this->providers  = $providers;
 		$this->lock       = $lock;
 		$this->scheduler  = $scheduler;
+		$this->license    = $license ?? License::unlimited();
 	}
 
 	/**
@@ -123,6 +137,7 @@ final class Operation_Service {
 		int $user_id
 	): int {
 		$this->assert_fields_supported( $actions );
+		$this->assert_formulas_allowed( $actions );
 
 		return $this->operations->create( $filter, $actions, $mode, $source, $user_id );
 	}
@@ -208,8 +223,13 @@ final class Operation_Service {
 	 * @return int The new undo operation id.
 	 *
 	 * @throws InvalidArgumentException When the parent is missing or still active.
+	 * @throws License_Limited          When undo is used without a paid plan.
 	 */
 	public function undo( int $parent_op_id, Conflict_Policy $policy, int $user_id ): int {
+		if ( ! $this->license->can_undo() ) {
+			throw new License_Limited( 'Undo is a paid-plan feature.' );
+		}
+
 		$parent = $this->operations->find( $parent_op_id );
 
 		if ( null === $parent ) {
@@ -245,8 +265,13 @@ final class Operation_Service {
 	 * @return array{parent_op_id: int, total: int, conflict_policy: string, sample: list<array{id: int, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
 	 *
 	 * @throws InvalidArgumentException When the parent operation is missing.
+	 * @throws License_Limited          When undo is used without a paid plan.
 	 */
 	public function preview_undo( int $parent_op_id, Conflict_Policy $policy, int $limit = 20 ): array {
+		if ( ! $this->license->can_undo() ) {
+			throw new License_Limited( 'Undo is a paid-plan feature.' );
+		}
+
 		$parent = $this->operations->find( $parent_op_id );
 
 		if ( null === $parent ) {
@@ -312,23 +337,36 @@ final class Operation_Service {
 			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 		}
 
-		$target = $operation->is_undo()
-			? $this->freeze_undo( $operation )
-			: $this->freeze_edit( $op_id, $operation );
+		// The lock is held across freezing and handed to the async runner on
+		// success. The finally releases it on every other exit — the settle-now
+		// path (nothing to do) and any thrown failure, such as a free-tier
+		// object-cap breach in freeze_edit() — so the catalog is never left
+		// wedged against future operations.
+		$handed_off = false;
 
-		if ( 0 === $target ) {
-			// Nothing to do: settle immediately and free the lock.
-			$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
-			$this->lock->release( $op_id );
-			return;
+		try {
+			$target = $operation->is_undo()
+				? $this->freeze_undo( $operation )
+				: $this->freeze_edit( $op_id, $operation );
+
+			if ( 0 === $target ) {
+				// Nothing to do: settle immediately (the finally frees the lock).
+				$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
+				return;
+			}
+
+			$this->operations->set_target_count( $op_id, $target );
+			$this->operations->set_batch_size( $op_id, self::DEFAULT_BATCH );
+			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
+			$this->operations->touch( $op_id );
+
+			$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
+			$handed_off = true;
+		} finally {
+			if ( ! $handed_off ) {
+				$this->lock->release( $op_id );
+			}
 		}
-
-		$this->operations->set_target_count( $op_id, $target );
-		$this->operations->set_batch_size( $op_id, self::DEFAULT_BATCH );
-		$this->operations->set_status( $op_id, Operation_Status::QUEUED );
-		$this->operations->touch( $op_id );
-
-		$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
 	}
 
 	/**
@@ -338,6 +376,8 @@ final class Operation_Service {
 	 * @param int       $op_id     Operation id.
 	 * @param Operation $operation The operation.
 	 * @return int Number of target objects frozen.
+	 *
+	 * @throws License_Limited When the target count exceeds the free-tier cap.
 	 */
 	private function freeze_edit( int $op_id, Operation $operation ): int {
 		$actions = $operation->actions();
@@ -350,6 +390,18 @@ final class Operation_Service {
 
 		if ( array() === $ids ) {
 			return 0;
+		}
+
+		// Enforce the free-tier object cap before seeding, so a free site cannot
+		// stage a 68k-row operation it is not licensed to run (CONTEXT §5). The
+		// count is known from the single resolution above — no extra query.
+		$max = $this->license->max_objects_per_op();
+
+		if ( count( $ids ) > $max ) {
+			throw new License_Limited(
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- UI-facing message, sanitized at the REST boundary.
+				sprintf( 'This operation targets %1$d objects; the free plan is limited to %2$d per operation.', count( $ids ), $max )
+			);
 		}
 
 		$this->changes->seed( $op_id, $this->seed_rows( $ids, $actions, $filter->scope()->value ) );
@@ -443,6 +495,26 @@ final class Operation_Service {
 					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer/UI-facing message, sanitized at the REST boundary.
 					sprintf( 'No provider handles the field "%s".', $action->field() )
 				);
+			}
+		}
+	}
+
+	/**
+	 * Fail fast if a formula action is used without a paid plan (CONTEXT §5): the
+	 * free tier gets Set_Value edits, not computed formulas.
+	 *
+	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to check.
+	 *
+	 * @throws License_Limited When a formula action is used on the free tier.
+	 */
+	private function assert_formulas_allowed( array $actions ): void {
+		if ( $this->license->can_use_formulas() ) {
+			return;
+		}
+
+		foreach ( $actions as $action ) {
+			if ( $action instanceof Formula ) {
+				throw new License_Limited( 'Formulas are a paid-plan feature.' );
 			}
 		}
 	}

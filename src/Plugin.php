@@ -10,6 +10,7 @@ namespace CatalogOps;
 use CatalogOps\Admin\Admin_Page;
 use CatalogOps\Container\Container;
 use CatalogOps\Database\Schema;
+use CatalogOps\Licensing\License;
 use CatalogOps\Operations\Changes;
 use CatalogOps\Operations\Chunk_Runner;
 use CatalogOps\Operations\Fields\Core_Fields;
@@ -253,6 +254,11 @@ final class Plugin {
 		$this->container->instance( self::class, $this );
 
 		$this->container->singleton(
+			License::class,
+			static fn(): License => License::resolve()
+		);
+
+		$this->container->singleton(
 			Schema::class,
 			static function (): Schema {
 				global $wpdb;
@@ -356,7 +362,8 @@ final class Plugin {
 				$container->get( Changes::class ),
 				$container->get( Field_Providers::class ),
 				$container->get( Lock::class ),
-				$container->get( Scheduler::class )
+				$container->get( Scheduler::class ),
+				$container->get( License::class )
 			)
 		);
 

@@ -12,6 +12,10 @@ Thumbs.db
 /.vscode/
 /.claude/settings.local.json
 
+# Freemius wp.org gatekeeper secret — ships only in the deployed build, never in
+# the public repo (catalogops.php loads it conditionally).
+/freemius-secret.php
+
 # MySQL 8.0 verification harness — large dump + generated plan output (docs/mysql8/README.md)
 /docker/mysql8/catalogops-live.sql
 /docker/mysql8/explain-queries.generated.sql
