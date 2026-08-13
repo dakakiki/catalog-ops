@@ -263,14 +263,23 @@ final class Query_Engine {
 	}
 
 	/**
-	 * Membership in a taxonomy's terms, as a correlated EXISTS. Terms are attached
-	 * to the parent product, so under the variation scope the EXISTS correlates on
-	 * the variation's parent (p.post_parent) rather than the variation itself.
+	 * Membership in a taxonomy's terms. Terms are attached to the parent product,
+	 * so under the variation scope the match is on the variation's parent
+	 * (p.post_parent) rather than the variation itself.
 	 *
 	 * Two forms:
 	 *   - IN / NOT_IN with a list of term ids — has (or lacks) one of those terms.
 	 *   - EXISTS / NOT_EXISTS with no value — has (or lacks) any term of the
 	 *     taxonomy at all, i.e. "filter by this attribute, any value" (M5 filter UI).
+	 *
+	 * Positive membership is expressed as `{object} IN (SELECT object_id …)` rather
+	 * than a correlated `EXISTS`: the subquery selects the (usually small) set of
+	 * objects carrying the term, which MySQL can materialise and drive the whole
+	 * query from. A correlated EXISTS instead makes the optimiser scan every
+	 * published product and test each one — on a large catalogue with several
+	 * conditions that mis-planned into a full scan and timed out (CONTEXT §3/§9).
+	 * The negative forms stay as NOT EXISTS: an anti-join is both the right shape
+	 * and free of NOT IN's NULL pitfalls.
 	 *
 	 * @param string      $taxonomy  Taxonomy name, e.g. `product_cat` or `pa_color`.
 	 * @param Condition   $condition Term id(s) for IN/NOT_IN, or none for (NOT_)EXISTS.
@@ -289,12 +298,20 @@ final class Query_Engine {
 
 		// "Has any term of this taxonomy" (an attribute chosen with no value), or none.
 		if ( Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator ) {
-			$keyword = Operator::NOT_EXISTS === $operator ? 'NOT EXISTS' : 'EXISTS';
+			if ( Operator::NOT_EXISTS === $operator ) {
+				$fragment = "NOT EXISTS (
+					SELECT 1 FROM {$relationships} tr
+					INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+					WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s
+				)";
 
-			$fragment = "{$keyword} (
-				SELECT 1 FROM {$relationships} tr
+				return array( $fragment, array( $taxonomy ) );
+			}
+
+			$fragment = "{$object_column} IN (
+				SELECT tr.object_id FROM {$relationships} tr
 				INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-				WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s
+				WHERE tt.taxonomy = %s
 			)";
 
 			return array( $fragment, array( $taxonomy ) );
@@ -307,12 +324,21 @@ final class Query_Engine {
 		}
 
 		$placeholders = implode( ', ', array_fill( 0, count( $term_ids ), '%d' ) );
-		$keyword      = Operator::NOT_IN === $operator ? 'NOT EXISTS' : 'EXISTS';
 
-		$fragment = "{$keyword} (
-			SELECT 1 FROM {$relationships} tr
+		if ( Operator::NOT_IN === $operator ) {
+			$fragment = "NOT EXISTS (
+				SELECT 1 FROM {$relationships} tr
+				INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+				WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s AND tt.term_id IN ( {$placeholders} )
+			)";
+
+			return array( $fragment, array( $taxonomy, ...$term_ids ) );
+		}
+
+		$fragment = "{$object_column} IN (
+			SELECT tr.object_id FROM {$relationships} tr
 			INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-			WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s AND tt.term_id IN ( {$placeholders} )
+			WHERE tt.taxonomy = %s AND tt.term_id IN ( {$placeholders} )
 		)";
 
 		return array( $fragment, array( $taxonomy, ...$term_ids ) );
@@ -339,13 +365,26 @@ final class Query_Engine {
 		$meta_key = 'attribute_' . $taxonomy;
 		$operator = $condition->operator;
 
+		// Positive matches drive from the postmeta set of matching variations —
+		// `l.product_id IN (SELECT post_id …)`, a semi-join the optimiser can start
+		// from — for the same reason as {@see taxonomy_clause()}: a correlated
+		// EXISTS over 50k+ variations mis-plans into a full scan. Negatives stay as
+		// NOT EXISTS (anti-join, NULL-safe).
+
 		// "Has any value for this attribute" (chosen with no specific value), or none.
 		if ( Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator ) {
-			$keyword = Operator::NOT_EXISTS === $operator ? 'NOT EXISTS' : 'EXISTS';
+			if ( Operator::NOT_EXISTS === $operator ) {
+				$fragment = "NOT EXISTS (
+					SELECT 1 FROM {$postmeta} pm
+					WHERE pm.post_id = l.product_id AND pm.meta_key = %s AND pm.meta_value <> ''
+				)";
 
-			$fragment = "{$keyword} (
-				SELECT 1 FROM {$postmeta} pm
-				WHERE pm.post_id = l.product_id AND pm.meta_key = %s AND pm.meta_value <> ''
+				return array( $fragment, array( $meta_key ) );
+			}
+
+			$fragment = "l.product_id IN (
+				SELECT pm.post_id FROM {$postmeta} pm
+				WHERE pm.meta_key = %s AND pm.meta_value <> ''
 			)";
 
 			return array( $fragment, array( $meta_key ) );
@@ -364,11 +403,19 @@ final class Query_Engine {
 		}
 
 		$placeholders = implode( ', ', array_fill( 0, count( $slugs ), '%s' ) );
-		$keyword      = Operator::NOT_IN === $operator ? 'NOT EXISTS' : 'EXISTS';
 
-		$fragment = "{$keyword} (
-			SELECT 1 FROM {$postmeta} pm
-			WHERE pm.post_id = l.product_id AND pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
+		if ( Operator::NOT_IN === $operator ) {
+			$fragment = "NOT EXISTS (
+				SELECT 1 FROM {$postmeta} pm
+				WHERE pm.post_id = l.product_id AND pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
+			)";
+
+			return array( $fragment, array( $meta_key, ...$slugs ) );
+		}
+
+		$fragment = "l.product_id IN (
+			SELECT pm.post_id FROM {$postmeta} pm
+			WHERE pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
 		)";
 
 		return array( $fragment, array( $meta_key, ...$slugs ) );
