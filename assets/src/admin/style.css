@@ -257,14 +257,34 @@
 	max-width: 340px;
 }
 
+/* The outer container only needs to stop the shared fixed control-height from
+   clipping the wrapping token row inside it — let it size to its content. */
 .catalogops-field--token .components-form-token-field__input-container {
-	display: flex;
-	align-items: center;
-	flex-wrap: nowrap;
-	padding-top: 0;
-	padding-bottom: 0;
-	overflow-x: auto;
-	overflow-y: hidden;
+	height: auto;
+	min-height: var(--co-control-h);
+	max-height: none;
+	padding: 0;
+	overflow: visible;
+}
+
+/* The real flex row holding the pills + input is an emotion component
+   (…TokensAndInputWrapperFlex…) that ships with 7px of padding — that is what
+   made an empty field two rows tall. Trim it so an empty field is one control
+   tall (matching the Min/Max inputs), growing one row at a time as pills wrap
+   and scrolling past ~5 rows so a big selection never swallows the panel. */
+.catalogops-field--token [class*='TokensAndInputWrapperFlex'] {
+	min-height: var(--co-control-h);
+	max-height: 140px;
+	padding: 1px 6px;
+	gap: 3px;
+	row-gap: 3px;
+	overflow-x: hidden;
+	overflow-y: auto;
+	box-sizing: border-box;
+}
+
+.catalogops-field--token .components-form-token-field__token {
+	margin: 1px 0;
 }
 
 /* Float the suggestions over the content instead of pushing the rows below
@@ -664,6 +684,32 @@ tr.is-drift td {
 .catalogops-loading-dim {
 	opacity: 0.45;
 	transition: opacity 0.15s ease;
+}
+
+/* Inline "working" indicator shown beside Preview/Apply while a request runs. */
+.catalogops-inline-loading {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-left: 10px;
+	color: var(--co-blue);
+	font-style: italic;
+}
+
+.catalogops-spinner {
+	display: inline-block;
+	width: 16px;
+	height: 16px;
+	border: 2px solid var(--co-blue);
+	border-top-color: transparent;
+	border-radius: 50%;
+	animation: catalogops-spin 0.7s linear infinite;
+}
+
+@keyframes catalogops-spin {
+	to {
+		transform: rotate( 360deg );
+	}
 }
 
 .catalogops-muted {

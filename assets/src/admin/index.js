@@ -249,6 +249,13 @@ function buildFilter( form, scope, brandField ) {
 			value: form.category.map( Number ),
 		} );
 	}
+	if ( form.tag && form.tag.length ) {
+		conditions.push( {
+			field: 'tag',
+			operator: 'in',
+			value: form.tag.map( Number ),
+		} );
+	}
 	if ( form.brand.length && brandField ) {
 		conditions.push( {
 			field: brandField,
@@ -256,7 +263,10 @@ function buildFilter( form, scope, brandField ) {
 			value: form.brand,
 		} );
 	}
-	if ( form.attribute ) {
+	if ( 'variation' === scope && form.attribute ) {
+		// Attribute filtering targets variations (a parent's price lives on its
+		// variations), so it only applies in the variation scope — the UI hides it
+		// otherwise, and this guards a stale value from a prior scope.
 		// A value picked → match those attribute terms; none picked → match any
 		// object that has this attribute at all. Values are term ids.
 		if ( form.attributeValues.length ) {
@@ -345,6 +355,7 @@ function ProgressBar( { op } ) {
  *
  * @param {Object}   props                   Component props.
  * @param {Object}   props.filter            The current filter payload.
+ * @param {number}   props.resetKey          Bumping clears the edit + schedule inputs.
  * @param {Function} props.onDone            Called when an operation finishes (to refresh).
  * @param {Function} props.onScheduleCreated Called after a schedule is created.
  * @param {boolean}  props.backupAck         Whether the backup reminder is already acknowledged.
@@ -353,6 +364,7 @@ function ProgressBar( { op } ) {
  */
 function BulkEdit( {
 	filter,
+	resetKey,
 	onDone,
 	onScheduleCreated,
 	backupAck,
@@ -382,6 +394,28 @@ function BulkEdit( {
 	const [ startsAt, setStartsAt ] = useState( '' );
 	const [ notifyEmail, setNotifyEmail ] = useState( '' );
 	const [ scheduleMsg, setScheduleMsg ] = useState( '' );
+
+	// Clear the edit + schedule inputs when the parent bumps resetKey (after an
+	// operation settles or a schedule is created). The finished ProgressBar
+	// (`operation`) and the "Schedule created" note (`scheduleMsg`) are kept, so
+	// the user still sees the outcome of what they just ran.
+	useEffect( () => {
+		if ( resetKey === 0 ) {
+			return;
+		}
+		setMode( 'set' );
+		setField( 'regular_price' );
+		setValue( '' );
+		setExpression( '' );
+		setPercent( '' );
+		setPreview( null );
+		setError( '' );
+		setName( '' );
+		setRecurrence( 'once' );
+		setStartsAt( '' );
+		setNotifyEmail( '' );
+		setShowSchedule( false );
+	}, [ resetKey ] );
 
 	// Percentage change is expressed as a formula, so it flows through the exact
 	// same action path (and preview/skip semantics) as a typed formula.
@@ -429,6 +463,10 @@ function BulkEdit( {
 		setBusy( true );
 		setError( '' );
 		setPreview( null );
+		// Drop any finished operation's result bar: the render gates the preview
+		// on `! operation`, so a stale bar from a previous run would otherwise
+		// hide the new preview and make Preview look like it did nothing.
+		setOperation( null );
 		apiFetch( {
 			path: '/catalogops/v1/operations/preview',
 			method: 'POST',
@@ -445,6 +483,11 @@ function BulkEdit( {
 		setConfirming( false );
 		setBusy( true );
 		setError( '' );
+		// The preview is superseded by the running operation, and any previous
+		// operation's bar is replaced by this one — clear both so the panel shows
+		// the new run cleanly rather than a stale result.
+		setPreview( null );
+		setOperation( null );
 		apiFetch( {
 			path: '/catalogops/v1/operations',
 			method: 'POST',
@@ -502,6 +545,16 @@ function BulkEdit( {
 	};
 
 	const running = operation && ! isTerminal( operation );
+
+	// A formula whose source field is empty or non-numeric yields null for every
+	// object, so nothing gets written. Detect an all-skipped sample to explain it,
+	// rather than showing a table of blank "new" values that reads as a no-op.
+	const previewChanges = preview
+		? preview.sample.flatMap( ( r ) => r.changes )
+		: [];
+	const noneWillChange =
+		previewChanges.length > 0 &&
+		previewChanges.every( ( c ) => c.new === null || c.new === '' );
 
 	return (
 		<div className="catalogops-bulk-edit">
@@ -785,6 +838,18 @@ function BulkEdit( {
 							>
 								{ __( 'Apply', 'catalogops' ) }
 							</button>
+							{ busy && (
+								<span
+									className="catalogops-inline-loading"
+									aria-live="polite"
+								>
+									<span
+										className="catalogops-spinner"
+										aria-hidden="true"
+									/>
+									{ __( 'Working…', 'catalogops' ) }
+								</span>
+							) }
 						</div>
 					</div>
 				</div>
@@ -990,6 +1055,18 @@ function BulkEdit( {
 								>
 									{ __( 'Create schedule', 'catalogops' ) }
 								</button>
+								{ busy && (
+									<span
+										className="catalogops-inline-loading"
+										aria-live="polite"
+									>
+										<span
+											className="catalogops-spinner"
+											aria-hidden="true"
+										/>
+										{ __( 'Working…', 'catalogops' ) }
+									</span>
+								) }
 							</div>
 							{ scheduleMsg && (
 								<p className="catalogops-saved">
@@ -1009,38 +1086,41 @@ function BulkEdit( {
 
 			{ preview && ! operation && (
 				<div className="catalogops-preview">
-					<p>
-						{ sprintf(
-							/* translators: %d: number of items that would change. */
-							__(
-								'%d items would change. Sample:',
-								'catalogops'
-							),
-							preview.target_count
-						) }
-					</p>
-					<table className="wp-list-table widefat fixed striped">
-						<thead>
-							<tr>
-								<th>{ __( 'Product', 'catalogops' ) }</th>
-								<th>{ __( 'Field', 'catalogops' ) }</th>
-								<th>{ __( 'Old', 'catalogops' ) }</th>
-								<th>{ __( 'New', 'catalogops' ) }</th>
-							</tr>
-						</thead>
-						<tbody>
-							{ preview.sample.flatMap( ( row ) =>
-								row.changes.map( ( c, i ) => (
-									<tr key={ `${ row.id }-${ i }` }>
-										<td>{ row.name }</td>
-										<td>{ c.field }</td>
-										<td>{ c.old }</td>
-										<td>{ c.new }</td>
-									</tr>
-								) )
+					{ noneWillChange ? (
+						<div className="notice notice-warning">
+							<p>
+								{ sprintf(
+									/* translators: %d: number of matched products. */
+									__(
+										'Preview: none of the %d matching products would change. The value can’t be computed for them — a field the change reads is empty or non-numeric — so they are skipped, never set to 0.',
+										'catalogops'
+									),
+									preview.target_count
+								) }
+							</p>
+							{ filter.scope === 'product' && (
+								<p>
+									{ __(
+										'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is skipped. Use the Products / Variations toggle above the results to switch to Variations and edit those. Otherwise, check that the change reads a field these products have a value in.',
+										'catalogops'
+									) }
+								</p>
 							) }
-						</tbody>
-					</table>
+						</div>
+					) : (
+						<div className="notice notice-success">
+							<p>
+								{ sprintf(
+									/* translators: %d: number of products matched by the filter. */
+									__(
+										'Preview OK — %d products match and will be updated when you Apply. Any whose value can’t be computed (an empty or non-numeric source field) are skipped, never set to 0.',
+										'catalogops'
+									),
+									preview.target_count
+								) }
+							</p>
+						</div>
+					) }
 				</div>
 			) }
 
@@ -1497,12 +1577,34 @@ function OperationRow( { op, onChanged } ) {
 function History( { refreshKey, onChanged } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
+	const [ tick, setTick ] = useState( 0 );
+	const timer = useRef( null );
 
 	useEffect( () => {
+		let cancelled = false;
 		apiFetch( { path: '/catalogops/v1/operations' } )
-			.then( ( res ) => setItems( res.items ) )
-			.catch( ( err ) => setError( err.message ) );
-	}, [ refreshKey ] );
+			.then( ( res ) => {
+				if ( cancelled ) {
+					return;
+				}
+				setItems( res.items );
+				// Keep polling while any operation is still moving, so a queued or
+				// running op — e.g. a schedule's "Run now" — visibly progresses to
+				// completion here without a manual refresh.
+				if ( res.items.some( ( op ) => ! isTerminal( op ) ) ) {
+					timer.current = setTimeout(
+						() => setTick( ( t ) => t + 1 ),
+						2000
+					);
+				}
+			} )
+			.catch( ( err ) => ! cancelled && setError( err.message ) );
+
+		return () => {
+			cancelled = true;
+			clearTimeout( timer.current );
+		};
+	}, [ refreshKey, tick ] );
 
 	return (
 		<div className="catalogops-history">
@@ -1636,6 +1738,10 @@ function Schedules( { refreshKey, onRan } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ localKey, setLocalKey ] = useState( 0 );
+	// The schedule row a request is in flight for, so its buttons show a spinner
+	// and disable rather than leaving the user unsure anything happened.
+	const [ busyId, setBusyId ] = useState( null );
+	const [ runMsg, setRunMsg ] = useState( '' );
 
 	useEffect( () => {
 		apiFetch( { path: '/catalogops/v1/schedules' } )
@@ -1647,17 +1753,28 @@ function Schedules( { refreshKey, onRan } ) {
 
 	const act = ( id, verb ) => {
 		setError( '' );
+		setRunMsg( '' );
+		setBusyId( id );
 		apiFetch( {
 			path: `/catalogops/v1/schedules/${ id }/${ verb }`,
 			method: 'POST',
 		} )
 			.then( () => {
 				reload();
-				if ( verb === 'run' && onRan ) {
-					onRan();
+				if ( verb === 'run' ) {
+					setRunMsg(
+						__(
+							'Queued — the operation runs in the background. Watch its progress in Operation history below (it may take a moment to start).',
+							'catalogops'
+						)
+					);
+					if ( onRan ) {
+						onRan();
+					}
 				}
 			} )
-			.catch( ( err ) => setError( err.message ) );
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusyId( null ) );
 	};
 
 	const remove = ( id ) => {
@@ -1666,12 +1783,14 @@ function Schedules( { refreshKey, onRan } ) {
 			return;
 		}
 		setError( '' );
+		setBusyId( id );
 		apiFetch( {
 			path: `/catalogops/v1/schedules/${ id }`,
 			method: 'DELETE',
 		} )
 			.then( reload )
-			.catch( ( err ) => setError( err.message ) );
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusyId( null ) );
 	};
 
 	return (
@@ -1687,6 +1806,12 @@ function Schedules( { refreshKey, onRan } ) {
 			{ error && (
 				<div className="notice notice-error">
 					<p>{ error }</p>
+				</div>
+			) }
+
+			{ runMsg && (
+				<div className="notice notice-info">
+					<p>{ runMsg }</p>
 				</div>
 			) }
 
@@ -1732,7 +1857,8 @@ function Schedules( { refreshKey, onRan } ) {
 											className="button button-small"
 											onClick={ () => act( s.id, 'run' ) }
 											disabled={
-												s.status === 'completed'
+												s.status === 'completed' ||
+												busyId === s.id
 											}
 										>
 											{ __( 'Run now', 'catalogops' ) }
@@ -1743,6 +1869,7 @@ function Schedules( { refreshKey, onRan } ) {
 												onClick={ () =>
 													act( s.id, 'pause' )
 												}
+												disabled={ busyId === s.id }
 											>
 												{ __( 'Pause', 'catalogops' ) }
 											</button>
@@ -1753,6 +1880,7 @@ function Schedules( { refreshKey, onRan } ) {
 													onClick={ () =>
 														act( s.id, 'resume' )
 													}
+													disabled={ busyId === s.id }
 												>
 													{ __(
 														'Resume',
@@ -1764,9 +1892,16 @@ function Schedules( { refreshKey, onRan } ) {
 										<button
 											className="button button-small button-link-delete"
 											onClick={ () => remove( s.id ) }
+											disabled={ busyId === s.id }
 										>
 											{ __( 'Delete', 'catalogops' ) }
 										</button>
+										{ busyId === s.id && (
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+										) }
 									</div>
 								</td>
 							</tr>
@@ -1869,6 +2004,7 @@ function App() {
 		stockStatus: '',
 		sku: '',
 		category: [],
+		tag: [],
 		brand: [],
 		attribute: '',
 		attributeValues: [],
@@ -1879,9 +2015,13 @@ function App() {
 	const [ loading, setLoading ] = useState( false );
 	const [ error, setError ] = useState( '' );
 	const [ historyKey, setHistoryKey ] = useState( 0 );
+	// Bumped after an operation settles or a schedule is created, to clear the
+	// filter, bulk-edit, and schedule inputs for a fresh start.
+	const [ resetKey, setResetKey ] = useState( 0 );
 	// Discovery data for the category and brand dropdowns. brandField is the
 	// filter field a brand maps to (catalog-specific; supplied by the API).
 	const [ categories, setCategories ] = useState( [] );
+	const [ tags, setTags ] = useState( [] );
 	const [ brands, setBrands ] = useState( [] );
 	const [ brandField, setBrandField ] = useState( '' );
 	const [ attributes, setAttributes ] = useState( [] );
@@ -1900,6 +2040,7 @@ function App() {
 				stockStatus: '',
 				sku: '',
 				category: [],
+				tag: [],
 				brand: [],
 				attribute: '',
 				attributeValues: [],
@@ -1929,6 +2070,9 @@ function App() {
 	useEffect( () => {
 		apiFetch( { path: '/catalogops/v1/fields/categories' } )
 			.then( ( res ) => setCategories( res.categories || [] ) )
+			.catch( () => {} );
+		apiFetch( { path: '/catalogops/v1/fields/tags' } )
+			.then( ( res ) => setTags( res.tags || [] ) )
 			.catch( () => {} );
 		apiFetch( { path: '/catalogops/v1/fields/brands' } )
 			.then( ( res ) => {
@@ -1987,6 +2131,40 @@ function App() {
 		run( page );
 		setHistoryKey( ( k ) => k + 1 );
 	}, [ run, page ] );
+
+	// Clear the filter, its results, and (via resetKey) the bulk-edit and
+	// schedule inputs — a clean slate for the next operation.
+	const resetAll = useCallback( () => {
+		const empty = {
+			priceMin: '',
+			priceMax: '',
+			stockStatus: '',
+			sku: '',
+			category: [],
+			tag: [],
+			brand: [],
+			attribute: '',
+			attributeValues: [],
+		};
+		setForm( empty );
+		setAppliedFilter( buildFilter( empty, scope, brandField ) );
+		setItems( [] );
+		setTotal( 0 );
+		setPage( 1 );
+		setResetKey( ( k ) => k + 1 );
+	}, [ scope, brandField ] );
+
+	// Apply: reset only once the operation has settled (its ProgressBar stays).
+	const onApplyDone = useCallback( () => {
+		setHistoryKey( ( k ) => k + 1 );
+		resetAll();
+	}, [ resetAll ] );
+
+	// Schedule: reset once it has been created (the confirmation message stays).
+	const onScheduleCreated = useCallback( () => {
+		setSchedulesKey( ( k ) => k + 1 );
+		resetAll();
+	}, [ resetAll ] );
 
 	const pages = Math.max( 1, Math.ceil( total / PER_PAGE ) );
 	const update = ( key ) => ( event ) =>
@@ -2127,6 +2305,20 @@ function App() {
 									/>
 								</div>
 
+								<div className="catalogops-field catalogops-field--token">
+									<TokenSelect
+										label={ __( 'Tag', 'catalogops' ) }
+										options={ tags }
+										value={ form.tag }
+										onChange={ ( ids ) =>
+											setForm( {
+												...form,
+												tag: ids,
+											} )
+										}
+									/>
+								</div>
+
 								<div className="catalogops-field">
 									<label htmlFor="catalogops-stock">
 										{ __( 'Stock', 'catalogops' ) }
@@ -2153,38 +2345,47 @@ function App() {
 							</div>
 
 							<div className="catalogops-filter-row">
-								{ attributes.length > 0 && (
-									<div className="catalogops-field">
-										<label htmlFor="catalogops-attribute">
-											{ __( 'Attribute', 'catalogops' ) }
-										</label>
-										<select
-											id="catalogops-attribute"
-											value={ form.attribute }
-											onChange={ ( e ) =>
-												setForm( {
-													...form,
-													attribute: e.target.value,
-													attributeValues: [],
-												} )
-											}
-										>
-											<option value="">
-												{ __( 'Any', 'catalogops' ) }
-											</option>
-											{ attributes.map( ( a ) => (
-												<option
-													key={ a.field }
-													value={ a.field }
-												>
-													{ a.label }
+								{ 'variation' === scope &&
+									attributes.length > 0 && (
+										<div className="catalogops-field">
+											<label htmlFor="catalogops-attribute">
+												{ __(
+													'Attribute',
+													'catalogops'
+												) }
+											</label>
+											<select
+												id="catalogops-attribute"
+												value={ form.attribute }
+												onChange={ ( e ) =>
+													setForm( {
+														...form,
+														attribute:
+															e.target.value,
+														attributeValues: [],
+													} )
+												}
+											>
+												<option value="">
+													{ __(
+														'Any',
+														'catalogops'
+													) }
 												</option>
-											) ) }
-										</select>
-									</div>
-								) }
+												{ attributes.map( ( a ) => (
+													<option
+														key={ a.field }
+														value={ a.field }
+													>
+														{ a.label }
+													</option>
+												) ) }
+											</select>
+										</div>
+									) }
 
-								{ attributes.length > 0 &&
+								{ 'variation' === scope &&
+									attributes.length > 0 &&
 									selectedAttribute && (
 										<div className="catalogops-field catalogops-field--token">
 											<TokenSelect
@@ -2318,7 +2519,13 @@ function App() {
 							<th>{ __( 'Name', 'catalogops' ) }</th>
 							<th>{ __( 'SKU', 'catalogops' ) }</th>
 							<th className="catalogops-num">
+								{ __( 'Cost', 'catalogops' ) }
+							</th>
+							<th className="catalogops-num">
 								{ __( 'Price', 'catalogops' ) }
+							</th>
+							<th className="catalogops-num">
+								{ __( 'Sale price', 'catalogops' ) }
 							</th>
 							<th>{ __( 'Stock', 'catalogops' ) }</th>
 							<th className="catalogops-num">
@@ -2329,7 +2536,7 @@ function App() {
 					<tbody>
 						{ items.length === 0 && ! loading ? (
 							<tr>
-								<td colSpan="6">
+								<td colSpan="8">
 									{ __(
 										'No items match this filter.',
 										'catalogops'
@@ -2343,7 +2550,27 @@ function App() {
 									<td>{ item.name }</td>
 									<td>{ item.sku }</td>
 									<td className="catalogops-num">
+										{ item.cost === null ||
+										item.cost === undefined ? (
+											<span className="catalogops-muted">
+												—
+											</span>
+										) : (
+											item.cost
+										) }
+									</td>
+									<td className="catalogops-num">
 										{ item.price }
+									</td>
+									<td className="catalogops-num">
+										{ item.sale_price === null ||
+										item.sale_price === undefined ? (
+											<span className="catalogops-muted">
+												—
+											</span>
+										) : (
+											item.sale_price
+										) }
 									</td>
 									<td>
 										<span
@@ -2391,8 +2618,9 @@ function App() {
 
 			<BulkEdit
 				filter={ appliedFilter }
-				onDone={ refreshAll }
-				onScheduleCreated={ () => setSchedulesKey( ( k ) => k + 1 ) }
+				resetKey={ resetKey }
+				onDone={ onApplyDone }
+				onScheduleCreated={ onScheduleCreated }
 				backupAck={ onboarding ? onboarding.backup_ack : true }
 				onBackupAck={ () =>
 					setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) )
