@@ -1833,100 +1833,117 @@ function Schedules( { refreshKey, onRan } ) {
 				</div>
 			) }
 
-			<table className="wp-list-table widefat fixed striped">
-				<thead>
-					<tr>
-						<th>{ __( 'Name', 'catalogops' ) }</th>
-						<th>{ __( 'Repeat', 'catalogops' ) }</th>
-						<th>{ __( 'Status', 'catalogops' ) }</th>
-						<th>{ __( 'Next run', 'catalogops' ) }</th>
-						<th>{ __( 'Last run', 'catalogops' ) }</th>
-						<th>{ __( 'Actions', 'catalogops' ) }</th>
-					</tr>
-				</thead>
-				<tbody>
-					{ items.length === 0 ? (
-						<tr className="catalogops-empty">
-							<td colSpan="6">
-								{ __( 'No schedules yet.', 'catalogops' ) }
-							</td>
+			<div className="catalogops-overlay-wrap">
+				<table className="wp-list-table widefat fixed striped">
+					<thead>
+						<tr>
+							<th>{ __( 'Name', 'catalogops' ) }</th>
+							<th>{ __( 'Repeat', 'catalogops' ) }</th>
+							<th>{ __( 'Status', 'catalogops' ) }</th>
+							<th>{ __( 'Next run', 'catalogops' ) }</th>
+							<th>{ __( 'Last run', 'catalogops' ) }</th>
+							<th>{ __( 'Actions', 'catalogops' ) }</th>
 						</tr>
-					) : (
-						items.map( ( s ) => (
-							<tr key={ s.id }>
-								<td>{ s.name || `#${ s.id }` }</td>
-								<td>{ s.recurrence }</td>
-								<td>
-									<span
-										className={ `catalogops-badge catalogops-status-badge is-${ s.status }` }
-									>
-										{ s.status }
-									</span>
+					</thead>
+					<tbody>
+						{ items.length === 0 ? (
+							<tr className="catalogops-empty">
+								<td colSpan="6">
+									{ __( 'No schedules yet.', 'catalogops' ) }
 								</td>
-								<td>
-									{ s.status === 'completed'
-										? '—'
-										: s.next_run }
-								</td>
-								<td>{ s.last_run || '—' }</td>
-								<td>
-									<div className="catalogops-actions">
-										<button
-											className="button button-small"
-											onClick={ () => act( s.id, 'run' ) }
-											disabled={
-												s.status === 'completed' ||
-												busyId === s.id
-											}
+							</tr>
+						) : (
+							items.map( ( s ) => (
+								<tr key={ s.id }>
+									<td>{ s.name || `#${ s.id }` }</td>
+									<td>{ s.recurrence }</td>
+									<td>
+										<span
+											className={ `catalogops-badge catalogops-status-badge is-${ s.status }` }
 										>
-											{ __( 'Run now', 'catalogops' ) }
-										</button>
-										{ s.status === 'active' ? (
+											{ s.status }
+										</span>
+									</td>
+									<td>
+										{ s.status === 'completed'
+											? '—'
+											: s.next_run }
+									</td>
+									<td>{ s.last_run || '—' }</td>
+									<td>
+										<div className="catalogops-actions">
 											<button
 												className="button button-small"
 												onClick={ () =>
-													act( s.id, 'pause' )
+													act( s.id, 'run' )
 												}
-												disabled={ busyId === s.id }
+												disabled={
+													s.status === 'completed' ||
+													busyId === s.id
+												}
 											>
-												{ __( 'Pause', 'catalogops' ) }
+												{ __(
+													'Run now',
+													'catalogops'
+												) }
 											</button>
-										) : (
-											s.status === 'paused' && (
+											{ s.status === 'active' ? (
 												<button
 													className="button button-small"
 													onClick={ () =>
-														act( s.id, 'resume' )
+														act( s.id, 'pause' )
 													}
 													disabled={ busyId === s.id }
 												>
 													{ __(
-														'Resume',
+														'Pause',
 														'catalogops'
 													) }
 												</button>
-											)
-										) }
-										<button
-											className="button button-small button-link-delete"
-											onClick={ () => remove( s.id ) }
-											disabled={ busyId === s.id }
-										>
-											{ __( 'Delete', 'catalogops' ) }
-										</button>
-										{ busyId === s.id && (
-											<span
-												className="catalogops-spinner"
-												aria-hidden="true"
-											/>
-										) }
-									</div>
-								</td>
-							</tr>
-						) )
-					) }
-				</tbody>
-			</table>
+											) : (
+												s.status === 'paused' && (
+													<button
+														className="button button-small"
+														onClick={ () =>
+															act(
+																s.id,
+																'resume'
+															)
+														}
+														disabled={
+															busyId === s.id
+														}
+													>
+														{ __(
+															'Resume',
+															'catalogops'
+														) }
+													</button>
+												)
+											) }
+											<button
+												className="button button-small button-link-delete"
+												onClick={ () => remove( s.id ) }
+												disabled={ busyId === s.id }
+											>
+												{ __( 'Delete', 'catalogops' ) }
+											</button>
+										</div>
+									</td>
+								</tr>
+							) )
+						) }
+					</tbody>
+				</table>
+				{ busyId !== null && (
+					<div className="catalogops-overlay">
+						<span
+							className="catalogops-spinner"
+							aria-hidden="true"
+						/>
+					</div>
+				) }
+			</div>
 		</div>
 	);
 }

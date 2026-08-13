@@ -712,6 +712,27 @@ tr.is-drift td {
 	}
 }
 
+/* A centred loading overlay over a table (the schedules list) while a row action
+   runs — consistent with the other spinners, without shifting the layout. */
+.catalogops-overlay-wrap {
+	position: relative;
+}
+
+.catalogops-overlay {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba( 255, 255, 255, 0.45 );
+}
+
+.catalogops-overlay .catalogops-spinner {
+	width: 28px;
+	height: 28px;
+	border-width: 3px;
+}
+
 .catalogops-muted {
 	color: var(--co-muted);
 }
