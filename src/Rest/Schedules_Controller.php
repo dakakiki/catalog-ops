@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Rest;
 
+use CatalogOps\Licensing\License;
 use CatalogOps\Operations\Actions\Action_Factory;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Recurrence;
@@ -46,14 +47,24 @@ final class Schedules_Controller {
 	private Schedule_Runner $runner;
 
 	/**
+	 * Plan gating (scheduling is a paid-plan feature).
+	 *
+	 * @var License
+	 */
+	private License $license;
+
+	/**
 	 * Build the controller.
 	 *
 	 * @param Schedules       $schedules Schedules repository.
 	 * @param Schedule_Runner $runner    Schedule supervisor.
+	 * @param License|null    $license   Plan gating; defaults to unlimited
+	 *                                    (unlicensed development and tests).
 	 */
-	public function __construct( Schedules $schedules, Schedule_Runner $runner ) {
+	public function __construct( Schedules $schedules, Schedule_Runner $runner, ?License $license = null ) {
 		$this->schedules = $schedules;
 		$this->runner    = $runner;
+		$this->license   = $license ?? License::unlimited();
 	}
 
 	/**
@@ -150,6 +161,13 @@ final class Schedules_Controller {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function create( WP_REST_Request $request ) {
+		// Scheduling is a paid-plan feature (CONTEXT §5). Gate before any parsing so
+		// a free site gets a clean 402 upgrade prompt, mirroring the operation
+		// pipeline's License_Limited → 402 mapping.
+		if ( ! $this->license->can_schedule() ) {
+			return $this->error( 'catalogops_upgrade_required', 'Scheduling is a paid-plan feature.', 402 );
+		}
+
 		try {
 			$filter  = Filter::from_array( (array) $request->get_param( 'filter' ) );
 			$actions = Action_Factory::list_from_array( (array) $request->get_param( 'actions' ) );

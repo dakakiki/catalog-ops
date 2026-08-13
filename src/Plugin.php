@@ -445,7 +445,8 @@ final class Plugin {
 			Schedules_Controller::class,
 			static fn( Container $container ): Schedules_Controller => new Schedules_Controller(
 				$container->get( Schedules::class ),
-				$container->get( Schedule_Runner::class )
+				$container->get( Schedule_Runner::class ),
+				$container->get( License::class )
 			)
 		);
 

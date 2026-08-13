@@ -17,6 +17,7 @@ use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Query\Filter;
 use InvalidArgumentException;
 use Throwable;
@@ -275,6 +276,8 @@ final class Operations_Controller {
 			$this->service->queue( $op_id );
 		} catch ( Operation_Blocked $e ) {
 			return $this->error( 'catalogops_locked', $e->getMessage(), 409 );
+		} catch ( License_Limited $e ) {
+			return $this->error( 'catalogops_upgrade_required', $e->getMessage(), 402 );
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		} catch ( Throwable $e ) {
@@ -349,6 +352,8 @@ final class Operations_Controller {
 				$this->policy_param( $request ),
 				(int) $request->get_param( 'limit' )
 			);
+		} catch ( License_Limited $e ) {
+			return $this->error( 'catalogops_upgrade_required', $e->getMessage(), 402 );
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_not_found', $e->getMessage(), 404 );
 		}
@@ -370,6 +375,8 @@ final class Operations_Controller {
 			$this->service->queue( $undo_id );
 		} catch ( Operation_Blocked $e ) {
 			return $this->error( 'catalogops_locked', $e->getMessage(), 409 );
+		} catch ( License_Limited $e ) {
+			return $this->error( 'catalogops_upgrade_required', $e->getMessage(), 402 );
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		} catch ( Throwable $e ) {

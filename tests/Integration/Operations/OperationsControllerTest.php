@@ -12,14 +12,23 @@
 
 namespace CatalogOps\Tests\Integration\Operations;
 
+use CatalogOps\Licensing\License;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Changes;
+use CatalogOps\Operations\Fields\Core_Fields;
+use CatalogOps\Operations\Fields\Field_Providers;
+use CatalogOps\Operations\Fields\Meta_Fields;
+use CatalogOps\Operations\Lock;
 use CatalogOps\Operations\Operation_Mode;
+use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
 use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Operations;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Query_Engine;
+use CatalogOps\Rest\Operations_Controller;
 use WC_Product_Simple;
+use WP_Error;
 use WP_REST_Request;
 
 /**
@@ -245,6 +254,68 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertSame( 'force', $data['conflict_policy'] );
 		// Its targets were frozen from the parent's two applied deltas.
 		$this->assertSame( 2, $data['target_count'] );
+	}
+
+	public function test_create_with_formula_on_free_plan_returns_402(): void {
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/operations' );
+		$request->set_body_params(
+			array(
+				'filter'  => array(),
+				'actions' => array(
+					array( 'type' => 'formula', 'field' => 'regular_price', 'expression' => 'regular_price * 0.9' ),
+				),
+			)
+		);
+
+		$response = $this->free_controller()->create( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'catalogops_upgrade_required', $response->get_error_code() );
+		$this->assertSame( 402, $response->get_error_data()['status'] );
+	}
+
+	public function test_undo_on_free_plan_returns_402(): void {
+		// The license gate fires before the parent lookup, so any id reaches it.
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/operations/123/undo' );
+		$request->set_param( 'id', 123 );
+
+		$response = $this->free_controller()->undo( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'catalogops_upgrade_required', $response->get_error_code() );
+		$this->assertSame( 402, $response->get_error_data()['status'] );
+	}
+
+	public function test_undo_preview_on_free_plan_returns_402(): void {
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/operations/123/undo/preview' );
+		$request->set_param( 'id', 123 );
+
+		$response = $this->free_controller()->undo_preview( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'catalogops_upgrade_required', $response->get_error_code() );
+		$this->assertSame( 402, $response->get_error_data()['status'] );
+	}
+
+	/**
+	 * Build a controller whose service is gated to the free plan, so the paid-only
+	 * paths (formulas, undo) raise License_Limited and the controller maps them to
+	 * HTTP 402. Bypasses the container, whose license is unlimited under test.
+	 */
+	private function free_controller(): Operations_Controller {
+		global $wpdb;
+
+		$service = new Operation_Service(
+			new Query_Engine( $wpdb ),
+			$this->operations,
+			$this->changes,
+			new Field_Providers( new Core_Fields(), new Meta_Fields() ),
+			new Lock( $this->operations ),
+			new Recording_Scheduler(),
+			License::free()
+		);
+
+		return new Operations_Controller( $service, $this->operations, $this->changes, $wpdb );
 	}
 
 	/**
