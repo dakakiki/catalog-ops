@@ -135,18 +135,23 @@ The plugin ships a seeder. Run it **via WP-CLI** (no web timeout), so even a low
 `max_execution_time` is fine:
 
 ```bash
-wp catalogops seed --products=5000 --variable=2000
+wp catalogops seed --products=2000 --variable=25 --reset
 ```
 
-- `--products=<n>` parent products, `--variable=<n>` of which are variable (each
-  gets Size variations).
+- `--products=<n>` parent products to create.
+- `--variable=<percent>` is a **percentage (0–100)**, not a count — the share of
+  products that are variable (each variable one gets Size variations, added on top
+  of the product count). **Leave a majority simple** (e.g. `--variable=25`): the
+  Products scope only shows simple, priced products — a 100 % variable catalog
+  makes the Products filter return nothing (variable parents live in the
+  **Variations** scope, since their price is on the variations).
 - `--reset` removes everything the seeder created (`_catalogops_seeded` marker).
 
 The seeder recreates categories (Apparel, Footwear, …), the Color/Size global
 attributes, brand values (the `_catalogops_brand` meta field), prices, cost, and
-stock — the full shape the query/gating features exercise. **5 000 products is
-plenty** for gating tests: you only need > 200 matching a filter to hit the free
-cap; the 68 k live scale is not required.
+stock — the full shape the query/gating features exercise. **A couple thousand
+products is plenty** for gating tests: you only need > 200 matching a filter to
+hit the free cap; the 68 k live scale is not required.
 
 > This is why re-seeding beats a CSV export/import for moving the catalog to a new
 > site: brands are a meta field (a product CSV export drops them without a custom
