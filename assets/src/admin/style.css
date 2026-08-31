@@ -182,6 +182,38 @@
 	font-weight: 600;
 }
 
+/* Paid-only controls the free tier cannot use: dimmed, not-allowed, and never
+   the active state. */
+.catalogops-segmented__btn.is-locked,
+.catalogops-collapse-toggle.is-locked {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+/* --- Upsell (free-tier paid-plan prompts) ----------------------------- */
+
+.catalogops-upsell {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 8px 0 0;
+	font-size: 12px;
+	color: var(--co-muted);
+}
+
+.catalogops-upsell__badge {
+	flex: none;
+	padding: 1px 7px;
+	border: 1px solid var(--co-accent-border);
+	border-radius: 9px;
+	background: var(--co-accent-tint);
+	color: var(--co-accent);
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
 /* --- Filter bar -------------------------------------------------------- */
 
 /* The filter group stacks several rows, so its label sits at the top rather

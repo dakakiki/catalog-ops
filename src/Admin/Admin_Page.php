@@ -7,6 +7,8 @@
 
 namespace CatalogOps\Admin;
 
+use CatalogOps\Licensing\License;
+
 /**
  * Registers the top-level admin menu, renders the mount point, and enqueues the
  * built React bundle (when present) with its REST config.
@@ -25,12 +27,23 @@ final class Admin_Page {
 	private string $plugin_file;
 
 	/**
+	 * Plan gating, surfaced to the React app so the free tier sees upsell prompts
+	 * instead of paid-only controls.
+	 *
+	 * @var License
+	 */
+	private License $license;
+
+	/**
 	 * Build the admin page.
 	 *
-	 * @param string $plugin_file Absolute path to the main plugin file.
+	 * @param string       $plugin_file Absolute path to the main plugin file.
+	 * @param License|null $license     Plan gating; defaults to unlimited
+	 *                                  (unlicensed development and tests).
 	 */
-	public function __construct( string $plugin_file ) {
+	public function __construct( string $plugin_file, ?License $license = null ) {
 		$this->plugin_file = $plugin_file;
+		$this->license     = $license ?? License::unlimited();
 	}
 
 	/**
@@ -119,8 +132,20 @@ final class Admin_Page {
 			'catalogops-admin',
 			'catalogopsConfig',
 			array(
-				'restUrl' => esc_url_raw( rest_url( 'catalogops/v1' ) ),
-				'nonce'   => wp_create_nonce( 'wp_rest' ),
+				'restUrl'      => esc_url_raw( rest_url( 'catalogops/v1' ) ),
+				'nonce'        => wp_create_nonce( 'wp_rest' ),
+				// What the current plan permits, so the app offers paid-only
+				// controls (undo, formulas, scheduling) only where they will work
+				// and shows an upsell otherwise. The REST layer still enforces the
+				// real limits (402); this only decides what to render.
+				'capabilities' => array(
+					'isPremium'       => $this->license->is_premium(),
+					'canUndo'         => $this->license->can_undo(),
+					'canSchedule'     => $this->license->can_schedule(),
+					'canUseFormulas'  => $this->license->can_use_formulas(),
+					// null means unbounded (paid); a number is the free-tier cap.
+					'maxObjectsPerOp' => $this->license->is_premium() ? null : $this->license->max_objects_per_op(),
+				),
 			)
 		);
 	}

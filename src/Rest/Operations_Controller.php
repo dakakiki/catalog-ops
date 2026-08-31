@@ -17,6 +17,7 @@ use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Licensing\License;
 use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Query\Filter;
 use InvalidArgumentException;
@@ -66,18 +67,28 @@ final class Operations_Controller {
 	private wpdb $wpdb;
 
 	/**
+	 * Plan gating (undo is a paid-plan feature).
+	 *
+	 * @var License
+	 */
+	private License $license;
+
+	/**
 	 * Build the controller.
 	 *
 	 * @param Operation_Service $service    Operation service.
 	 * @param Operations        $operations Operations repository.
 	 * @param Changes           $changes    Changes repository.
 	 * @param wpdb              $wpdb       WordPress database handle.
+	 * @param License|null      $license    Plan gating; defaults to unlimited
+	 *                                      (unlicensed development and tests).
 	 */
-	public function __construct( Operation_Service $service, Operations $operations, Changes $changes, wpdb $wpdb ) {
+	public function __construct( Operation_Service $service, Operations $operations, Changes $changes, wpdb $wpdb, ?License $license = null ) {
 		$this->service    = $service;
 		$this->operations = $operations;
 		$this->changes    = $changes;
 		$this->wpdb       = $wpdb;
+		$this->license    = $license ?? License::unlimited();
 	}
 
 	/**
@@ -601,13 +612,15 @@ final class Operations_Controller {
 	}
 
 	/**
-	 * Whether the admin app should offer an undo control for this operation: it
-	 * made changes and is not currently running.
+	 * Whether the admin app should offer an undo control for this operation: the
+	 * plan permits undo, and the operation made changes and is not currently
+	 * running. Gating the flag here means the free tier's Undo button simply never
+	 * appears, matching the REST layer's 402 on the undo endpoint.
 	 *
 	 * @param Operation $operation The operation.
 	 */
 	private function can_undo( Operation $operation ): bool {
-		return ! $operation->status->is_active() && $operation->processed > 0;
+		return $this->license->can_undo() && ! $operation->status->is_active() && $operation->processed > 0;
 	}
 
 	/**

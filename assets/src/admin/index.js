@@ -29,6 +29,44 @@ import './style.css';
 const PER_PAGE = 10;
 
 /**
+ * Plan capabilities for the current site, surfaced by the server via
+ * wp_localize_script (see Admin_Page). Missing config fails open — everything
+ * allowed — because the REST layer enforces the real limits and returns 402; the
+ * UI only decides what to *offer*, never what to permit. So a flag gates a
+ * control only when it is explicitly `false`.
+ */
+const CAPABILITIES =
+	( window.catalogopsConfig && window.catalogopsConfig.capabilities ) || {};
+
+/**
+ * Whether the current plan permits a capability. Unknown flags default to true
+ * (fail open); only an explicit `false` from the server gates the control.
+ *
+ * @param {string} key Capability key (e.g. canUseFormulas, canSchedule).
+ * @return {boolean} Whether the control should be offered.
+ */
+function can( key ) {
+	return CAPABILITIES[ key ] !== false;
+}
+
+/**
+ * A small "paid plan" upsell shown in place of a gated control on the free tier.
+ *
+ * @param {Object} props          Component props.
+ * @param {Node}   props.children The upsell copy.
+ */
+function UpsellNotice( { children } ) {
+	return (
+		<p className="catalogops-upsell">
+			<span className="catalogops-upsell__badge">
+				{ __( 'Paid plan', 'catalogops' ) }
+			</span>
+			<span>{ children }</span>
+		</p>
+	);
+}
+
+/**
  * Map a stock status to a badge modifier.
  *
  * @param {string} status Stock status.
@@ -381,6 +419,12 @@ function BulkEdit( {
 	const [ error, setError ] = useState( '' );
 	const [ busy, setBusy ] = useState( false );
 
+	// Percent and Formula modes both compile to a formula action, which the free
+	// tier cannot run (the REST layer returns 402); scheduling is paid too. Gate
+	// both controls so the free tier sees an upsell instead of a dead end.
+	const canFormulas = can( 'canUseFormulas' );
+	const canSchedule = can( 'canSchedule' );
+
 	// The apply confirmation. Before the very first operation the backup reminder
 	// is mandatory (CONTEXT §9): a required acknowledgement, not a throwaway
 	// dialog. Once acknowledged, applying just asks for a plain confirmation.
@@ -584,8 +628,17 @@ function BulkEdit( {
 									type="button"
 									className={ `catalogops-segmented__btn${
 										mode === 'percent' ? ' is-active' : ''
-									}` }
+									}${ canFormulas ? '' : ' is-locked' }` }
 									onClick={ () => changeMode( 'percent' ) }
+									disabled={ ! canFormulas }
+									title={
+										canFormulas
+											? undefined
+											: __(
+													'Available on a paid plan',
+													'catalogops'
+											  )
+									}
 								>
 									{ __( 'Percent', 'catalogops' ) }
 								</button>
@@ -593,12 +646,29 @@ function BulkEdit( {
 									type="button"
 									className={ `catalogops-segmented__btn${
 										mode === 'formula' ? ' is-active' : ''
-									}` }
+									}${ canFormulas ? '' : ' is-locked' }` }
 									onClick={ () => changeMode( 'formula' ) }
+									disabled={ ! canFormulas }
+									title={
+										canFormulas
+											? undefined
+											: __(
+													'Available on a paid plan',
+													'catalogops'
+											  )
+									}
 								>
 									{ __( 'Formula', 'catalogops' ) }
 								</button>
 							</div>
+							{ ! canFormulas && (
+								<UpsellNotice>
+									{ __(
+										'Percent and formula edits are available on a paid plan. Free plans can set a fixed value.',
+										'catalogops'
+									) }
+								</UpsellNotice>
+							) }
 						</div>
 
 						<div className="catalogops-filter-row">
@@ -927,9 +997,17 @@ function BulkEdit( {
 				<div className="catalogops-control-group">
 					<button
 						type="button"
-						className="catalogops-collapse-toggle catalogops-group-label"
+						className={ `catalogops-collapse-toggle catalogops-group-label${
+							canSchedule ? '' : ' is-locked'
+						}` }
 						onClick={ () => setShowSchedule( ! showSchedule ) }
-						aria-expanded={ showSchedule }
+						aria-expanded={ canSchedule && showSchedule }
+						disabled={ ! canSchedule }
+						title={
+							canSchedule
+								? undefined
+								: __( 'Available on a paid plan', 'catalogops' )
+						}
 					>
 						{ __( 'Scheduling', 'catalogops' ) }
 						<svg
@@ -954,7 +1032,15 @@ function BulkEdit( {
 							/>
 						</svg>
 					</button>
-					{ showSchedule && (
+					{ ! canSchedule && (
+						<UpsellNotice>
+							{ __(
+								'Schedule changes to run later or on a recurring basis with a paid plan.',
+								'catalogops'
+							) }
+						</UpsellNotice>
+					) }
+					{ canSchedule && showSchedule && (
 						<div className="catalogops-filter-rows">
 							<div className="catalogops-filter-row">
 								<div className="catalogops-field">

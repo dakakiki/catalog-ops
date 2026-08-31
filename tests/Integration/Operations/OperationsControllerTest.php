@@ -297,12 +297,36 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertSame( 402, $response->get_error_data()['status'] );
 	}
 
+	public function test_can_undo_flag_is_false_on_free_plan(): void {
+		$op_id   = $this->completed_operation( array( 801, 802 ) );
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id );
+		$request->set_param( 'id', $op_id );
+
+		$data = $this->controller_for( License::free() )->show( $request )->get_data();
+
+		// The operation is completed with changes, so only the plan holds undo back.
+		$this->assertFalse( $data['can_undo'] );
+	}
+
+	public function test_can_undo_flag_is_true_on_paid_plan(): void {
+		$op_id   = $this->completed_operation( array( 811, 812 ) );
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id );
+		$request->set_param( 'id', $op_id );
+
+		$data = $this->controller_for( License::unlimited() )->show( $request )->get_data();
+
+		$this->assertTrue( $data['can_undo'] );
+	}
+
 	/**
-	 * Build a controller whose service is gated to the free plan, so the paid-only
-	 * paths (formulas, undo) raise License_Limited and the controller maps them to
-	 * HTTP 402. Bypasses the container, whose license is unlimited under test.
+	 * Build a controller gated to a specific license, sharing the per-test repos.
+	 * The paid-only paths (formulas, undo) raise License_Limited, which the
+	 * controller maps to HTTP 402; the license also gates the `can_undo` response
+	 * flag. Bypasses the container, whose license is unlimited under test.
+	 *
+	 * @param License $license The plan to gate on.
 	 */
-	private function free_controller(): Operations_Controller {
+	private function controller_for( License $license ): Operations_Controller {
 		global $wpdb;
 
 		$service = new Operation_Service(
@@ -312,10 +336,17 @@ final class OperationsControllerTest extends Operations_Database_Case {
 			new Field_Providers( new Core_Fields(), new Meta_Fields() ),
 			new Lock( $this->operations ),
 			new Recording_Scheduler(),
-			License::free()
+			$license
 		);
 
-		return new Operations_Controller( $service, $this->operations, $this->changes, $wpdb );
+		return new Operations_Controller( $service, $this->operations, $this->changes, $wpdb, $license );
+	}
+
+	/**
+	 * A controller gated to the free plan.
+	 */
+	private function free_controller(): Operations_Controller {
+		return $this->controller_for( License::free() );
 	}
 
 	/**
