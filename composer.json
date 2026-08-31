@@ -35,6 +35,7 @@
         "phpcbf": "phpcbf",
         "test": "phpunit",
         "test:unit": "phpunit --testsuite unit",
-        "test:integration": "phpunit --testsuite integration"
+        "test:integration": "phpunit --testsuite integration",
+        "build": "@php bin/build.php"
     }
 }

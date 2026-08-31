@@ -2,6 +2,10 @@
 /node_modules/
 /assets/dist/
 /tests/coverage/
+
+# Build artifacts — release zips assembled by bin/build.php.
+/dist/
+*.zip
 *.log
 .env
 .env.*

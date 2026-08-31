@@ -12,14 +12,23 @@
 
 namespace CatalogOps\Tests\Integration\Operations;
 
+use CatalogOps\Licensing\License;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Changes;
+use CatalogOps\Operations\Fields\Core_Fields;
+use CatalogOps\Operations\Fields\Field_Providers;
+use CatalogOps\Operations\Fields\Meta_Fields;
+use CatalogOps\Operations\Lock;
 use CatalogOps\Operations\Operation_Mode;
+use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
 use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Operations;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Query_Engine;
+use CatalogOps\Rest\Operations_Controller;
 use WC_Product_Simple;
+use WP_Error;
 use WP_REST_Request;
 
 /**
@@ -245,6 +254,99 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertSame( 'force', $data['conflict_policy'] );
 		// Its targets were frozen from the parent's two applied deltas.
 		$this->assertSame( 2, $data['target_count'] );
+	}
+
+	public function test_create_with_formula_on_free_plan_returns_402(): void {
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/operations' );
+		$request->set_body_params(
+			array(
+				'filter'  => array(),
+				'actions' => array(
+					array( 'type' => 'formula', 'field' => 'regular_price', 'expression' => 'regular_price * 0.9' ),
+				),
+			)
+		);
+
+		$response = $this->free_controller()->create( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'catalogops_upgrade_required', $response->get_error_code() );
+		$this->assertSame( 402, $response->get_error_data()['status'] );
+	}
+
+	public function test_undo_on_free_plan_returns_402(): void {
+		// The license gate fires before the parent lookup, so any id reaches it.
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/operations/123/undo' );
+		$request->set_param( 'id', 123 );
+
+		$response = $this->free_controller()->undo( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'catalogops_upgrade_required', $response->get_error_code() );
+		$this->assertSame( 402, $response->get_error_data()['status'] );
+	}
+
+	public function test_undo_preview_on_free_plan_returns_402(): void {
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/operations/123/undo/preview' );
+		$request->set_param( 'id', 123 );
+
+		$response = $this->free_controller()->undo_preview( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'catalogops_upgrade_required', $response->get_error_code() );
+		$this->assertSame( 402, $response->get_error_data()['status'] );
+	}
+
+	public function test_can_undo_flag_is_false_on_free_plan(): void {
+		$op_id   = $this->completed_operation( array( 801, 802 ) );
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id );
+		$request->set_param( 'id', $op_id );
+
+		$data = $this->controller_for( License::free() )->show( $request )->get_data();
+
+		// The operation is completed with changes, so only the plan holds undo back.
+		$this->assertFalse( $data['can_undo'] );
+	}
+
+	public function test_can_undo_flag_is_true_on_paid_plan(): void {
+		$op_id   = $this->completed_operation( array( 811, 812 ) );
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id );
+		$request->set_param( 'id', $op_id );
+
+		$data = $this->controller_for( License::unlimited() )->show( $request )->get_data();
+
+		$this->assertTrue( $data['can_undo'] );
+	}
+
+	/**
+	 * Build a controller gated to a specific license, sharing the per-test repos.
+	 * The paid-only paths (formulas, undo) raise License_Limited, which the
+	 * controller maps to HTTP 402; the license also gates the `can_undo` response
+	 * flag. Bypasses the container, whose license is unlimited under test.
+	 *
+	 * @param License $license The plan to gate on.
+	 */
+	private function controller_for( License $license ): Operations_Controller {
+		global $wpdb;
+
+		$service = new Operation_Service(
+			new Query_Engine( $wpdb ),
+			$this->operations,
+			$this->changes,
+			new Field_Providers( new Core_Fields(), new Meta_Fields() ),
+			new Lock( $this->operations ),
+			new Recording_Scheduler(),
+			$license
+		);
+
+		return new Operations_Controller( $service, $this->operations, $this->changes, $wpdb, $license );
+	}
+
+	/**
+	 * A controller gated to the free plan.
+	 */
+	private function free_controller(): Operations_Controller {
+		return $this->controller_for( License::free() );
 	}
 
 	/**

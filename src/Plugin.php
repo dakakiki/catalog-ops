@@ -297,7 +297,10 @@ final class Plugin {
 		$plugin_file = $this->file;
 		$this->container->singleton(
 			Admin_Page::class,
-			static fn(): Admin_Page => new Admin_Page( $plugin_file )
+			static fn( Container $container ): Admin_Page => new Admin_Page(
+				$plugin_file,
+				$container->get( License::class )
+			)
 		);
 
 		$this->register_operation_services();
@@ -402,7 +405,8 @@ final class Plugin {
 					$container->get( Operation_Service::class ),
 					$container->get( Operations::class ),
 					$container->get( Changes::class ),
-					$wpdb
+					$wpdb,
+					$container->get( License::class )
 				);
 			}
 		);
@@ -445,7 +449,8 @@ final class Plugin {
 			Schedules_Controller::class,
 			static fn( Container $container ): Schedules_Controller => new Schedules_Controller(
 				$container->get( Schedules::class ),
-				$container->get( Schedule_Runner::class )
+				$container->get( Schedule_Runner::class ),
+				$container->get( License::class )
 			)
 		);
 

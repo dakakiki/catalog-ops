@@ -8,7 +8,8 @@
         "build": "wp-scripts build",
         "start": "wp-scripts start",
         "format": "wp-scripts format assets/src",
-        "lint:js": "wp-scripts lint-js assets/src"
+        "lint:js": "wp-scripts lint-js assets/src",
+        "package": "wp-scripts build && php bin/build.php"
     },
     "devDependencies": {
         "@wordpress/api-fetch": "^7.52.0",
