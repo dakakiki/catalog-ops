@@ -145,9 +145,16 @@ final class Operations_Controller {
 			self::REST_NAMESPACE,
 			'/operations/(?P<id>\d+)',
 			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'show' ),
-				'permission_callback' => array( $this, 'can_manage' ),
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( $this, 'show' ),
+					'permission_callback' => array( $this, 'can_manage' ),
+				),
+				array(
+					'methods'             => WP_REST_Server::DELETABLE,
+					'callback'            => array( $this, 'delete' ),
+					'permission_callback' => array( $this, 'can_manage' ),
+				),
 			)
 		);
 
@@ -337,6 +344,31 @@ final class Operations_Controller {
 		);
 
 		return new WP_REST_Response( array( 'items' => $operations ) );
+	}
+
+	/**
+	 * Remove an operation and its recorded deltas from the history.
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function delete( WP_REST_Request $request ) {
+		$id = (int) $request->get_param( 'id' );
+
+		try {
+			$this->service->delete( $id );
+		} catch ( Operation_Blocked $e ) {
+			return $this->error( 'catalogops_locked', $e->getMessage(), 409 );
+		} catch ( InvalidArgumentException $e ) {
+			return $this->error( 'catalogops_not_found', $e->getMessage(), 404 );
+		}
+
+		return new WP_REST_Response(
+			array(
+				'deleted' => true,
+				'id'      => $id,
+			)
+		);
 	}
 
 	/**

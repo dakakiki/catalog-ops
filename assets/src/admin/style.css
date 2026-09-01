@@ -727,6 +727,51 @@ without claiming a position it does not know.
 	color: var(--co-muted);
 }
 
+/* --- Row action icons -------------------------------------------------- */
+
+.catalogops-icon-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	padding: 0;
+}
+
+.catalogops-icon-button .dashicons {
+	width: 18px;
+	height: 18px;
+	font-size: 18px;
+	line-height: 1;
+}
+
+.catalogops-icon-button.is-active {
+	border-color: var(--co-blue);
+	color: var(--co-blue);
+	box-shadow: inset 0 0 0 1px var(--co-blue);
+}
+
+/*
+Destructive actions read as destructive only once they are reached for — a
+permanently red row of icons turns the whole table into a warning.
+*/
+.catalogops-icon-button.is-danger:hover:not( :disabled ),
+.catalogops-icon-button.is-danger.is-active {
+	border-color: var(--co-red);
+	color: var(--co-red);
+}
+
+.catalogops-button--danger {
+	border-color: var(--co-red);
+	color: var(--co-red);
+}
+
+.catalogops-button--danger:hover:not( :disabled ),
+.catalogops-button--danger:focus:not( :disabled ) {
+	border-color: var(--co-red);
+	background: var(--co-red);
+	color: #fff;
+}
+
 .catalogops-schedule-preview {
 	display: block;
 }

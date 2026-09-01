@@ -91,10 +91,14 @@ final class Operations {
 	}
 
 	/**
-	 * Delete an operation row. Used to discard a draft that could not be queued
-	 * (e.g. a scheduled fire that lost the single-writer lock in a race), so
-	 * dead drafts do not accumulate. Never used on an operation with recorded
-	 * changes — those are the audit log.
+	 * Delete an operation row.
+	 *
+	 * Two callers: discarding a draft that could not be queued (e.g. a scheduled
+	 * fire that lost the single-writer lock in a race), and a user clearing a
+	 * finished run out of their history. The second is destructive in a way the
+	 * first is not — it throws away the audit trail, and with it the ability to
+	 * undo — so it goes through {@see Operation_Service::delete()}, which removes
+	 * the recorded deltas and detaches dependents rather than orphaning them.
 	 *
 	 * @param int $id Operation id.
 	 * @return bool Whether a row was deleted.
@@ -107,6 +111,32 @@ final class Operations {
 		);
 
 		return false !== $deleted && $deleted > 0;
+	}
+
+	/**
+	 * Clear the parent link on any operation that points at this one — the undo
+	 * operations spawned from it.
+	 *
+	 * Called before deleting a parent so its undos do not keep referencing a row
+	 * that no longer exists. They stay in the history as the operations they are;
+	 * they simply stop claiming a lineage that cannot be shown.
+	 *
+	 * @param int $parent_id The operation being deleted.
+	 * @return int How many rows were detached.
+	 */
+	public function detach_children( int $parent_id ): int {
+		$table = $this->schema->operations_table();
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$detached = $this->wpdb->query(
+			$this->wpdb->prepare(
+				"UPDATE {$table} SET parent_op_id = NULL WHERE parent_op_id = %d",
+				$parent_id
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return is_int( $detached ) ? $detached : 0;
 	}
 
 	/**

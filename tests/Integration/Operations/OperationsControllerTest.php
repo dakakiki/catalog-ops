@@ -387,6 +387,83 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		return $op_id;
 	}
 
+	public function test_delete_removes_the_operation_and_its_recorded_changes(): void {
+		$op_id = $this->completed_operation( array( $this->make_product( 10 ) ) );
+
+		$this->assertSame( 1, $this->changes->counts( $op_id )['applied'] );
+
+		$response = $this->delete( "/catalogops/v1/operations/{$op_id}" );
+
+		$this->assertSame( 200, $response->get_status() );
+		$this->assertTrue( $response->get_data()['deleted'] );
+
+		$this->assertNull( $this->operations->find( $op_id ) );
+		// The deltas go with it — leaving them would be unreachable rows nothing
+		// ever cleans up, and they are the whole reason deleting is irreversible.
+		$this->assertSame( 0, array_sum( $this->changes->counts( $op_id ) ) );
+	}
+
+	public function test_delete_refuses_while_the_operation_is_running(): void {
+		// Deleting mid-write would leave the remaining chunks pointing at nothing.
+		$op_id = $this->completed_operation( array( $this->make_product( 10 ) ) );
+		$this->operations->set_status( $op_id, Operation_Status::RUNNING );
+
+		$response = $this->delete( "/catalogops/v1/operations/{$op_id}" );
+
+		$this->assertSame( 409, $response->get_status() );
+		$this->assertNotNull( $this->operations->find( $op_id ) );
+		$this->assertSame( 1, $this->changes->counts( $op_id )['applied'] );
+	}
+
+	public function test_delete_of_a_missing_operation_is_a_404(): void {
+		$response = $this->delete( '/catalogops/v1/operations/999999' );
+
+		$this->assertSame( 404, $response->get_status() );
+	}
+
+	public function test_delete_detaches_an_undo_from_its_deleted_parent(): void {
+		// The undo already ran and keeps its own record; it just stops claiming a
+		// lineage that no longer exists, rather than pointing at a missing row.
+		$parent = $this->completed_operation( array( $this->make_product( 10 ) ) );
+		$undo   = $this->operations->create(
+			new Filter(),
+			array(),
+			Operation_Mode::SAFE,
+			Operation_Source::UNDO,
+			get_current_user_id(),
+			$parent
+		);
+		$this->operations->set_status( $undo, Operation_Status::COMPLETED, true );
+
+		$this->assertSame( $parent, $this->operations->find( $undo )->parent_op_id );
+
+		$this->assertSame( 200, $this->delete( "/catalogops/v1/operations/{$parent}" )->get_status() );
+
+		$survivor = $this->operations->find( $undo );
+		$this->assertNotNull( $survivor );
+		$this->assertNull( $survivor->parent_op_id );
+	}
+
+	public function test_delete_frees_a_write_lock_the_operation_still_held(): void {
+		// A paused operation released its lock on cancel, but a crashed one may not
+		// have. Deleting the row must not leave a holder id behind pointing at it.
+		$op_id = $this->completed_operation( array( $this->make_product( 10 ) ) );
+		update_option( 'catalogops_active_operation', $op_id, false );
+
+		$this->assertSame( 200, $this->delete( "/catalogops/v1/operations/{$op_id}" )->get_status() );
+
+		$this->assertSame( 0, ( new Lock( $this->operations ) )->holder() );
+	}
+
+	/**
+	 * DELETE a route and return the response.
+	 *
+	 * @param string $route The REST route.
+	 */
+	private function delete( string $route ): \WP_REST_Response {
+		return rest_do_request( new WP_REST_Request( 'DELETE', $route ) );
+	}
+
 	/**
 	 * POST a JSON body to a route and return the response.
 	 *

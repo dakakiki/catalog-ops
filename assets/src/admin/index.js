@@ -1987,17 +1987,74 @@ function UndoPanel( { op, onDone } ) {
 }
 
 /**
+ * An icon button for a row action. Icon-only, so the label is carried by both
+ * `title` (pointer) and `aria-label` (screen readers) rather than being lost.
+ *
+ * @param {Object}   props          Component props.
+ * @param {string}   props.icon     Dashicons name, without the `dashicons-` prefix.
+ * @param {string}   props.label    What the button does.
+ * @param {Function} props.onClick  Click handler.
+ * @param {boolean}  props.isActive Whether its panel is currently open.
+ * @param {boolean}  props.isDanger Whether it destroys something.
+ * @param {boolean}  props.disabled Whether it is unavailable.
+ */
+function IconButton( {
+	icon,
+	label,
+	onClick,
+	isActive = false,
+	isDanger = false,
+	disabled = false,
+} ) {
+	return (
+		<button
+			type="button"
+			className={ `button button-small catalogops-icon-button${
+				isActive ? ' is-active' : ''
+			}${ isDanger ? ' is-danger' : '' }` }
+			onClick={ onClick }
+			disabled={ disabled }
+			title={ label }
+			aria-label={ label }
+		>
+			<span
+				className={ `dashicons dashicons-${ icon }` }
+				aria-hidden="true"
+			/>
+		</button>
+	);
+}
+
+/**
  * One row of the operation history, expandable to its audit detail or undo flow.
  *
  * @param {Object}   props           Component props.
  * @param {Object}   props.op        The operation.
- * @param {Function} props.onChanged Called when an undo from this row finishes.
+ * @param {Function} props.onChanged Called when an undo or delete from this row
+ *                                   finishes, so the list reloads.
  */
 function OperationRow( { op, onChanged } ) {
-	const [ open, setOpen ] = useState( null ); // 'changes' | 'undo' | null
+	const [ open, setOpen ] = useState( null ); // 'changes' | 'undo' | 'delete' | null
+	const [ busy, setBusy ] = useState( false );
+	const [ error, setError ] = useState( '' );
 
 	const toggle = ( which ) =>
 		setOpen( ( cur ) => ( cur === which ? null : which ) );
+
+	const confirmDelete = () => {
+		setBusy( true );
+		setError( '' );
+		apiFetch( {
+			path: `/catalogops/v1/operations/${ op.id }`,
+			method: 'DELETE',
+		} )
+			.then( () => {
+				setOpen( null );
+				onChanged();
+			} )
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusy( false ) );
+	};
 
 	return (
 		<>
@@ -2037,20 +2094,31 @@ function OperationRow( { op, onChanged } ) {
 				<td>{ op.created_at }</td>
 				<td>
 					<div className="catalogops-actions">
-						<button
-							className="button button-small"
+						<IconButton
+							icon="list-view"
+							label={ __( 'Changes', 'catalogops' ) }
 							onClick={ () => toggle( 'changes' ) }
-						>
-							{ __( 'Changes', 'catalogops' ) }
-						</button>
+							isActive={ open === 'changes' }
+						/>
 						{ op.can_undo && (
-							<button
-								className="button button-small"
+							<IconButton
+								icon="undo"
+								label={ __( 'Undo', 'catalogops' ) }
 								onClick={ () => toggle( 'undo' ) }
-							>
-								{ __( 'Undo', 'catalogops' ) }
-							</button>
+								isActive={ open === 'undo' }
+							/>
 						) }
+						<IconButton
+							icon="trash"
+							label={ __( 'Delete from history', 'catalogops' ) }
+							onClick={ () => toggle( 'delete' ) }
+							isActive={ open === 'delete' }
+							isDanger
+							disabled={
+								op.status === 'queued' ||
+								op.status === 'running'
+							}
+						/>
 					</div>
 				</td>
 			</tr>
@@ -2066,6 +2134,67 @@ function OperationRow( { op, onChanged } ) {
 									onChanged();
 								} }
 							/>
+						) }
+						{ open === 'delete' && (
+							<div className="catalogops-confirm">
+								<p className="catalogops-confirm__lead">
+									{ sprintf(
+										/* translators: %d: operation id. */
+										__(
+											'Delete operation #%d from the history?',
+											'catalogops'
+										),
+										op.id
+									) }
+								</p>
+								<p>
+									{ op.can_undo
+										? __(
+												'This removes the record of what it changed, so it can no longer be undone. The products themselves are left exactly as they are now. This cannot be reversed.',
+												'catalogops'
+										  )
+										: __(
+												'This removes the record of what it changed. The products themselves are left exactly as they are now. This cannot be reversed.',
+												'catalogops'
+										  ) }
+								</p>
+								{ error && (
+									<div className="notice notice-error">
+										<p>{ error }</p>
+									</div>
+								) }
+								<div className="catalogops-confirm__actions">
+									<button
+										className="button catalogops-button--danger"
+										onClick={ confirmDelete }
+										disabled={ busy }
+									>
+										{ __(
+											'Delete permanently',
+											'catalogops'
+										) }
+									</button>
+									<button
+										className="button"
+										onClick={ () => setOpen( null ) }
+										disabled={ busy }
+									>
+										{ __( 'Cancel', 'catalogops' ) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Deleting…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+							</div>
 						) }
 					</td>
 				</tr>

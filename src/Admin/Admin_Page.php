@@ -125,7 +125,10 @@ final class Admin_Page {
 		// their WordPress styling (the script dependency is added automatically via
 		// the import; the stylesheet is not, so it is named here).
 		if ( file_exists( $base . 'style-admin.css' ) ) {
-			wp_enqueue_style( 'catalogops-admin', $url . 'style-admin.css', array( 'wp-components' ), $meta['version'] );
+			// dashicons backs the history row's icon buttons. WordPress loads it on
+			// admin screens anyway; naming it means the icons cannot silently turn
+			// into empty boxes if that ever stops being true.
+			wp_enqueue_style( 'catalogops-admin', $url . 'style-admin.css', array( 'wp-components', 'dashicons' ), $meta['version'] );
 			wp_style_add_data( 'catalogops-admin', 'rtl', 'replace' );
 		}
 
