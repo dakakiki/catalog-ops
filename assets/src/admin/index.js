@@ -169,24 +169,65 @@ const FIELD_NOUNS = {
  * out of `sale_price * 1.5`. And a stock status is not stored at all where stock
  * is managed; WooCommerce derives it from the quantity on every save.
  *
- * @param {string} field      The selected field key.
- * @param {string} mode       'set' | 'percent' | 'formula'.
- * @param {string} expression The formula being applied, for percent and formula
- *                            modes — the source of the fields it reads.
+ * @param {string} field         The selected field key.
+ * @param {string} mode          'set' | 'percent' | 'formula'.
+ * @param {string} expression    The formula being applied, for percent and formula
+ *                               modes — the source of the fields it reads.
+ * @param {Object} percentChange For percent mode, { direction, amount }: the
+ *                               sentence names which way the price moves rather
+ *                               than pointing at the control that says so.
  * @return {string} The hint sentence.
  */
-function changeHint( field, mode, expression = '' ) {
+function changeHint( field, mode, expression = '', percentChange = null ) {
 	const noun = FIELD_NOUNS[ field ] || field;
 	let sentence;
 	if ( mode === 'percent' ) {
-		sentence = sprintf(
-			/* translators: %s: the field being changed, e.g. "the regular price". */
-			__(
-				'Changes %s by the percentage above, for every matching product.',
-				'catalogops'
-			),
-			noun
-		);
+		const down =
+			'decrease' === ( percentChange && percentChange.direction );
+		const amount = percentChange ? percentChange.amount : '';
+
+		const named = '' !== amount && ! Number.isNaN( Number( amount ) );
+		const shown = named ? Math.abs( Number( amount ) ) : 0;
+
+		if ( named && down ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: a percentage, e.g. "10". */
+				__(
+					'Lowers %1$s by %2$s%%, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( named ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: a percentage, e.g. "10". */
+				__(
+					'Raises %1$s by %2$s%%, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( down ) {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Lowers %s by the percentage above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		} else {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Raises %s by the percentage above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		}
 	} else if ( mode === 'formula' ) {
 		sentence = sprintf(
 			/* translators: %s: the field being changed, e.g. "the regular price". */
@@ -256,16 +297,33 @@ const RECURRENCES = [
 ];
 
 /**
- * Build the percentage-change factor as a clean decimal string, so a "-10%"
- * becomes the formula `<field> * 0.9` with no floating-point noise in the text.
+ * Build the percentage-change factor as a clean decimal string, so a 10%
+ * decrease becomes the formula `<field> * 0.9` with no floating-point noise in
+ * the text.
  *
- * @param {number|string} percent The percentage delta (e.g. -10 or 15).
+ * The sign comes from the direction alone; the amount is read as a magnitude.
+ * Otherwise a typed "-10" under Decrease would negate the negation and quietly
+ * raise prices — the exact confusion the direction control exists to remove.
+ *
+ * @param {number|string} percent   The percentage amount (e.g. 15).
+ * @param {string}        direction 'increase' or 'decrease'.
  * @return {string} The multiplier as a trimmed decimal string.
  */
-function percentFactor( percent ) {
-	const factor = 1 + Number( percent ) / 100;
+function percentFactor( percent, direction ) {
+	const amount = Math.abs( Number( percent ) );
+	const delta = 'decrease' === direction ? -amount : amount;
+	const factor = 1 + delta / 100;
+
 	return String( Number( factor.toFixed( 6 ) ) );
 }
+
+/**
+ * The deepest cut a percentage change may express. At 100% the price lands on
+ * zero, which is a real thing to want; past it the factor goes negative and the
+ * write path has nothing to stop it — WooCommerce's setters store what they are
+ * given, so a mistyped 150 would put negative prices across the catalogue.
+ */
+const MAX_DECREASE = 100;
 
 const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
 
@@ -1007,6 +1065,7 @@ function BulkEdit( {
 	const [ value, setValue ] = useState( '' );
 	const [ expression, setExpression ] = useState( '' );
 	const [ percent, setPercent ] = useState( '' );
+	const [ direction, setDirection ] = useState( 'increase' );
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
@@ -1045,6 +1104,7 @@ function BulkEdit( {
 		setValue( '' );
 		setExpression( '' );
 		setPercent( '' );
+		setDirection( 'increase' );
 		setPreview( null );
 		setError( '' );
 		setName( '' );
@@ -1054,12 +1114,22 @@ function BulkEdit( {
 		setShowSchedule( false );
 	}, [ resetKey ] );
 
+	// A cut deeper than 100% would produce a negative price, and nothing further
+	// down the path would stop it. Refusing it here — rather than clamping the
+	// number silently — leaves the typed figure visible next to the reason.
+	const percentTooDeep =
+		'decrease' === direction &&
+		Math.abs( Number( percent ) ) > MAX_DECREASE;
+
 	// Percentage change is expressed as a formula, so it flows through the exact
 	// same action path (and preview/skip semantics) as a typed formula.
 	const percentExpression =
-		percent === '' || Number.isNaN( Number( percent ) )
+		percent === '' || Number.isNaN( Number( percent ) ) || percentTooDeep
 			? ''
-			: `${ fieldVariable( field ) } * ${ percentFactor( percent ) }`;
+			: `${ fieldVariable( field ) } * ${ percentFactor(
+					percent,
+					direction
+			  ) }`;
 
 	const buildActions = () => {
 		if ( mode === 'formula' ) {
@@ -1373,6 +1443,54 @@ function BulkEdit( {
 
 							{ mode === 'percent' && (
 								<div className="catalogops-field">
+									<span
+										className="catalogops-field-label"
+										id="catalogops-direction-label"
+									>
+										{ __( 'Direction', 'catalogops' ) }
+									</span>
+									{ /* Which way the price moves is a choice, not a
+									     character to remember to type: a bare "-10"
+									     and "10" differ by one keystroke, and the
+									     one you get by forgetting it raises prices
+									     across the catalogue. */ }
+									<div
+										className="catalogops-segmented catalogops-segmented--compact"
+										role="group"
+										aria-labelledby="catalogops-direction-label"
+									>
+										<button
+											type="button"
+											className={ `catalogops-segmented__btn${
+												direction === 'increase'
+													? ' is-active'
+													: ''
+											}` }
+											onClick={ () =>
+												setDirection( 'increase' )
+											}
+										>
+											{ __( 'Increase', 'catalogops' ) }
+										</button>
+										<button
+											type="button"
+											className={ `catalogops-segmented__btn${
+												direction === 'decrease'
+													? ' is-active'
+													: ''
+											}` }
+											onClick={ () =>
+												setDirection( 'decrease' )
+											}
+										>
+											{ __( 'Decrease', 'catalogops' ) }
+										</button>
+									</div>
+								</div>
+							) }
+
+							{ mode === 'percent' && (
+								<div className="catalogops-field">
 									<label htmlFor="catalogops-percent">
 										{ __( 'By (%)', 'catalogops' ) }
 									</label>
@@ -1380,6 +1498,18 @@ function BulkEdit( {
 										id="catalogops-percent"
 										type="number"
 										step="any"
+										min="0"
+										max={
+											direction === 'decrease'
+												? MAX_DECREASE
+												: undefined
+										}
+										aria-invalid={ percentTooDeep }
+										aria-describedby={
+											percentTooDeep
+												? 'catalogops-percent-error'
+												: undefined
+										}
 										value={ percent }
 										onChange={ ( e ) =>
 											setPercent( e.target.value )
@@ -1509,6 +1639,27 @@ function BulkEdit( {
 							) }
 						</div>
 
+						{ /* Full width and on its own line: inside the field the
+						     sentence sets the control's width and pushes the rest
+						     of the row onto a second line. */ }
+						{ percentTooDeep && (
+							<div className="catalogops-filter-row">
+								<p
+									className="catalogops-field-error"
+									id="catalogops-percent-error"
+								>
+									{ sprintf(
+										/* translators: %d: the largest decrease allowed, 100. */
+										__(
+											'A decrease cannot go past %d%% — beyond that the price would come out negative.',
+											'catalogops'
+										),
+										MAX_DECREASE
+									) }
+								</p>
+							</div>
+						) }
+
 						<div className="catalogops-filter-row">
 							<p className="catalogops-field-hint">
 								{ changeHint(
@@ -1516,7 +1667,13 @@ function BulkEdit( {
 									mode,
 									mode === 'percent'
 										? percentExpression
-										: expression
+										: expression,
+									{
+										direction,
+										// A rejected amount is not described as
+										// though it were about to run.
+										amount: percentTooDeep ? '' : percent,
+									}
 								) }
 							</p>
 						</div>

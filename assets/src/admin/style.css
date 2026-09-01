@@ -187,6 +187,15 @@
 	font-weight: 600;
 }
 
+/* Standing in a row of 30px controls, the switch's own padding runs it ~5px
+   taller and breaks the band. This variant sits in it. */
+.catalogops-segmented--compact .catalogops-segmented__btn {
+	box-sizing: border-box;
+	height: calc( var(--co-control-h) - 2px );
+	padding: 0 12px;
+	line-height: 1;
+}
+
 /* Paid-only controls the free tier cannot use: dimmed, not-allowed, and never
    the active state. */
 .catalogops-segmented__btn.is-locked,
@@ -592,6 +601,15 @@ be more than a few rows however much is chosen.
 	margin: 2px 0 0;
 	max-width: 52em;
 	color: var(--co-muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+/* A rejected value's reason, under the control that holds it. */
+.catalogops-field-error {
+	margin: 2px 0 0;
+	max-width: 30em;
+	color: var(--co-red);
 	font-size: 12px;
 	line-height: 1.5;
 }
