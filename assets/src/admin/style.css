@@ -248,7 +248,7 @@
 
 .catalogops-field > label,
 .catalogops-field > .catalogops-field-label,
-.catalogops-field .components-form-token-field__label {
+.catalogops-ms > .catalogops-field-label {
 	margin: 0;
 	font-size: 11px;
 	font-weight: 600;
@@ -258,12 +258,6 @@
 	color: var(--co-muted);
 }
 
-/* Token fields nest their label, so the flex row gap does not apply; give the
-   label the same 4px space to its control that the plain fields get. */
-.catalogops-field--token .components-form-token-field__label {
-	margin-bottom: 4px;
-}
-
 /* One height for every control so the row reads as a single band. The explicit
    line-height keeps a select's text vertically centred: WordPress ships selects
    with a ~38px line-height, which sits low inside the 30px box. */
@@ -271,8 +265,7 @@
 .catalogops-field input[type='number'],
 .catalogops-field input[type='text'],
 .catalogops-field input[type='email'],
-.catalogops-field input[type='datetime-local'],
-.catalogops-field .components-form-token-field__input-container {
+.catalogops-field input[type='datetime-local'] {
 	height: var(--co-control-h);
 	min-height: var(--co-control-h);
 	line-height: normal;
@@ -284,63 +277,199 @@
 	max-width: 220px;
 }
 
-/* Token fields need room for pills and grow to share the row. */
-.catalogops-field--token {
+/* --- Multiselect ------------------------------------------------------- */
+
+.catalogops-field--multi {
 	position: relative;
 	flex: 1 1 220px;
 	min-width: 220px;
 	max-width: 340px;
 }
 
-/* The outer container only needs to stop the shared fixed control-height from
-   clipping the wrapping token row inside it — let it size to its content. */
-.catalogops-field--token .components-form-token-field__input-container {
-	height: auto;
-	min-height: var(--co-control-h);
-	max-height: none;
-	padding: 0;
-	overflow: visible;
-}
-
-/* The real flex row holding the pills + input is an emotion component
-   (…TokensAndInputWrapperFlex…) that ships with 7px of padding — that is what
-   made an empty field two rows tall. Trim it so an empty field is one control
-   tall (matching the Min/Max inputs), growing one row at a time as pills wrap
-   and scrolling past ~5 rows so a big selection never swallows the panel. */
-.catalogops-field--token [class*='TokensAndInputWrapperFlex'] {
-	min-height: var(--co-control-h);
-	max-height: 140px;
-	padding: 1px 6px;
-	gap: 3px;
-	row-gap: 3px;
-	overflow-x: hidden;
-	overflow-y: auto;
-	box-sizing: border-box;
-}
-
-.catalogops-field--token .components-form-token-field__token {
-	margin: 1px 0;
-}
-
-/* Float the suggestions over the content instead of pushing the rows below
-   it down when the list opens. */
-.catalogops-field--token .components-form-token-field {
+.catalogops-ms {
 	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 }
 
-.catalogops-field--token .components-form-token-field__suggestions-list {
+/*
+One control tall when empty, and taller only when its own contents need it: chips
+wrap and the box grows with them. No ceiling, because there is nothing to cap —
+past three selections the control shows a count instead of chips, so it can never
+be more than a few rows however much is chosen.
+*/
+.catalogops-ms__control {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	box-sizing: border-box;
+	min-height: var(--co-control-h);
+	padding: 2px 6px;
+	border: 1px solid var(--co-border-strong);
+	border-radius: 4px;
+	background: #fff;
+	cursor: pointer;
+}
+
+.catalogops-ms__control:hover {
+	border-color: var(--co-muted);
+}
+
+.catalogops-ms__control.is-open,
+.catalogops-ms__control:focus-visible {
+	border-color: var(--co-accent);
+	outline: none;
+	box-shadow: 0 0 0 1px var(--co-accent);
+}
+
+.catalogops-ms__value {
+	display: flex;
+	flex: 1;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 3px;
+	min-width: 0;
+}
+
+.catalogops-ms__placeholder {
+	color: var(--co-muted);
+	font-size: 13px;
+	line-height: 22px;
+}
+
+/* The count stands in for the chips, so it is one — including its remove. */
+.catalogops-ms__chip--count {
+	background: var(--co-tint);
+	border-color: var(--co-border-strong);
+	font-weight: 600;
+}
+
+.catalogops-ms__chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	max-width: 100%;
+	padding: 0 2px 0 7px;
+	border-radius: 11px;
+	background: var(--co-accent-tint);
+	border: 1px solid var(--co-accent-border);
+	color: var(--co-ink);
+	font-size: 12px;
+	line-height: 20px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.catalogops-ms__chip-remove {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: none;
+	color: var(--co-muted);
+	font-size: 14px;
+	line-height: 14px;
+	cursor: pointer;
+}
+
+.catalogops-ms__chip-remove:hover {
+	background: var(--co-accent-border);
+	color: var(--co-ink);
+}
+
+.catalogops-ms__arrow {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	font-size: 16px;
+	line-height: 16px;
+	color: var(--co-muted);
+}
+
+/* Floats over what follows rather than pushing the filter rows down. */
+.catalogops-ms__panel {
 	position: absolute;
 	left: 0;
 	right: 0;
 	top: 100%;
 	z-index: 30;
 	margin-top: 2px;
-	max-height: 240px;
-	overflow-y: auto;
 	background: #fff;
 	border: 1px solid var(--co-border-strong);
 	border-radius: 4px;
 	box-shadow: 0 4px 14px rgba( 0, 0, 0, 0.14 );
+}
+
+.catalogops-ms__search {
+	display: block;
+	width: 100%;
+	box-sizing: border-box;
+	height: var(--co-control-h);
+	margin: 0;
+	border: 0;
+	border-bottom: 1px solid var(--co-border);
+	border-radius: 4px 4px 0 0;
+}
+
+.catalogops-ms__search:focus {
+	box-shadow: none;
+	outline: 2px solid var(--co-accent);
+	outline-offset: -2px;
+}
+
+.catalogops-ms__list {
+	max-height: 240px;
+	overflow-y: auto;
+	padding: 4px 0;
+}
+
+.catalogops-ms__option {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 4px 10px;
+	font-size: 13px;
+	line-height: 1.4;
+}
+
+.catalogops-ms__option:hover {
+	background: var(--co-tint);
+}
+
+.catalogops-ms__option input {
+	flex: none;
+	margin: 0;
+}
+
+/* The row's label is a plain option name, not one of the panel's field labels. */
+.catalogops-ms__option label {
+	flex: 1;
+	margin: 0;
+	font-size: 13px;
+	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
+	color: var(--co-ink);
+	cursor: pointer;
+}
+
+.catalogops-ms__empty {
+	margin: 0;
+	padding: 8px 10px;
+	color: var(--co-muted);
+}
+
+.catalogops-ms__footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 6px 8px;
+	border-top: 1px solid var(--co-border);
 }
 
 .catalogops-price-inputs {

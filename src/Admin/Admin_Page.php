@@ -121,14 +121,14 @@ final class Admin_Page {
 		wp_set_script_translations( 'catalogops-admin', 'catalogops', plugin_dir_path( $this->plugin_file ) . 'languages' );
 
 		// wp-scripts extracts styles imported from the entry to `style-admin.css`.
-		// Depend on wp-components so the FormTokenField controls in the filter get
-		// their WordPress styling (the script dependency is added automatically via
-		// the import; the stylesheet is not, so it is named here).
+		// wp-components used to be a dependency for the filter's token fields; the
+		// filter now uses our own multiselect, so the whole package — script and
+		// stylesheet — is gone from the page.
 		if ( file_exists( $base . 'style-admin.css' ) ) {
 			// dashicons backs the history row's icon buttons. WordPress loads it on
 			// admin screens anyway; naming it means the icons cannot silently turn
 			// into empty boxes if that ever stops being true.
-			wp_enqueue_style( 'catalogops-admin', $url . 'style-admin.css', array( 'wp-components', 'dashicons' ), $meta['version'] );
+			wp_enqueue_style( 'catalogops-admin', $url . 'style-admin.css', array( 'dashicons' ), $meta['version'] );
 			wp_style_add_data( 'catalogops-admin', 'rtl', 'replace' );
 		}
 
