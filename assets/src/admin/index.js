@@ -22,7 +22,6 @@ import {
 	useRef,
 } from '@wordpress/element';
 import apiFetch from '@wordpress/api-fetch';
-import { FormTokenField } from '@wordpress/components';
 import { __, _n, sprintf } from '@wordpress/i18n';
 import './style.css';
 
@@ -271,41 +270,247 @@ function percentFactor( percent ) {
 const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
 
 /**
- * A WordPress token-field multiselect bound to an array of ids.
- *
- * {@link FormTokenField} works in label strings; this wraps it so the caller
- * keeps working with ids (what the filter sends). Unknown tokens are dropped, so
- * only real options end up selected.
- *
- * @param {Object}   props          Component props.
- * @param {string}   props.label    Field label.
- * @param {Array}    props.options  Selectable options as { id, name }.
- * @param {string[]} props.value    Currently-selected ids.
- * @param {Function} props.onChange Called with the new array of id strings.
+ * Above this many selections the control stops naming them and shows a count.
+ * Three chips fit the filter row's width; a fourth starts pushing the control
+ * taller than the two rows it is allowed, and a wall of pills stops being
+ * readable well before it stops fitting.
  */
-function TokenSelect( { label, options, value, onChange } ) {
-	const nameById = {};
-	const idByName = {};
-	options.forEach( ( o ) => {
-		nameById[ o.id ] = o.name;
-		idByName[ o.name ] = String( o.id );
-	} );
+const MAX_CHIPS = 3;
+
+/**
+ * A multiselect bound to an array of ids: chips for what is chosen, a searchable
+ * checkbox list for choosing.
+ *
+ * Replaces WordPress's FormTokenField, which could not be held to this row's
+ * 30px control height. Its real layout lives in a generated emotion class
+ * (`…TokensAndInputWrapperFlex…`) carrying 7px of padding, so matching the other
+ * controls meant selecting on that class name — and WordPress renames it, and
+ * moved its default control size to 40px, so the override silently missed and
+ * the field came back 44px tall. A control this central cannot depend on the
+ * internals of someone else's component staying still.
+ *
+ * Being our own also buys the behaviour the token field could not: a checkbox
+ * list rather than type-to-filter tokens, and a count instead of an unbounded
+ * pile of pills.
+ *
+ * @param {Object}   props             Component props.
+ * @param {string}   props.label       Field label.
+ * @param {Array}    props.options     Selectable options as { id, name }.
+ * @param {string[]} props.value       Currently-selected ids.
+ * @param {Function} props.onChange    Called with the new array of id strings.
+ * @param {string}   props.placeholder Shown when nothing is selected.
+ */
+function MultiSelect( { label, options, value, onChange, placeholder } ) {
+	const [ open, setOpen ] = useState( false );
+	const [ query, setQuery ] = useState( '' );
+	const root = useRef( null );
+	const search = useRef( null );
+	const inputId = useRef(
+		`catalogops-ms-${ Math.random().toString( 36 ).slice( 2, 9 ) }`
+	).current;
+
+	const ids = value.map( String );
+	const chosen = options.filter( ( o ) => ids.includes( String( o.id ) ) );
+
+	// Close on anything that means "I am done here": a click elsewhere, Escape,
+	// or focus leaving the component entirely (Tab past the last checkbox).
+	useEffect( () => {
+		if ( ! open ) {
+			return undefined;
+		}
+
+		const onDocument = ( event ) => {
+			if ( root.current && ! root.current.contains( event.target ) ) {
+				setOpen( false );
+			}
+		};
+
+		document.addEventListener( 'mousedown', onDocument );
+		document.addEventListener( 'focusin', onDocument );
+
+		return () => {
+			document.removeEventListener( 'mousedown', onDocument );
+			document.removeEventListener( 'focusin', onDocument );
+		};
+	}, [ open ] );
+
+	// Opening puts the caret in the search box, which is the only thing anyone
+	// wants to do next with a list of a few hundred categories.
+	useEffect( () => {
+		if ( open && search.current ) {
+			search.current.focus();
+		}
+	}, [ open ] );
+
+	const toggle = ( id ) => {
+		const key = String( id );
+		onChange(
+			ids.includes( key )
+				? ids.filter( ( existing ) => existing !== key )
+				: [ ...ids, key ]
+		);
+	};
+
+	const onControlKeyDown = ( event ) => {
+		if ( [ 'Enter', ' ', 'ArrowDown' ].includes( event.key ) ) {
+			event.preventDefault();
+			setOpen( true );
+		}
+	};
+
+	const needle = query.trim().toLowerCase();
+	const shown = needle
+		? options.filter( ( o ) =>
+				String( o.name ).toLowerCase().includes( needle )
+		  )
+		: options;
 
 	return (
-		<FormTokenField
-			label={ label }
-			value={ value.map( ( id ) => nameById[ id ] ).filter( Boolean ) }
-			suggestions={ options.map( ( o ) => o.name ) }
-			onChange={ ( tokens ) =>
-				onChange(
-					tokens.map( ( name ) => idByName[ name ] ).filter( Boolean )
-				)
-			}
-			__experimentalExpandOnFocus
-			__experimentalShowHowTo={ false }
-			__nextHasNoMarginBottom
-			__next40pxDefaultSize
-		/>
+		<div className="catalogops-ms" ref={ root }>
+			<span
+				className="catalogops-field-label"
+				id={ `${ inputId }-label` }
+			>
+				{ label }
+			</span>
+
+			{ /* A div rather than a button: the chips carry their own remove
+			     buttons, and a button inside a button is invalid. Role, tabindex
+			     and key handling give it the same behaviour. */ }
+			<div
+				className={ `catalogops-ms__control${
+					open ? ' is-open' : ''
+				}` }
+				role="combobox"
+				tabIndex={ 0 }
+				aria-expanded={ open }
+				aria-haspopup="dialog"
+				aria-controls={ `${ inputId }-panel` }
+				aria-labelledby={ `${ inputId }-label` }
+				onClick={ () => setOpen( ! open ) }
+				onKeyDown={ onControlKeyDown }
+			>
+				<span className="catalogops-ms__value">
+					{ chosen.length === 0 && (
+						<span className="catalogops-ms__placeholder">
+							{ placeholder || __( 'Any', 'catalogops' ) }
+						</span>
+					) }
+
+					{ chosen.length > 0 &&
+						chosen.length <= MAX_CHIPS &&
+						chosen.map( ( o ) => (
+							<span className="catalogops-ms__chip" key={ o.id }>
+								{ o.name }
+								<button
+									type="button"
+									className="catalogops-ms__chip-remove"
+									aria-label={ sprintf(
+										/* translators: %s: the removed item's name. */
+										__( 'Remove %s', 'catalogops' ),
+										o.name
+									) }
+									onClick={ ( event ) => {
+										event.stopPropagation();
+										toggle( o.id );
+									} }
+								>
+									×
+								</button>
+							</span>
+						) ) }
+
+					{ chosen.length > MAX_CHIPS && (
+						<span className="catalogops-ms__count">
+							{ sprintf(
+								/* translators: %d: number of selected items. */
+								_n(
+									'%d selected',
+									'%d selected',
+									chosen.length,
+									'catalogops'
+								),
+								chosen.length
+							) }
+						</span>
+					) }
+				</span>
+
+				<span
+					className="catalogops-ms__arrow dashicons dashicons-arrow-down-alt2"
+					aria-hidden="true"
+				/>
+			</div>
+
+			{ open && (
+				<div
+					className="catalogops-ms__panel"
+					id={ `${ inputId }-panel` }
+				>
+					<input
+						ref={ search }
+						type="search"
+						className="catalogops-ms__search"
+						value={ query }
+						placeholder={ __( 'Search…', 'catalogops' ) }
+						aria-label={ __( 'Search options', 'catalogops' ) }
+						onChange={ ( e ) => setQuery( e.target.value ) }
+						onKeyDown={ ( e ) =>
+							e.key === 'Escape' && setOpen( false )
+						}
+					/>
+
+					<div className="catalogops-ms__list">
+						{ shown.length === 0 && (
+							<p className="catalogops-ms__empty">
+								{ __( 'No matches.', 'catalogops' ) }
+							</p>
+						) }
+						{ /* Real checkboxes: native semantics, native keyboard,
+						     nothing to reimplement. */ }
+						{ shown.map( ( o ) => (
+							<label
+								className="catalogops-ms__option"
+								key={ o.id }
+								htmlFor={ `${ inputId }-opt-${ o.id }` }
+							>
+								<input
+									id={ `${ inputId }-opt-${ o.id }` }
+									type="checkbox"
+									checked={ ids.includes( String( o.id ) ) }
+									onChange={ () => toggle( o.id ) }
+								/>
+								<span>{ o.name }</span>
+							</label>
+						) ) }
+					</div>
+
+					{ chosen.length > 0 && (
+						<div className="catalogops-ms__footer">
+							<button
+								type="button"
+								className="button button-small"
+								onClick={ () => onChange( [] ) }
+							>
+								{ __( 'Clear', 'catalogops' ) }
+							</button>
+							<span className="catalogops-muted">
+								{ sprintf(
+									/* translators: %d: number of selected items. */
+									_n(
+										'%d selected',
+										'%d selected',
+										chosen.length,
+										'catalogops'
+									),
+									chosen.length
+								) }
+							</span>
+						</div>
+					) }
+				</div>
+			) }
+		</div>
 	);
 }
 
@@ -3325,8 +3530,8 @@ function App() {
 						</span>
 						<div className="catalogops-filter-rows">
 							<div className="catalogops-filter-row">
-								<div className="catalogops-field catalogops-field--token">
-									<TokenSelect
+								<div className="catalogops-field catalogops-field--multi">
+									<MultiSelect
 										label={ __( 'Category', 'catalogops' ) }
 										options={ categories }
 										value={ form.category }
@@ -3339,8 +3544,8 @@ function App() {
 									/>
 								</div>
 
-								<div className="catalogops-field catalogops-field--token">
-									<TokenSelect
+								<div className="catalogops-field catalogops-field--multi">
+									<MultiSelect
 										label={ __( 'Brand', 'catalogops' ) }
 										options={ brands.map( ( b ) => ( {
 											id: b,
@@ -3353,8 +3558,8 @@ function App() {
 									/>
 								</div>
 
-								<div className="catalogops-field catalogops-field--token">
-									<TokenSelect
+								<div className="catalogops-field catalogops-field--multi">
+									<MultiSelect
 										label={ __( 'Tag', 'catalogops' ) }
 										options={ tags }
 										value={ form.tag }
@@ -3435,8 +3640,8 @@ function App() {
 								{ 'variation' === scope &&
 									attributes.length > 0 &&
 									selectedAttribute && (
-										<div className="catalogops-field catalogops-field--token">
-											<TokenSelect
+										<div className="catalogops-field catalogops-field--multi">
+											<MultiSelect
 												label={ __(
 													'Values (any if empty)',
 													'catalogops'
