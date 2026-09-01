@@ -266,6 +266,73 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$this->assertSame( 1, $this->changes->counts( $op_id )['applied'] );
 	}
 
+	public function test_stock_status_override_by_woocommerce_is_recorded_as_skipped(): void {
+		// A stock-managed product at zero quantity: WooCommerce forces `outofstock`
+		// on save, so a bulk "set in stock" cannot actually take effect.
+		$product = $this->make_out_of_stock_product( 50 );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) ),
+			array( new Set_Value( 'stock_status', 'instock' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		// WooCommerce kept it out of stock, so the runner reads the value back and
+		// records a skip, not a false apply — the object was processed but nothing
+		// changed.
+		$this->assertSame( 'outofstock', wc_get_product( $product )->get_stock_status() );
+
+		$operation = $this->operations->find( $op_id );
+		$this->assertSame( Operation_Status::COMPLETED, $operation->status );
+		$this->assertSame( 1, $operation->processed );
+
+		$counts = $this->changes->counts( $op_id );
+		$this->assertSame( 0, $counts['applied'] );
+		$this->assertSame( 1, $counts['skipped'] );
+	}
+
+	public function test_sale_price_rejected_by_woocommerce_is_recorded_as_skipped(): void {
+		// A sale price at or above the regular price is rejected by WooCommerce,
+		// which drops it — so setting one on a product with no prior sale changes
+		// nothing, and must not be reported as applied.
+		$product = $this->make_product( 100 );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) ),
+			array( new Set_Value( 'sale_price', '150' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( '', wc_get_product( $product )->get_sale_price() );
+
+		$counts = $this->changes->counts( $op_id );
+		$this->assertSame( 0, $counts['applied'] );
+		$this->assertSame( 1, $counts['skipped'] );
+	}
+
+	public function test_price_change_records_the_value_woocommerce_persisted(): void {
+		// The normal path still records an apply — the read-back value equals the
+		// intended one — so honest recording does not regress a real change.
+		$product = $this->make_product( 50 );
+
+		$op_id = $this->queue_price_change( 'price', Operator::GREATER_THAN, 20, '9.99' );
+		$this->drive( $op_id );
+
+		$this->assertSame( '9.99', wc_get_product( $product )->get_regular_price() );
+
+		$counts = $this->changes->counts( $op_id );
+		$this->assertSame( 1, $counts['applied'] );
+		$this->assertSame( 0, $counts['skipped'] );
+	}
+
 	/**
 	 * Queue a price Set_Value operation and return its id.
 	 *
@@ -313,6 +380,26 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$product->set_manage_stock( true );
 		$product->set_stock_quantity( 5 );
 		$product->set_stock_status( 'instock' );
+		$id = $product->save();
+
+		$this->created[] = $id;
+
+		return $id;
+	}
+
+	/**
+	 * Create a stock-managed product at zero quantity, which WooCommerce keeps
+	 * `outofstock` regardless of an attempted status change.
+	 *
+	 * @param float $price Regular price (so the product is in the Products scope).
+	 * @return int Product id.
+	 */
+	private function make_out_of_stock_product( float $price ): int {
+		$product = new WC_Product_Simple();
+		$product->set_regular_price( (string) $price );
+		$product->set_manage_stock( true );
+		$product->set_stock_quantity( 0 );
+		$product->set_stock_status( 'outofstock' );
 		$id = $product->save();
 
 		$this->created[] = $id;

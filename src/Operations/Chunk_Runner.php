@@ -236,8 +236,27 @@ final class Chunk_Runner {
 		// clears transients (CONTEXT §3).
 		$product->save();
 
+		// Record what WooCommerce actually persisted, not what was intended. On
+		// save WooCommerce can silently override a value — it forces `outofstock`
+		// when stock is managed at zero, and drops a sale price at or above the
+		// regular price — mutating the in-memory product to the value it kept. So
+		// each field is read back from the saved product: a value WooCommerce left
+		// unchanged is a skip, not a false apply, and a value it altered is
+		// recorded as-persisted. That keeps progress, history, and undo in step
+		// with reality (CONTEXT §3), the same invariant the pre-write applicability
+		// check upholds — carried across the save.
 		foreach ( $outcome->applied() as $change ) {
-			$this->changes->mark_applied( $change['row']->id, $change['old'], $change['new'] );
+			$row      = $change['row'];
+			$resolved = $this->providers->for_storage( $row->field_type, $row->field_key );
+			$actual   = null !== $resolved
+				? Values::to_string( $resolved['provider']->read( $product, $resolved['key'] ) )
+				: $change['new'];
+
+			if ( Values::equal( $actual, $change['old'] ) ) {
+				$this->changes->mark_skipped( $row->id, $change['old'] );
+			} else {
+				$this->changes->mark_applied( $row->id, $change['old'], $actual );
+			}
 		}
 	}
 
