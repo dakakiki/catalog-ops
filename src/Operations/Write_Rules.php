@@ -11,6 +11,7 @@ namespace CatalogOps\Operations;
 use CatalogOps\Operations\Actions\Action;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Query\Requirements\Meta_Present;
+use CatalogOps\Query\Requirements\Not;
 use CatalogOps\Query\Requirements\Requirement;
 use CatalogOps\Query\Requirements\Sale_Price_Cleared;
 use CatalogOps\Query\Requirements\Sale_Price_Sticks;
@@ -43,6 +44,14 @@ final class Write_Rules {
 	 * already carry, so saving it will clear them.
 	 */
 	public const SALE_PRICE_CLEARED = 'sale_price_cleared';
+
+	/**
+	 * Warning code: objects left out of a sale-price edit that already carry a sale
+	 * price — the ones the applicability rule just saved from being wiped. Not a
+	 * hazard but an explanation, and usually the number the user is looking at when
+	 * they ask why "nothing will change" for products that plainly have sale prices.
+	 */
+	public const SALE_PRICE_PROTECTED = 'sale_price_protected';
 
 	/**
 	 * The postmeta key each readable core field is stored under. A `meta:` field
@@ -108,27 +117,57 @@ final class Write_Rules {
 	}
 
 	/**
-	 * Predicates matching objects a set of actions would collaterally damage —
-	 * counted and shown, not subtracted from the target list.
+	 * Things the preview should count and show but never subtract from the target
+	 * list. Each entry is a code plus the predicates an object must satisfy to be
+	 * counted under it (ANDed), so a warning can combine rules — including the
+	 * inverse of an applicability rule.
 	 *
-	 * Today there is one: WooCommerce re-tests the sale price whenever *either*
-	 * price is written, so lowering regular prices in bulk deletes every sale price
-	 * that now sits at or above the new figure. The regular-price edit itself
-	 * applies perfectly well; the sale prices simply vanish, without a change row of
-	 * their own for undo to restore. That deserves a number in front of the user
-	 * before they press Apply, not a discovery afterwards.
+	 * Both of today's warnings come from the same WooCommerce behaviour, seen from
+	 * opposite sides:
+	 *
+	 *   - Writing a **regular** price re-tests the sale price, so lowering prices in
+	 *     bulk deletes every sale price now at or above the new figure. The edit
+	 *     itself applies perfectly well; the sale prices simply vanish, with no
+	 *     change row of their own for undo to restore. That needs a number in front
+	 *     of the user before they press Apply, not a discovery afterwards.
+	 *   - Writing a **sale** price WooCommerce would refuse does the same damage, but
+	 *     the applicability rule already excluded those objects. Counting how many of
+	 *     them held a sale price turns "none of the 31 will change" — baffling when
+	 *     you can see products with sale prices in the list — into "and 4 of them
+	 *     would have lost the sale price they have".
 	 *
 	 * @param Action[] $actions The operation's actions.
-	 * @return list<Requirement>
+	 * @return list<array{code: string, predicates: list<Requirement>}>
 	 */
 	public function warnings( array $actions ): array {
-		$warnings = array();
+		$warnings      = array();
+		$regular_price = $this->literal_for( $actions, 'regular_price' );
 
 		foreach ( $actions as $action ) {
 			$value = $this->literal( $action );
 
-			if ( 'regular_price' === $action->field() && null !== $value && is_numeric( $value ) ) {
-				$warnings[] = new Sale_Price_Cleared( (float) $value, self::SALE_PRICE_CLEARED );
+			if ( null === $value || ! is_numeric( $value ) ) {
+				continue;
+			}
+
+			if ( 'regular_price' === $action->field() ) {
+				$warnings[] = array(
+					'code'       => self::SALE_PRICE_CLEARED,
+					'predicates' => array( new Sale_Price_Cleared( (float) $value, self::SALE_PRICE_CLEARED ) ),
+				);
+			}
+
+			if ( 'sale_price' === $action->field() ) {
+				$warnings[] = array(
+					'code'       => self::SALE_PRICE_PROTECTED,
+					'predicates' => array(
+						new Meta_Present( '_sale_price', self::SALE_PRICE_PROTECTED ),
+						new Not(
+							new Sale_Price_Sticks( (float) $value, self::SALE_PRICE_PROTECTED, $regular_price ),
+							self::SALE_PRICE_PROTECTED
+						),
+					),
+				);
 			}
 		}
 

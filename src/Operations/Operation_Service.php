@@ -231,12 +231,12 @@ final class Operation_Service {
 
 		$warnings = array();
 
-		foreach ( $this->rules->warnings( $actions ) as $predicate ) {
-			$count = $this->engine->count( $filter, array( $predicate ) );
+		foreach ( $this->rules->warnings( $actions ) as $warning ) {
+			$count = $this->engine->count( $filter, $warning['predicates'] );
 
 			if ( $count > 0 ) {
 				$warnings[] = array(
-					'code'  => $predicate->reason(),
+					'code'  => $warning['code'],
 					'count' => $count,
 				);
 			}
@@ -396,6 +396,13 @@ final class Operation_Service {
 			$this->operations->touch( $op_id );
 
 			$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
+
+			// Enqueueing does not start the work. Ask the queue to begin now, so the
+			// user watches a bar move rather than a queued operation sitting still
+			// until some unrelated request wakes the scheduler. Best-effort: the run
+			// happens either way, this only decides how soon.
+			$this->scheduler->kick();
+
 			$handed_off = true;
 		} finally {
 			if ( ! $handed_off ) {

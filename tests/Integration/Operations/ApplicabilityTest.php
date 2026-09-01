@@ -106,6 +106,42 @@ final class ApplicabilityTest extends Operations_Database_Case {
 		$this->assertSame( $preview['applicable'], $this->freeze( $filter, $actions ) );
 	}
 
+	public function test_omitting_a_sale_price_reports_how_many_sale_prices_it_saved(): void {
+		// "None of the 31 will change" is baffling when the list plainly shows
+		// products with sale prices on it. The count of omitted products that
+		// already carry one is the number that makes the rule make sense — and it
+		// must not include the products that had no sale price to lose.
+		$this->make_product( 100, '80' );
+		$this->make_product( 100, '' );
+		$this->make_product( 500, '80' );
+
+		$preview = $this->service->preview(
+			$this->all_products(),
+			array( new Set_Value( 'sale_price', '150' ) )
+		);
+
+		$this->assertSame( 3, $preview['matched'] );
+		$this->assertSame( 1, $preview['applicable'] );
+		$this->assertSame(
+			array( array( 'code' => Write_Rules::SALE_PRICE_PROTECTED, 'count' => 1 ) ),
+			$preview['warnings']
+		);
+	}
+
+	public function test_an_applicable_sale_price_raises_no_warning(): void {
+		// Nothing was at risk, so there is nothing to report — an always-on notice
+		// would just train the user to ignore it.
+		$this->make_product( 500, '400' );
+
+		$preview = $this->service->preview(
+			$this->all_products(),
+			array( new Set_Value( 'sale_price', '150' ) )
+		);
+
+		$this->assertSame( 1, $preview['applicable'] );
+		$this->assertSame( array(), $preview['warnings'] );
+	}
+
 	public function test_clearing_a_sale_price_is_always_applicable(): void {
 		// An empty sale price is not a value WooCommerce can refuse — it is the
 		// value it falls back to — so "remove the sale" must never be narrowed.

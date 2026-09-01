@@ -81,7 +81,7 @@ enum Skip_Reason: string {
 	public function label(): string {
 		return match ( $this ) {
 			self::EMPTY_INPUT             => __( 'a field the change reads is empty or non-numeric', 'catalogops' ),
-			self::SALE_NOT_BELOW_REGULAR  => __( 'the sale price is not below the regular price', 'catalogops' ),
+			self::SALE_NOT_BELOW_REGULAR  => __( 'the sale price being set is not below their regular price', 'catalogops' ),
 			self::STOCK_MANAGED           => __( 'stock is managed, so WooCommerce sets the status from the quantity', 'catalogops' ),
 			self::UNCHANGED               => __( 'the value was already set', 'catalogops' ),
 			self::REJECTED                => __( 'WooCommerce did not keep the value', 'catalogops' ),
