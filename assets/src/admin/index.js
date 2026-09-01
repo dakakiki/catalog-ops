@@ -2243,6 +2243,16 @@ function SchedulerSetup( { lead = false } ) {
 	const windowsArgs = `-s "${ cronUrl }"`;
 	const linuxCron = `*/${ minutes } * * * * curl -s "${ cronUrl }" >/dev/null 2>&1`;
 
+	// The dialog's "Run whether user is logged on or not" wants a password and the
+	// "Log on as batch job" right, and often simply refuses. Running as SYSTEM does
+	// the same thing with no password, which is one line here and unreachable there.
+	const windowsPs =
+		`Register-ScheduledTask -TaskName 'CatalogOps queue' -Force` +
+		` -Action (New-ScheduledTaskAction -Execute 'curl.exe' -Argument '-s "${ cronUrl }"')` +
+		` -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes ${ minutes }))` +
+		` -Settings (New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable)` +
+		` -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest)`;
+
 	return (
 		<div className="catalogops-setup">
 			{ lead && (
@@ -2368,6 +2378,19 @@ function SchedulerSetup( { lead = false } ) {
 							<CommandBox
 								label={ __( 'Add arguments', 'catalogops' ) }
 								code={ windowsArgs }
+							/>
+							<p>
+								{ __(
+									'Or skip the dialog — run this in PowerShell as Administrator. It also runs when nobody is signed in, which the dialog asks for a password to allow:',
+									'catalogops'
+								) }
+							</p>
+							<CommandBox
+								label={ __(
+									'PowerShell (Administrator)',
+									'catalogops'
+								) }
+								code={ windowsPs }
 							/>
 						</div>
 					) }
