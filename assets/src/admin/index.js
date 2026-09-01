@@ -120,6 +120,38 @@ const NUMERIC_FIELDS = [
 const fieldVariable = ( key ) =>
 	( NUMERIC_FIELDS.find( ( f ) => f.key === key ) || {} ).variable || key;
 
+/**
+ * Every variable a formula may reference — mirrors the server-side whitelist in
+ * CatalogOps\Operations\Formula\Variables. Used to tell the user, before they
+ * press Preview, which fields their formula depends on.
+ */
+const FORMULA_VARIABLES = [
+	'regular_price',
+	'sale_price',
+	'stock',
+	'weight',
+	'cost',
+];
+
+/**
+ * The formula variables an expression reads.
+ *
+ * Word boundaries keep `stock` from matching inside `stock_quantity`: the
+ * character after it is `_`, which is a word character, so the boundary fails.
+ *
+ * @param {string} expression The formula source.
+ * @return {Array} The variable names it references.
+ */
+function formulaReads( expression ) {
+	if ( ! expression ) {
+		return [];
+	}
+
+	return FORMULA_VARIABLES.filter( ( name ) =>
+		new RegExp( `\\b${ name }\\b` ).test( expression )
+	);
+}
+
 /** A short description of each editable field, for the contextual change hint. */
 const FIELD_NOUNS = {
 	regular_price: __( 'the regular price', 'catalogops' ),
@@ -132,11 +164,19 @@ const FIELD_NOUNS = {
  * A one-line, mode-aware explanation of what applying the change does to the
  * selected field, shown under the value control.
  *
- * @param {string} field The selected field key.
- * @param {string} mode  'set' | 'percent' | 'formula'.
+ * Two things it has to say that the field name alone does not. A formula's
+ * *inputs* decide which products qualify, not just its output — "recalculates the
+ * regular price" gives no hint that products without a sale price will be left
+ * out of `sale_price * 1.5`. And a stock status is not stored at all where stock
+ * is managed; WooCommerce derives it from the quantity on every save.
+ *
+ * @param {string} field      The selected field key.
+ * @param {string} mode       'set' | 'percent' | 'formula'.
+ * @param {string} expression The formula being applied, for percent and formula
+ *                            modes — the source of the fields it reads.
  * @return {string} The hint sentence.
  */
-function changeHint( field, mode ) {
+function changeHint( field, mode, expression = '' ) {
 	const noun = FIELD_NOUNS[ field ] || field;
 	let sentence;
 	if ( mode === 'percent' ) {
@@ -175,6 +215,35 @@ function changeHint( field, mode ) {
 				'catalogops'
 			);
 	}
+
+	if ( 'stock_status' === field ) {
+		sentence +=
+			' ' +
+			__(
+				'Only products with “Manage stock” off are affected: where stock is managed, WooCommerce works the status out from the quantity on every save and overwrites whatever is set here — change Stock quantity for those instead.',
+				'catalogops'
+			);
+	}
+
+	// Which fields the calculation depends on, and therefore which products it can
+	// be applied to at all.
+	const reads = formulaReads( expression );
+
+	if ( reads.length > 0 ) {
+		sentence +=
+			' ' +
+			sprintf(
+				/* translators: %s: comma-separated list of field names a formula reads. */
+				_n(
+					'It reads %s, so products where that field is empty or non-numeric are left out — never set to 0.',
+					'It reads %s, so products where any of those is empty or non-numeric are left out — never set to 0.',
+					reads.length,
+					'catalogops'
+				),
+				reads.join( ', ' )
+			);
+	}
+
 	return sentence;
 }
 
@@ -1106,7 +1175,13 @@ function BulkEdit( {
 
 						<div className="catalogops-filter-row">
 							<p className="catalogops-field-hint">
-								{ changeHint( field, mode ) }
+								{ changeHint(
+									field,
+									mode,
+									mode === 'percent'
+										? percentExpression
+										: expression
+								) }
 							</p>
 						</div>
 
