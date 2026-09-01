@@ -25,6 +25,7 @@ use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedules;
 use CatalogOps\Operations\Scheduler;
 use CatalogOps\Operations\Watchdog;
+use CatalogOps\Operations\Write_Rules;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Saved_Filters;
 use CatalogOps\Rest\Fields_Controller;
@@ -358,6 +359,11 @@ final class Plugin {
 		);
 
 		$this->container->singleton(
+			Write_Rules::class,
+			static fn(): Write_Rules => new Write_Rules()
+		);
+
+		$this->container->singleton(
 			Operation_Service::class,
 			static fn( Container $container ): Operation_Service => new Operation_Service(
 				$container->get( Query_Engine::class ),
@@ -366,7 +372,8 @@ final class Plugin {
 				$container->get( Field_Providers::class ),
 				$container->get( Lock::class ),
 				$container->get( Scheduler::class ),
-				$container->get( License::class )
+				$container->get( License::class ),
+				$container->get( Write_Rules::class )
 			)
 		);
 
@@ -377,7 +384,8 @@ final class Plugin {
 				$container->get( Changes::class ),
 				$container->get( Field_Providers::class ),
 				$container->get( Scheduler::class ),
-				$container->get( Lock::class )
+				$container->get( Lock::class ),
+				$container->get( Write_Rules::class )
 			)
 		);
 

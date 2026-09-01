@@ -87,7 +87,10 @@ final class Apply_Plan implements Chunk_Plan {
 			$new     = $action->apply( $current, $resolver );
 
 			if ( null === $new ) {
-				$outcome->record_skipped( $row, Values::to_string( $current ) );
+				// A formula over an empty or non-numeric field. The frozen target
+				// list already excludes objects missing a read field, so reaching
+				// here means the input was present but unusable.
+				$outcome->record_skipped( $row, Values::to_string( $current ), Skip_Reason::EMPTY_INPUT );
 				continue;
 			}
 

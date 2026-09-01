@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Query;
 
+use CatalogOps\Query\Requirements\Requirement;
 use wpdb;
 
 /**
@@ -40,14 +41,15 @@ final class Query_Engine {
 	/**
 	 * Resolve a filter to the matching product IDs, ascending.
 	 *
-	 * @param Filter   $filter          The filter to resolve.
-	 * @param string[] $require_present Postmeta keys that must be non-empty on each
-	 *                                  match — the edit's read fields, so objects it
-	 *                                  cannot compute a value for are excluded.
+	 * @param Filter        $filter       The filter to resolve.
+	 * @param Requirement[] $requirements Applicability constraints every match must
+	 *                                    satisfy — the objects an edit can actually
+	 *                                    change, so ones it would only skip are
+	 *                                    excluded up front.
 	 * @return list<int>
 	 */
-	public function resolve( Filter $filter, array $require_present = array() ): array {
-		$sql = $this->select( 'l.product_id', $filter, $require_present ) . ' ORDER BY l.product_id ASC';
+	public function resolve( Filter $filter, array $requirements = array() ): array {
+		$sql = $this->select( 'l.product_id', $filter, $requirements ) . ' ORDER BY l.product_id ASC';
 
 		// $sql is assembled in select() from trusted identifiers with all values
 		// bound via $wpdb->prepare().
@@ -58,14 +60,13 @@ final class Query_Engine {
 	/**
 	 * Count the products matching a filter without materializing the IDs.
 	 *
-	 * @param Filter   $filter          The filter to count.
-	 * @param string[] $require_present Postmeta keys that must be non-empty (see
-	 *                                  {@see resolve()}).
+	 * @param Filter        $filter       The filter to count.
+	 * @param Requirement[] $requirements Applicability constraints (see {@see resolve()}).
 	 */
-	public function count( Filter $filter, array $require_present = array() ): int {
+	public function count( Filter $filter, array $requirements = array() ): int {
 		// select() returns a prepared statement built from trusted identifiers.
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		return (int) $this->wpdb->get_var( $this->select( 'COUNT(*)', $filter, $require_present ) );
+		return (int) $this->wpdb->get_var( $this->select( 'COUNT(*)', $filter, $requirements ) );
 	}
 
 	/**
@@ -75,11 +76,11 @@ final class Query_Engine {
 	 * the parent, and its chosen attribute value lives on the variation itself
 	 * (CONTEXT §4).
 	 *
-	 * @param string   $projection      The select list, e.g. `l.product_id`.
-	 * @param Filter   $filter          The filter to translate.
-	 * @param string[] $require_present Postmeta keys that must be non-empty on a match.
+	 * @param string        $projection   The select list, e.g. `l.product_id`.
+	 * @param Filter        $filter       The filter to translate.
+	 * @param Requirement[] $requirements Applicability constraints on a match.
 	 */
-	private function select( string $projection, Filter $filter, array $require_present = array() ): string {
+	private function select( string $projection, Filter $filter, array $requirements = array() ): string {
 		$lookup   = $this->wpdb->prefix . 'wc_product_meta_lookup';
 		$posts    = $this->wpdb->posts;
 		$postmeta = $this->wpdb->postmeta;
@@ -104,20 +105,20 @@ final class Query_Engine {
 			)";
 		}
 
-		// Applicability: keep only objects that carry every field the edit reads,
-		// so a formula or percentage whose input is empty is excluded up front
-		// rather than counted and then skipped (Action::reads(); the formula engine
-		// skips on any empty input, so this makes targets match what is applied).
-		foreach ( $require_present as $meta_key ) {
-			if ( '' === (string) $meta_key ) {
+		// Applicability: keep only the objects the edit can actually change — ones
+		// carrying every field it reads, and ones whose new value WooCommerce will
+		// keep rather than silently override on save. Excluding them here is what
+		// makes the previewed count equal the applied count (CONTEXT §2); each
+		// requirement carries the reason its exclusions are reported under.
+		foreach ( $requirements as $requirement ) {
+			list( $fragment, $fragment_args ) = $requirement->sql( $this->wpdb, $scope );
+
+			if ( '' === $fragment ) {
 				continue;
 			}
 
-			$sql   .= " AND l.product_id IN (
-				SELECT pm.post_id FROM {$postmeta} pm
-				WHERE pm.meta_key = %s AND pm.meta_value <> ''
-			)";
-			$args[] = $meta_key;
+			$sql .= ' AND ' . $fragment;
+			$args = array( ...$args, ...$fragment_args );
 		}
 
 		list( $where, $where_args ) = $this->build_where( $filter );

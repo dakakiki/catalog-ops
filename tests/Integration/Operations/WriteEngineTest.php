@@ -11,6 +11,7 @@
 
 namespace CatalogOps\Tests\Integration\Operations;
 
+use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Change_Status;
 use CatalogOps\Operations\Changes;
@@ -23,6 +24,7 @@ use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
 use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Skip_Reason;
 use CatalogOps\Operations\Fields\Core_Fields;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Operations\Fields\Meta_Fields;
@@ -266,44 +268,73 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$this->assertSame( 1, $this->changes->counts( $op_id )['applied'] );
 	}
 
-	public function test_stock_status_override_by_woocommerce_is_recorded_as_skipped(): void {
+	public function test_stock_status_woocommerce_would_override_is_never_queued(): void {
 		// A stock-managed product at zero quantity: WooCommerce forces `outofstock`
-		// on save, so a bulk "set in stock" cannot actually take effect.
+		// on save, so a bulk "set in stock" cannot take effect. The applicability
+		// rules know that, so the object is excluded before the operation is frozen
+		// rather than queued, processed, and reported as a bare skip.
 		$product = $this->make_out_of_stock_product( 50 );
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) );
+		$actions = array( new Set_Value( 'stock_status', 'instock' ) );
 
-		$op_id = $this->service->create(
-			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) ),
-			array( new Set_Value( 'stock_status', 'instock' ) ),
-			Operation_Mode::SAFE,
-			Operation_Source::UI,
-			1
+		$preview = $this->service->preview( $filter, $actions );
+
+		$this->assertSame( 1, $preview['matched'] );
+		$this->assertSame( 0, $preview['applicable'] );
+		$this->assertSame(
+			array( array( 'reason' => Skip_Reason::STOCK_MANAGED->value, 'count' => 1 ) ),
+			$preview['omitted_by']
 		);
+
+		$op_id = $this->service->create( $filter, $actions, Operation_Mode::SAFE, Operation_Source::UI, 1 );
 		$this->service->queue( $op_id );
 		$this->drive( $op_id );
 
-		// WooCommerce kept it out of stock, so the runner reads the value back and
-		// records a skip, not a false apply — the object was processed but nothing
-		// changed.
 		$this->assertSame( 'outofstock', wc_get_product( $product )->get_stock_status() );
 
+		// Nothing to do: the operation settles immediately with no targets at all.
 		$operation = $this->operations->find( $op_id );
 		$this->assertSame( Operation_Status::COMPLETED, $operation->status );
-		$this->assertSame( 1, $operation->processed );
-
-		$counts = $this->changes->counts( $op_id );
-		$this->assertSame( 0, $counts['applied'] );
-		$this->assertSame( 1, $counts['skipped'] );
+		$this->assertSame( 0, $operation->target_count );
+		$this->assertSame( 0, $this->scheduler->count() );
+		$this->assertSame( 0, $this->changes->counts( $op_id )['skipped'] );
 	}
 
-	public function test_sale_price_rejected_by_woocommerce_is_recorded_as_skipped(): void {
-		// A sale price at or above the regular price is rejected by WooCommerce,
-		// which drops it — so setting one on a product with no prior sale changes
-		// nothing, and must not be reported as applied.
+	public function test_sale_price_woocommerce_would_reject_is_never_queued(): void {
+		// A sale price at or above the regular price is dropped by WooCommerce —
+		// and, worse, takes any existing sale price with it. Predicting that in SQL
+		// means the products are never targeted, so nothing is written at all.
+		$product = $this->make_product( 100 );
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) );
+		$actions = array( new Set_Value( 'sale_price', '150' ) );
+
+		$preview = $this->service->preview( $filter, $actions );
+
+		$this->assertSame( 1, $preview['matched'] );
+		$this->assertSame( 0, $preview['applicable'] );
+		$this->assertSame(
+			array( array( 'reason' => Skip_Reason::SALE_NOT_BELOW_REGULAR->value, 'count' => 1 ) ),
+			$preview['omitted_by']
+		);
+
+		$op_id = $this->service->create( $filter, $actions, Operation_Mode::SAFE, Operation_Source::UI, 1 );
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( '', wc_get_product( $product )->get_sale_price() );
+		$this->assertSame( 0, $this->operations->find( $op_id )->target_count );
+	}
+
+	public function test_sale_price_a_formula_cannot_predict_is_skipped_with_a_reason(): void {
+		// The rules cannot test a formula's result in SQL, so this is the case the
+		// runner's post-save read-back still has to catch — and it must name the
+		// reason, not just count a skip. `regular_price * 2` is always above the
+		// regular price, so WooCommerce refuses every one of them.
 		$product = $this->make_product( 100 );
 
 		$op_id = $this->service->create(
 			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) ),
-			array( new Set_Value( 'sale_price', '150' ) ),
+			array( Formula::from_source( 'sale_price', 'regular_price * 2' ) ),
 			Operation_Mode::SAFE,
 			Operation_Source::UI,
 			1
@@ -316,6 +347,25 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$counts = $this->changes->counts( $op_id );
 		$this->assertSame( 0, $counts['applied'] );
 		$this->assertSame( 1, $counts['skipped'] );
+
+		$this->assertSame(
+			array( array( 'reason' => Skip_Reason::SALE_NOT_BELOW_REGULAR->value, 'count' => 1 ) ),
+			$this->changes->skip_reasons( $op_id )
+		);
+	}
+
+	public function test_writing_the_value_an_object_already_holds_is_skipped_as_unchanged(): void {
+		// Nothing was ever going to change here, and saying so is more useful than
+		// reporting an apply that moved nothing.
+		$this->make_product( 50 );
+
+		$op_id = $this->queue_price_change( 'price', Operator::GREATER_THAN, 20, '50' );
+		$this->drive( $op_id );
+
+		$this->assertSame(
+			array( array( 'reason' => Skip_Reason::UNCHANGED->value, 'count' => 1 ) ),
+			$this->changes->skip_reasons( $op_id )
+		);
 	}
 
 	public function test_price_change_records_the_value_woocommerce_persisted(): void {

@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Database;
 
+use CatalogOps\Database\Migrations\Add_Change_Skip_Reason_Column;
 use CatalogOps\Database\Migrations\Add_Conflict_Policy_Column;
 use CatalogOps\Database\Migrations\Add_Operation_Progress_Columns;
 use CatalogOps\Database\Migrations\Create_Core_Tables;
@@ -59,6 +60,7 @@ final class Schema {
 			new Add_Operation_Progress_Columns(),
 			new Add_Conflict_Policy_Column(),
 			new Create_Schedules_Table(),
+			new Add_Change_Skip_Reason_Column(),
 		);
 
 		usort(

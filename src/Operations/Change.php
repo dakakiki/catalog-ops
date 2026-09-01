@@ -20,15 +20,18 @@ final class Change {
 	/**
 	 * Build the read-model.
 	 *
-	 * @param int           $id           Row id.
-	 * @param int           $operation_id Owning operation id.
-	 * @param string        $object_type  product|variation.
-	 * @param int           $object_id    The product or variation id.
-	 * @param Field_Type    $field_type   Where the value is stored.
-	 * @param string        $field_key    The storage key (bare meta key or core field).
-	 * @param string|null   $old_value    Value before the change, or null if not yet applied.
-	 * @param string|null   $new_value    Value written, or null if not yet applied.
-	 * @param Change_Status $status     Application state.
+	 * @param int              $id           Row id.
+	 * @param int              $operation_id Owning operation id.
+	 * @param string           $object_type  product|variation.
+	 * @param int              $object_id    The product or variation id.
+	 * @param Field_Type       $field_type   Where the value is stored.
+	 * @param string           $field_key    The storage key (bare meta key or core field).
+	 * @param string|null      $old_value    Value before the change, or null if not yet applied.
+	 * @param string|null      $new_value    Value written, or null if not yet applied.
+	 * @param Change_Status    $status       Application state.
+	 * @param Skip_Reason|null $skip_reason  Why the row was left untouched; null unless
+	 *                                       the status is SKIPPED (and on rows written
+	 *                                       before the reason was recorded).
 	 */
 	public function __construct(
 		public readonly int $id,
@@ -40,5 +43,6 @@ final class Change {
 		public readonly ?string $old_value,
 		public readonly ?string $new_value,
 		public readonly Change_Status $status,
+		public readonly ?Skip_Reason $skip_reason = null,
 	) {}
 }

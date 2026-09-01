@@ -13,8 +13,8 @@ walkthrough explains the three steps; you can dismiss it any time.
    between *Products* and *Variations*. Click **Show products** to see the
    matches and the count.
 2. **Preview** — in **Bulk edit**, pick a field and a new value (or a percentage,
-   or a formula), then click **Preview**. You see the old → new value for the
-   matches. Nothing has been written yet.
+   or a formula), then click **Preview**. You see how many items matched, how many
+   will actually change, and why the rest will not. Nothing has been written yet.
 3. **Apply** — click **Apply**. The first time, you confirm a one-time backup
    reminder. The operation then runs in the background; its progress appears in
    **Operation history**.
@@ -30,6 +30,39 @@ walkthrough explains the three steps; you can dismiss it any time.
   Variables: `regular_price`, `sale_price`, `stock`, `weight`, `cost`.
   Functions: `round`, `ceil`, `floor`, `roundto`, `min`, `max`, `abs`.
   An empty or non-numeric field is **skipped and logged**, never set to 0.
+
+## What will change, and what won't
+
+Preview always answers three questions: how many items **matched** the filter, how
+many **will change**, and how many **will not** — each with a reason. Only the
+items that will change are put into the operation, so its progress bar, its
+history entry, and its undo all show the same number you were shown.
+
+Items are left out when:
+
+* **A field the change reads is empty or non-numeric.** A formula or percentage
+  needs a value to work from; without one the item is left alone, never set to 0.
+  Variable products are the common case — their prices live on the variations, so
+  switch **Target** to *Variations*.
+* **The sale price is not below the regular price.** WooCommerce only stores a
+  sale price lower than the regular price. Setting one that isn't does not fail
+  loudly — it *deletes* any sale price the product already had. CatalogOps leaves
+  those products out instead.
+* **Stock is managed.** With *Manage stock* on, WooCommerce works the stock status
+  out from the quantity and backorder setting on every save, so setting the status
+  by hand has no effect. Change the quantity instead. Variations that inherit
+  stock management from their parent count here too.
+
+A finished run shows the same breakdown, and the **Why** column in an operation's
+detail view gives the reason for each individual item.
+
+### One warning worth reading
+
+Lowering a **regular price** below an existing **sale price** makes WooCommerce
+delete that sale price — it re-checks both prices whenever either one is written.
+Preview counts how many products this would hit and warns you before you apply.
+That deletion is not recorded as a change of its own, so **Undo cannot bring those
+sale prices back**. Check the number before applying.
 
 ## Undo, drift, and retention
 

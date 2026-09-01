@@ -84,6 +84,13 @@ final class Chunk_Runner {
 	private Lock $lock;
 
 	/**
+	 * The rules that name why a write did not stick.
+	 *
+	 * @var Write_Rules
+	 */
+	private Write_Rules $rules;
+
+	/**
 	 * Build the runner.
 	 *
 	 * @param Operations          $operations Operations repository.
@@ -91,19 +98,24 @@ final class Chunk_Runner {
 	 * @param Field_Providers     $providers  Field provider registry.
 	 * @param Operation_Scheduler $scheduler  Scheduler for the next chunk.
 	 * @param Lock                $lock       Single-writer lock.
+	 * @param Write_Rules|null    $rules      Rules explaining a refused write; the
+	 *                                        default set is stateless, so it is built
+	 *                                        when omitted.
 	 */
 	public function __construct(
 		Operations $operations,
 		Changes $changes,
 		Field_Providers $providers,
 		Operation_Scheduler $scheduler,
-		Lock $lock
+		Lock $lock,
+		?Write_Rules $rules = null
 	) {
 		$this->operations = $operations;
 		$this->changes    = $changes;
 		$this->providers  = $providers;
 		$this->scheduler  = $scheduler;
 		$this->lock       = $lock;
+		$this->rules      = $rules ?? new Write_Rules();
 	}
 
 	/**
@@ -225,7 +237,7 @@ final class Chunk_Runner {
 
 		// Record skips before the save, mirroring the pre-refactor ordering.
 		foreach ( $outcome->skipped() as $skip ) {
-			$this->changes->mark_skipped( $skip['row']->id, $skip['old'] );
+			$this->changes->mark_skipped( $skip['row']->id, $skip['old'], $skip['reason'] );
 		}
 
 		if ( ! $outcome->has_writes() ) {
@@ -245,15 +257,26 @@ final class Chunk_Runner {
 		// recorded as-persisted. That keeps progress, history, and undo in step
 		// with reality (CONTEXT §3), the same invariant the pre-write applicability
 		// check upholds — carried across the save.
+		//
+		// With the applicability rules narrowing the frozen list up front, a skip
+		// here is the exception rather than the rule: a formula result that could
+		// not be predicted in SQL, or another plugin overriding the value. Each one
+		// is named ({@see Write_Rules::explain()}) so the audit log can say why
+		// instead of leaving the user with a bare count.
 		foreach ( $outcome->applied() as $change ) {
 			$row      = $change['row'];
 			$resolved = $this->providers->for_storage( $row->field_type, $row->field_key );
+			$field    = null !== $resolved ? $resolved['key'] : $row->field_key;
 			$actual   = null !== $resolved
-				? Values::to_string( $resolved['provider']->read( $product, $resolved['key'] ) )
+				? Values::to_string( $resolved['provider']->read( $product, $field ) )
 				: $change['new'];
 
 			if ( Values::equal( $actual, $change['old'] ) ) {
-				$this->changes->mark_skipped( $row->id, $change['old'] );
+				$this->changes->mark_skipped(
+					$row->id,
+					$change['old'],
+					$this->rules->explain( $product, $field, $change['new'], $change['old'] )
+				);
 			} else {
 				$this->changes->mark_applied( $row->id, $change['old'], $actual );
 			}

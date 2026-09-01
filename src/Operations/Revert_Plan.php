@@ -76,7 +76,7 @@ final class Revert_Plan implements Chunk_Plan {
 			if ( ! isset( $this->parent_deltas[ $key ] ) ) {
 				// The parent delta is gone (e.g. retention pruned it): nothing to
 				// revert to. Leave the object as it is.
-				$outcome->record_skipped( $row, null );
+				$outcome->record_skipped( $row, null, Skip_Reason::NO_RECORD );
 				continue;
 			}
 
@@ -84,7 +84,7 @@ final class Revert_Plan implements Chunk_Plan {
 
 			if ( null === $resolved ) {
 				// No provider can write this storage (a module was deactivated).
-				$outcome->record_skipped( $row, null );
+				$outcome->record_skipped( $row, null, Skip_Reason::NO_RECORD );
 				continue;
 			}
 
@@ -98,7 +98,7 @@ final class Revert_Plan implements Chunk_Plan {
 			if ( ! Values::equal( $current, $expected ) && Conflict_Policy::SKIP === $this->policy ) {
 				// The object changed since the operation and the policy is skip:
 				// leave it exactly as it is now and record the drift (CONTEXT §3).
-				$outcome->record_skipped( $row, $current );
+				$outcome->record_skipped( $row, $current, Skip_Reason::DRIFT );
 				continue;
 			}
 
