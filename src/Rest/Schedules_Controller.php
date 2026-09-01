@@ -16,6 +16,7 @@ use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedule_Status;
 use CatalogOps\Operations\Schedules;
 use CatalogOps\Query\Filter;
+use DateTimeZone;
 use InvalidArgumentException;
 use WP_Error;
 use WP_REST_Request;
