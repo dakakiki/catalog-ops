@@ -183,6 +183,46 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertNotContains( $neither, $ids );
 	}
 
+	public function test_category_not_in_excludes_only_those_terms(): void {
+		$in_a  = $this->make_product( array( 'category' => $this->cat_a ) );
+		$in_b  = $this->make_product( array( 'category' => $this->cat_b ) );
+		$plain = $this->make_product( array( 'price' => 10 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::NOT_IN, array( $this->cat_a ) ) ) )
+		);
+
+		$this->assertNotContains( $in_a, $ids );
+		$this->assertContains( $in_b, $ids );
+		$this->assertContains( $plain, $ids );
+	}
+
+	public function test_a_term_that_does_not_exist_matches_nothing(): void {
+		// The clause resolves term ids to term_taxonomy_ids before querying, so a
+		// term with no row resolves to an empty set. "Has one of these" must then
+		// match nothing rather than quietly dropping the condition and matching
+		// the whole catalogue.
+		$this->make_product( array( 'category' => $this->cat_a ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::IN, array( 99999999 ) ) ) )
+		);
+
+		$this->assertSame( array(), $ids );
+	}
+
+	public function test_not_in_a_term_that_does_not_exist_matches_everything(): void {
+		// The mirror of the above: nothing can carry a term that is not there, so
+		// excluding it excludes nobody.
+		$product = $this->make_product( array( 'category' => $this->cat_a ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::NOT_IN, array( 99999999 ) ) ) )
+		);
+
+		$this->assertContains( $product, $ids );
+	}
+
 	public function test_meta_in_multiple_values(): void {
 		$acme   = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
 		$globex = $this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
