@@ -57,8 +57,12 @@ final class Scheduler implements Operation_Scheduler {
 	 * How often the schedule supervisor runs, in seconds. Interval presets are
 	 * hourly at the finest, so a 5-minute cadence is timely without flooding the
 	 * queue; the exact firing time depends on the host's cron regardless.
+	 *
+	 * Public because the admin screen quotes it when explaining how often the
+	 * operating system needs to drive the queue — the setup instructions and this
+	 * number have to agree, so they read the same constant.
 	 */
-	private const SCHEDULES_INTERVAL = 5 * MINUTE_IN_SECONDS;
+	public const SCHEDULES_INTERVAL = 5 * MINUTE_IN_SECONDS;
 
 	/**
 	 * Enqueue the next chunk of an operation, in its own cancellable group.

@@ -8,6 +8,7 @@
 namespace CatalogOps\Admin;
 
 use CatalogOps\Licensing\License;
+use CatalogOps\Operations\Scheduler;
 
 /**
  * Registers the top-level admin menu, renders the mount point, and enqueues the
@@ -146,7 +147,35 @@ final class Admin_Page {
 					// null means unbounded (paid); a number is the free-tier cap.
 					'maxObjectsPerOp' => $this->license->is_premium() ? null : $this->license->max_objects_per_op(),
 				),
+				'cron'         => $this->cron_config(),
 			)
+		);
+	}
+
+	/**
+	 * What the Scheduling panel needs to print working setup commands for *this*
+	 * install rather than a generic example.
+	 *
+	 * A schedule is only as reliable as whatever drives WordPress's background
+	 * queue, and by default that is a visitor loading a page. Which is precisely
+	 * wrong for the case scheduling exists to serve: a large run at 2am, when the
+	 * site is quiet on purpose. So the screen shows how to hand the job to the
+	 * operating system, with this install's paths already filled in.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function cron_config(): array {
+		return array(
+			// The path WP-CLI needs, and the URL the no-WP-CLI fallback fetches.
+			'wpPath'            => untrailingslashit( ABSPATH ),
+			'cronUrl'           => site_url( 'wp-cron.php?doing_wp_cron=1' ),
+			'isWindows'         => 'WIN' === strtoupper( substr( PHP_OS, 0, 3 ) ),
+			// Whether WordPress's own visitor-driven cron is switched off. Either
+			// state works once the OS drives the queue; the panel reports what it
+			// found rather than guessing.
+			'wpCronDisabled'    => defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON,
+			// How often the queue must be driven for schedules to fire on time.
+			'supervisorMinutes' => (int) ( Scheduler::SCHEDULES_INTERVAL / MINUTE_IN_SECONDS ),
 		);
 	}
 }

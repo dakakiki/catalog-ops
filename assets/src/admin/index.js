@@ -2161,6 +2161,264 @@ function RetentionSetting() {
  * @param {number}   props.refreshKey Bumping this reloads the list.
  * @param {Function} props.onRan      Called after a run-now, to refresh history.
  */
+/**
+ * Server details the setup instructions are built from, filled in by the PHP side
+ * (see Admin_Page::cron_config). Missing config degrades to generic placeholders
+ * rather than printing a broken command.
+ */
+const CRON = ( window.catalogopsConfig && window.catalogopsConfig.cron ) || {};
+
+/**
+ * A command the user is meant to run, with a button that copies it.
+ *
+ * @param {Object} props       Component props.
+ * @param {string} props.label What the command is for.
+ * @param {string} props.code  The command itself.
+ */
+function CommandBox( { label, code } ) {
+	const [ copied, setCopied ] = useState( false );
+
+	const copy = () => {
+		if ( ! navigator.clipboard ) {
+			return;
+		}
+		navigator.clipboard.writeText( code ).then( () => {
+			setCopied( true );
+			setTimeout( () => setCopied( false ), 2000 );
+		} );
+	};
+
+	return (
+		<div className="catalogops-command">
+			<div className="catalogops-command__head">
+				<span>{ label }</span>
+				<button
+					type="button"
+					className="button button-small"
+					onClick={ copy }
+				>
+					{ copied
+						? __( 'Copied', 'catalogops' )
+						: __( 'Copy', 'catalogops' ) }
+				</button>
+			</div>
+			<pre>
+				<code>{ code }</code>
+			</pre>
+		</div>
+	);
+}
+
+/**
+ * How to make schedules actually fire.
+ *
+ * WordPress runs background work when someone loads a page. That is fine for a
+ * busy shop and useless for the thing scheduling is for — a big overnight run,
+ * when by design nobody is on the site. Left alone, a 2am schedule waits until
+ * the first visitor next morning, which is exactly the time the shop did not want
+ * thousands of products changing.
+ *
+ * So this panel hands the job to the operating system instead, with the paths for
+ * this install already filled in. One task every few minutes is enough: it exits
+ * immediately when there is nothing due, and when there is, `action-scheduler run`
+ * keeps going until the whole operation is finished rather than stopping at one
+ * batch — so a 30,000-product change started at 2am runs to completion in that one
+ * invocation, without web-request timeouts.
+ */
+function SchedulerSetup() {
+	const [ open, setOpen ] = useState( false );
+	const [ platform, setPlatform ] = useState(
+		CRON.isWindows ? 'windows' : 'linux'
+	);
+
+	const wpPath = CRON.wpPath || '/path/to/wordpress';
+	const cronUrl =
+		CRON.cronUrl || 'https://example.com/wp-cron.php?doing_wp_cron=1';
+	const minutes = CRON.supervisorMinutes || 5;
+
+	const batch = [
+		'@echo off',
+		`"C:\\path\\to\\php.exe" "C:\\path\\to\\wp-cli.phar" action-scheduler run --path="${ wpPath }"`,
+	].join( '\r\n' );
+
+	const linuxCron = `*/${ minutes } * * * * cd ${ wpPath } && wp action-scheduler run --quiet >/dev/null 2>&1`;
+
+	const curlCron = `*/${ minutes } * * * * curl -sS "${ cronUrl }" >/dev/null 2>&1`;
+
+	return (
+		<div className="catalogops-setup">
+			<button
+				type="button"
+				className="catalogops-collapse-toggle catalogops-group-label"
+				onClick={ () => setOpen( ! open ) }
+				aria-expanded={ open }
+			>
+				{ __( 'Make schedules run on time', 'catalogops' ) }
+				<svg
+					className="catalogops-collapse-toggle__arrow"
+					width="12"
+					height="12"
+					viewBox="0 0 12 12"
+					aria-hidden="true"
+					focusable="false"
+				>
+					<path
+						d={
+							open
+								? 'M2.5 7.5 6 4 9.5 7.5'
+								: 'M2.5 4.5 6 8 9.5 4.5'
+						}
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="1.6"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					/>
+				</svg>
+			</button>
+
+			{ open && (
+				<div className="catalogops-setup__body">
+					<p>
+						{ __(
+							'Out of the box, WordPress only runs background work when someone visits the site. That is the wrong behaviour for the job scheduling is for: a large change overnight, when the shop is quiet on purpose. A 2am schedule would sit untouched until the first visitor the next morning — the busiest possible moment for thousands of products to start changing.',
+							'catalogops'
+						) }
+					</p>
+					<p>
+						{ sprintf(
+							/* translators: %d: minutes between runs. */
+							__(
+								'Give the job to the server instead. One task every %d minutes is enough — it costs nothing when there is nothing due, and when a schedule does fire it runs the whole operation through to the end in that one go, with no web-request timeout to hit.',
+								'catalogops'
+							),
+							minutes
+						) }
+					</p>
+
+					<div className="catalogops-setup__tabs">
+						<button
+							type="button"
+							className={ `catalogops-tab${
+								platform === 'windows' ? ' is-active' : ''
+							}` }
+							onClick={ () => setPlatform( 'windows' ) }
+						>
+							{ __( 'Windows', 'catalogops' ) }
+						</button>
+						<button
+							type="button"
+							className={ `catalogops-tab${
+								platform === 'linux' ? ' is-active' : ''
+							}` }
+							onClick={ () => setPlatform( 'linux' ) }
+						>
+							{ __( 'Linux server / cPanel', 'catalogops' ) }
+						</button>
+					</div>
+
+					{ platform === 'windows' && (
+						<div>
+							<p>
+								{ __(
+									'Save this as catalogops-queue.bat, with your own PHP and WP-CLI paths:',
+									'catalogops'
+								) }
+							</p>
+							<CommandBox
+								label={ __(
+									'catalogops-queue.bat',
+									'catalogops'
+								) }
+								code={ batch }
+							/>
+							<p>
+								{ __(
+									'Then in Task Scheduler (Win+R → taskschd.msc):',
+									'catalogops'
+								) }
+							</p>
+							<ol className="catalogops-steps">
+								<li>
+									{ __(
+										'Create Task… (not “Basic Task” — the repeat setting lives only in the full dialog).',
+										'catalogops'
+									) }
+								</li>
+								<li>
+									{ __(
+										'General: name it CatalogOps queue, and tick “Run whether user is logged on or not”.',
+										'catalogops'
+									) }
+								</li>
+								<li>
+									{ sprintf(
+										/* translators: %d: minutes between runs. */
+										__(
+											'Triggers → New: Daily, start 00:00, then tick “Repeat task every” and enter %d minutes, “for a duration of” Indefinitely.',
+											'catalogops'
+										),
+										minutes
+									) }
+								</li>
+								<li>
+									{ __(
+										'Actions → New: Start a program, and point Program/script at the .bat file.',
+										'catalogops'
+									) }
+								</li>
+								<li>
+									{ __(
+										'Settings: leave “Do not start a new instance” selected, so a long run is never doubled up.',
+										'catalogops'
+									) }
+								</li>
+							</ol>
+						</div>
+					) }
+
+					{ platform === 'linux' && (
+						<div>
+							<p>
+								{ __(
+									'With WP-CLI available (the reliable option — no timeouts, no memory limits from the web server):',
+									'catalogops'
+								) }
+							</p>
+							<CommandBox
+								label={ __( 'crontab -e', 'catalogops' ) }
+								code={ linuxCron }
+							/>
+							<p>
+								{ __(
+									'On shared hosting without WP-CLI, use the control panel’s Cron Jobs screen with this line instead. It does the same job through an HTTP request, so very large operations continue over several runs rather than finishing in one:',
+									'catalogops'
+								) }
+							</p>
+							<CommandBox
+								label={ __( 'Cron Jobs', 'catalogops' ) }
+								code={ curlCron }
+							/>
+						</div>
+					) }
+
+					<p className="catalogops-muted">
+						{ CRON.wpCronDisabled
+							? __(
+									'This site has DISABLE_WP_CRON switched on, so nothing runs background work until you set the task up above.',
+									'catalogops'
+							  )
+							: __(
+									'This site still has WordPress’s visitor-driven cron enabled. Leave it on as a safety net — the task above simply makes the timing dependable. If you prefer only the task to run it, set DISABLE_WP_CRON to true in wp-config.php.',
+									'catalogops'
+							  ) }
+					</p>
+				</div>
+			) }
+		</div>
+	);
+}
+
 function Schedules( { refreshKey, onRan } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
@@ -2229,6 +2487,8 @@ function Schedules( { refreshKey, onRan } ) {
 					'catalogops'
 				) }
 			</p>
+
+			<SchedulerSetup />
 
 			{ error && (
 				<div className="notice notice-error">

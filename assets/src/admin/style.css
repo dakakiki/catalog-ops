@@ -735,6 +735,88 @@ without claiming a position it does not know.
 	margin: 0 0 4px;
 }
 
+/* --- Scheduler setup --------------------------------------------------- */
+
+.catalogops-setup {
+	margin: 12px 0 16px;
+}
+
+.catalogops-setup__body {
+	margin-top: 10px;
+	padding: 12px 14px;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+	background: #fbfbfc;
+	max-width: 760px;
+}
+
+.catalogops-setup__body > p:first-child {
+	margin-top: 0;
+}
+
+.catalogops-setup__tabs {
+	display: flex;
+	gap: 4px;
+	margin: 14px 0 12px;
+	border-bottom: 1px solid #dcdcde;
+}
+
+.catalogops-tab {
+	border: 1px solid transparent;
+	border-bottom: none;
+	background: none;
+	padding: 6px 12px;
+	margin-bottom: -1px;
+	cursor: pointer;
+	color: var(--co-muted);
+	font-size: 13px;
+}
+
+.catalogops-tab.is-active {
+	border-color: #dcdcde;
+	border-radius: 4px 4px 0 0;
+	background: #fff;
+	color: inherit;
+	font-weight: 600;
+}
+
+.catalogops-command {
+	margin: 0 0 14px;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+	background: #fff;
+	overflow: hidden;
+}
+
+.catalogops-command__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 6px 8px 6px 12px;
+	border-bottom: 1px solid #f0f0f1;
+	font-size: 12px;
+	color: var(--co-muted);
+}
+
+.catalogops-command pre {
+	margin: 0;
+	padding: 10px 12px;
+	overflow-x: auto;
+	font-size: 12px;
+	line-height: 1.6;
+	white-space: pre;
+}
+
+.catalogops-steps {
+	margin: 0 0 12px 18px;
+	list-style: decimal;
+}
+
+.catalogops-steps li {
+	margin: 0 0 6px;
+}
+
 /* --- Preview / undo ---------------------------------------------------- */
 
 .catalogops-preview {
