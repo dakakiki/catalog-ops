@@ -2215,25 +2215,17 @@ function CommandBox( { label, code } ) {
 }
 
 /**
- * How to make schedules actually fire.
+ * The one-time server setup a schedule depends on: a task or cron entry that runs
+ * the queue every few minutes. Commands are printed with this install's own paths,
+ * so they are copy-and-run rather than examples to adapt.
  *
- * WordPress runs background work when someone loads a page. That is fine for a
- * busy shop and useless for the thing scheduling is for — a big overnight run,
- * when by design nobody is on the site. Left alone, a 2am schedule waits until
- * the first visitor next morning, which is exactly the time the shop did not want
- * thousands of products changing.
- *
- * So this panel hands the job to the operating system instead, with the paths for
- * this install already filled in. One task every few minutes is enough: it exits
- * immediately when there is nothing due, and when there is, `action-scheduler run`
- * keeps going until the whole operation is finished rather than stopping at one
- * batch — so a 30,000-product change started at 2am runs to completion in that one
- * invocation, without web-request timeouts.
+ * Deliberately short. The reasoning behind it belongs in docs/scheduling.md; what
+ * belongs here is the command and where to paste it.
  *
  * @param {Object}  props      Component props.
- * @param {boolean} props.lead Whether to open with the always-visible warning.
- *                             Set where a schedule is being created, so the
- *                             dependency is read before the first one exists.
+ * @param {boolean} props.lead Whether to show the standing one-line warning. Set
+ *                             where a schedule is being created, so the dependency
+ *                             is seen before the first one exists.
  */
 function SchedulerSetup( { lead = false } ) {
 	const [ open, setOpen ] = useState( false );
@@ -2241,26 +2233,22 @@ function SchedulerSetup( { lead = false } ) {
 		CRON.isWindows ? 'windows' : 'linux'
 	);
 
-	const wpPath = CRON.wpPath || '/path/to/wordpress';
 	const cronUrl =
 		CRON.cronUrl || 'https://example.com/wp-cron.php?doing_wp_cron=1';
 	const minutes = CRON.supervisorMinutes || 5;
 
-	const batch = [
-		'@echo off',
-		`"C:\\path\\to\\php.exe" "C:\\path\\to\\wp-cli.phar" action-scheduler run --path="${ wpPath }"`,
-	].join( '\r\n' );
-
-	const linuxCron = `*/${ minutes } * * * * cd ${ wpPath } && wp action-scheduler run --quiet >/dev/null 2>&1`;
-
-	const curlCron = `*/${ minutes } * * * * curl -sS "${ cronUrl }" >/dev/null 2>&1`;
+	// Both platforms fetch the same URL. Nothing to install: curl ships with
+	// Windows 10 and later and with every Linux host, and hosting panels ask for
+	// exactly this shape of command.
+	const windowsArgs = `-s "${ cronUrl }"`;
+	const linuxCron = `*/${ minutes } * * * * curl -s "${ cronUrl }" >/dev/null 2>&1`;
 
 	return (
 		<div className="catalogops-setup">
 			{ lead && (
 				<p className="catalogops-setup__lead">
 					{ __(
-						'Set the server up before you rely on a schedule. WordPress only runs background work when someone visits the site, so an overnight schedule will not fire on its own — the change would wait until the first visitor next morning. It takes a few minutes, once.',
+						'A schedule runs only if the server is set up to run it. Do this once, before you create one.',
 						'catalogops'
 					) }
 				</p>
@@ -2271,7 +2259,7 @@ function SchedulerSetup( { lead = false } ) {
 				onClick={ () => setOpen( ! open ) }
 				aria-expanded={ open }
 			>
-				{ __( 'Make schedules run on time', 'catalogops' ) }
+				{ __( 'Server setup', 'catalogops' ) }
 				<svg
 					className="catalogops-collapse-toggle__arrow"
 					width="12"
@@ -2298,16 +2286,10 @@ function SchedulerSetup( { lead = false } ) {
 			{ open && (
 				<div className="catalogops-setup__body">
 					<p>
-						{ __(
-							'Out of the box, WordPress only runs background work when someone visits the site. That is the wrong behaviour for the job scheduling is for: a large change overnight, when the shop is quiet on purpose. A 2am schedule would sit untouched until the first visitor the next morning — the busiest possible moment for thousands of products to start changing.',
-							'catalogops'
-						) }
-					</p>
-					<p>
 						{ sprintf(
 							/* translators: %d: minutes between runs. */
 							__(
-								'Give the job to the server instead. One task every %d minutes is enough — it costs nothing when there is nothing due, and when a schedule does fire it runs the whole operation through to the end in that one go, with no web-request timeout to hit.',
+								'Set the server to run the queue every %d minutes. Once only.',
 								'catalogops'
 							),
 							minutes
@@ -2331,7 +2313,7 @@ function SchedulerSetup( { lead = false } ) {
 							}` }
 							onClick={ () => setPlatform( 'linux' ) }
 						>
-							{ __( 'Linux server / cPanel', 'catalogops' ) }
+							{ __( 'Server (cPanel / cron)', 'catalogops' ) }
 						</button>
 					</div>
 
@@ -2339,33 +2321,20 @@ function SchedulerSetup( { lead = false } ) {
 						<div>
 							<p>
 								{ __(
-									'Save this as catalogops-queue.bat, with your own PHP and WP-CLI paths:',
-									'catalogops'
-								) }
-							</p>
-							<CommandBox
-								label={ __(
-									'catalogops-queue.bat',
-									'catalogops'
-								) }
-								code={ batch }
-							/>
-							<p>
-								{ __(
-									'Then in Task Scheduler (Win+R → taskschd.msc):',
+									'Task Scheduler (Win+R → taskschd.msc):',
 									'catalogops'
 								) }
 							</p>
 							<ol className="catalogops-steps">
 								<li>
 									{ __(
-										'Create Task… (not “Basic Task” — the repeat setting lives only in the full dialog).',
+										'Create Task… — not “Basic Task”.',
 										'catalogops'
 									) }
 								</li>
 								<li>
 									{ __(
-										'General: name it CatalogOps queue, and tick “Run whether user is logged on or not”.',
+										'General: tick “Run whether user is logged on or not”.',
 										'catalogops'
 									) }
 								</li>
@@ -2373,7 +2342,7 @@ function SchedulerSetup( { lead = false } ) {
 									{ sprintf(
 										/* translators: %d: minutes between runs. */
 										__(
-											'Triggers → New: Daily, start 00:00, then tick “Repeat task every” and enter %d minutes, “for a duration of” Indefinitely.',
+											'Triggers → New: Daily, start 00:00, “Repeat task every” %d minutes, duration Indefinitely.',
 											'catalogops'
 										),
 										minutes
@@ -2381,17 +2350,25 @@ function SchedulerSetup( { lead = false } ) {
 								</li>
 								<li>
 									{ __(
-										'Actions → New: Start a program, and point Program/script at the .bat file.',
+										'Actions → New: Start a program, then paste the two boxes below.',
 										'catalogops'
 									) }
 								</li>
 								<li>
 									{ __(
-										'Settings: leave “Do not start a new instance” selected, so a long run is never doubled up.',
+										'Settings: keep “Do not start a new instance”.',
 										'catalogops'
 									) }
 								</li>
 							</ol>
+							<CommandBox
+								label={ __( 'Program/script', 'catalogops' ) }
+								code="curl.exe"
+							/>
+							<CommandBox
+								label={ __( 'Add arguments', 'catalogops' ) }
+								code={ windowsArgs }
+							/>
 						</div>
 					) }
 
@@ -2399,38 +2376,16 @@ function SchedulerSetup( { lead = false } ) {
 						<div>
 							<p>
 								{ __(
-									'With WP-CLI available (the reliable option — no timeouts, no memory limits from the web server):',
+									'cPanel → Cron Jobs (or crontab -e over SSH):',
 									'catalogops'
 								) }
 							</p>
 							<CommandBox
-								label={ __( 'crontab -e', 'catalogops' ) }
+								label={ __( 'Command', 'catalogops' ) }
 								code={ linuxCron }
-							/>
-							<p>
-								{ __(
-									'On shared hosting without WP-CLI, use the control panel’s Cron Jobs screen with this line instead. It does the same job through an HTTP request, so very large operations continue over several runs rather than finishing in one:',
-									'catalogops'
-								) }
-							</p>
-							<CommandBox
-								label={ __( 'Cron Jobs', 'catalogops' ) }
-								code={ curlCron }
 							/>
 						</div>
 					) }
-
-					<p className="catalogops-muted">
-						{ CRON.wpCronDisabled
-							? __(
-									'This site has DISABLE_WP_CRON switched on, so nothing runs background work until you set the task up above.',
-									'catalogops'
-							  )
-							: __(
-									'This site still has WordPress’s visitor-driven cron enabled. Leave it on as a safety net — the task above simply makes the timing dependable. If you prefer only the task to run it, set DISABLE_WP_CRON to true in wp-config.php.',
-									'catalogops'
-							  ) }
-					</p>
 				</div>
 			) }
 		</div>
@@ -2505,8 +2460,6 @@ function Schedules( { refreshKey, onRan } ) {
 					'catalogops'
 				) }
 			</p>
-
-			<SchedulerSetup />
 
 			{ error && (
 				<div className="notice notice-error">

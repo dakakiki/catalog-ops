@@ -94,19 +94,13 @@ genuine one-time change, use **Once** (optionally with a Start time).
 
 ### Set the server up first
 
-**A schedule only fires if something drives WordPress's background queue**, and by
-default that something is a visitor loading a page. Which defeats the purpose: you
-schedule 30,000 changes for 2am *because* the shop is quiet then, and a quiet shop
-generates no page loads — so nothing runs until the first visitor next morning,
-during opening hour.
+A schedule fires when something tells WordPress to check for due work, so set that
+up once before you rely on one — a Windows scheduled task, or a cron job in cPanel.
+Nothing needs installing.
 
-Set up one repeating task on the server and every schedule fires on time. It takes
-a few minutes once. **CatalogOps → Schedules → Make schedules run on time** prints
-the exact commands with your own paths already filled in, for both Windows Task
-Scheduler and a Linux/cPanel cron job.
-
-The full walkthrough, including how to verify it and what to check when a schedule
-does not fire, is in [`docs/scheduling.md`](scheduling.md).
+**Bulk edit → Scheduling → Server setup** prints the exact command with your site
+URL already filled in, for both. The full walkthrough, including how to check it
+works, is in [`docs/scheduling.md`](scheduling.md).
 
 ## Plans
 

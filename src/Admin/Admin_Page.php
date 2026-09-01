@@ -157,23 +157,21 @@ final class Admin_Page {
 	 * install rather than a generic example.
 	 *
 	 * A schedule is only as reliable as whatever drives WordPress's background
-	 * queue, and by default that is a visitor loading a page. Which is precisely
-	 * wrong for the case scheduling exists to serve: a large run at 2am, when the
-	 * site is quiet on purpose. So the screen shows how to hand the job to the
-	 * operating system, with this install's paths already filled in.
+	 * queue, so the Scheduling panel shows the one-time task or cron entry that
+	 * does it — with this site's URL filled in, to be copied rather than adapted.
+	 *
+	 * Both platforms fetch the same URL with curl, which needs nothing installed:
+	 * shop owners have a Task Scheduler dialog or a hosting panel, not a shell and
+	 * not WP-CLI, and an instruction they cannot follow is not an instruction.
 	 *
 	 * @return array<string, mixed>
 	 */
 	private function cron_config(): array {
 		return array(
-			// The path WP-CLI needs, and the URL the no-WP-CLI fallback fetches.
-			'wpPath'            => untrailingslashit( ABSPATH ),
 			'cronUrl'           => site_url( 'wp-cron.php?doing_wp_cron=1' ),
+			// Which tab to open first. Only a default — both are always available,
+			// since the browser's OS need not be the server's.
 			'isWindows'         => 'WIN' === strtoupper( substr( PHP_OS, 0, 3 ) ),
-			// Whether WordPress's own visitor-driven cron is switched off. Either
-			// state works once the OS drives the queue; the panel reports what it
-			// found rather than guessing.
-			'wpCronDisabled'    => defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON,
 			// How often the queue must be driven for schedules to fire on time.
 			'supervisorMinutes' => (int) ( Scheduler::SCHEDULES_INTERVAL / MINUTE_IN_SECONDS ),
 		);
