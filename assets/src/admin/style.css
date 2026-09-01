@@ -877,12 +877,18 @@ it. Its Cancel neighbour stays a plain button, so the pair reads at a glance.
 Actions sit at the right edge, header included. They are the one column whose
 width is driven by its buttons rather than its content, so anchoring them to the
 table's edge keeps them in a straight line whatever the rows in between hold.
+
+Element selectors on purpose: wp-admin aligns list-table cells with rules like
+`.widefat th`, a class plus an element, which outranks a bare class of ours — so
+`.catalogops-cell--actions` alone loses and the heading drifts back over empty
+space while the buttons stay right.
 */
-.catalogops-cell--actions {
+.catalogops th.catalogops-cell--actions,
+.catalogops td.catalogops-cell--actions {
 	text-align: right;
 }
 
-.catalogops-cell--actions .catalogops-actions {
+.catalogops .catalogops-cell--actions .catalogops-actions {
 	justify-content: flex-end;
 }
 
