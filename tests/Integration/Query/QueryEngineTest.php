@@ -183,6 +183,61 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertNotContains( $neither, $ids );
 	}
 
+	public function test_two_category_conditions_are_anded(): void {
+		// Each becomes its own join, so they need distinct aliases — and a product
+		// in both categories must be returned once, not twice.
+		$both  = $this->make_product( array( 'category' => $this->cat_a ) );
+		wp_set_object_terms( $both, array( $this->cat_a, $this->cat_b ), 'product_cat' );
+		$only_a = $this->make_product( array( 'category' => $this->cat_a ) );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array(
+					new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+					new Condition( 'category', Operator::IN, array( $this->cat_b ) ),
+				)
+			)
+		);
+
+		$this->assertSame( array( $both ), $ids );
+		$this->assertNotContains( $only_a, $ids );
+	}
+
+	public function test_or_relation_keeps_category_membership_a_disjunction(): void {
+		// Joins are ANDs, so an OR filter must not use one. If it did, this would
+		// return only the products matching both halves instead of either.
+		$in_a  = $this->make_product( array( 'category' => $this->cat_a, 'price' => 5 ) );
+		$cheap = $this->make_product( array( 'price' => 5 ) );
+		$other = $this->make_product( array( 'price' => 500 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array(
+					new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+					new Condition( 'price', Operator::LESS_THAN, 10 ),
+				),
+				Filter::RELATION_OR
+			)
+		);
+
+		$this->assertContains( $in_a, $ids );
+		$this->assertContains( $cheap, $ids );
+		$this->assertNotContains( $other, $ids );
+	}
+
+	public function test_a_product_in_several_of_the_chosen_categories_appears_once(): void {
+		$product = $this->make_product( array( 'category' => $this->cat_a ) );
+		wp_set_object_terms( $product, array( $this->cat_a, $this->cat_b ), 'product_cat' );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'category', Operator::IN, array( $this->cat_a, $this->cat_b ) ) )
+			)
+		);
+
+		$this->assertSame( array( $product ), $ids );
+	}
+
 	public function test_category_not_in_excludes_only_those_terms(): void {
 		$in_a  = $this->make_product( array( 'category' => $this->cat_a ) );
 		$in_b  = $this->make_product( array( 'category' => $this->cat_b ) );
