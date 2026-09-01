@@ -741,6 +741,18 @@ without claiming a position it does not know.
 	margin: 12px 0 16px;
 }
 
+/*
+Shown above the schedule form, where it has to be read before the first schedule
+is created — an unread instruction here means a change that silently never runs.
+*/
+.catalogops-setup__lead {
+	margin: 0 0 8px;
+	padding: 10px 12px;
+	border-left: 4px solid var(--co-amber);
+	background: #fff;
+	max-width: 760px;
+}
+
 .catalogops-setup__body {
 	margin-top: 10px;
 	padding: 12px 14px;

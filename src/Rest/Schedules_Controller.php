@@ -276,6 +276,13 @@ final class Schedules_Controller {
 	 * Normalize a client-supplied start time to a GMT MySQL datetime, defaulting
 	 * to now when absent or unparseable (fire on the next tick).
 	 *
+	 * The control is `<input type="datetime-local">`, which submits wall-clock time
+	 * with no timezone attached — "22:00" means 22:00 as the shop reads a clock.
+	 * WordPress runs PHP in UTC, so parsing that string with `strtotime()` would
+	 * silently take it as 22:00 UTC and fire the schedule the site's whole offset
+	 * away from the hour the user picked. Reading it in the site's timezone is what
+	 * makes "overnight" actually mean overnight.
+	 *
 	 * @param string $value The supplied start time.
 	 */
 	private function normalize_gmt( string $value ): string {
@@ -285,9 +292,25 @@ final class Schedules_Controller {
 			return current_time( 'mysql', true );
 		}
 
-		$timestamp = strtotime( $value );
+		$local = date_create( $value, wp_timezone() );
 
-		return false === $timestamp ? current_time( 'mysql', true ) : gmdate( 'Y-m-d H:i:s', $timestamp );
+		if ( false === $local ) {
+			return current_time( 'mysql', true );
+		}
+
+		return $local->setTimezone( new DateTimeZone( 'UTC' ) )->format( 'Y-m-d H:i:s' );
+	}
+
+	/**
+	 * A GMT datetime rendered in the site's timezone, for display. Times are stored
+	 * and compared in GMT — the only sane basis for a scheduler — but a shop owner
+	 * reads the clock on the wall, so showing them raw GMT invites exactly the
+	 * confusion this pair of methods exists to avoid.
+	 *
+	 * @param string|null $gmt Stored GMT datetime, or null.
+	 */
+	private function to_local( ?string $gmt ): ?string {
+		return ( null === $gmt || '' === $gmt ) ? $gmt : get_date_from_gmt( $gmt );
 	}
 
 	/**
@@ -298,18 +321,22 @@ final class Schedules_Controller {
 	 */
 	private function to_array( Schedule $schedule ): array {
 		return array(
-			'id'           => $schedule->id,
-			'name'         => $schedule->name,
-			'recurrence'   => $schedule->recurrence->value,
-			'status'       => $schedule->status->value,
-			'next_run'     => $schedule->next_run,
-			'last_run'     => $schedule->last_run,
-			'last_op_id'   => $schedule->last_op_id,
-			'notify_email' => $schedule->notify_email,
-			'mode'         => $schedule->mode->value,
-			'filter'       => $schedule->filter_data,
-			'actions'      => $schedule->actions_data,
-			'created_at'   => $schedule->created_at,
+			'id'             => $schedule->id,
+			'name'           => $schedule->name,
+			'recurrence'     => $schedule->recurrence->value,
+			'status'         => $schedule->status->value,
+			// Times are stored and compared in GMT; the *_local pair is what the
+			// admin table shows, so a shop owner reads their own clock.
+			'next_run'       => $schedule->next_run,
+			'next_run_local' => $this->to_local( $schedule->next_run ),
+			'last_run'       => $schedule->last_run,
+			'last_run_local' => $this->to_local( $schedule->last_run ),
+			'last_op_id'     => $schedule->last_op_id,
+			'notify_email'   => $schedule->notify_email,
+			'mode'           => $schedule->mode->value,
+			'filter'         => $schedule->filter_data,
+			'actions'        => $schedule->actions_data,
+			'created_at'     => $schedule->created_at,
 		);
 	}
 

@@ -1264,6 +1264,11 @@ function BulkEdit( {
 					) }
 					{ canSchedule && showSchedule && (
 						<div className="catalogops-filter-rows">
+							{ /* Before the form, not after it: a schedule nothing
+							     drives is a promise the site cannot keep, so this
+							     has to be read before the first one is created. */ }
+							<SchedulerSetup lead />
+
 							<div className="catalogops-filter-row">
 								<div className="catalogops-field">
 									<label htmlFor="catalogops-sched-name">
@@ -2224,8 +2229,13 @@ function CommandBox( { label, code } ) {
  * keeps going until the whole operation is finished rather than stopping at one
  * batch — so a 30,000-product change started at 2am runs to completion in that one
  * invocation, without web-request timeouts.
+ *
+ * @param {Object}  props      Component props.
+ * @param {boolean} props.lead Whether to open with the always-visible warning.
+ *                             Set where a schedule is being created, so the
+ *                             dependency is read before the first one exists.
  */
-function SchedulerSetup() {
+function SchedulerSetup( { lead = false } ) {
 	const [ open, setOpen ] = useState( false );
 	const [ platform, setPlatform ] = useState(
 		CRON.isWindows ? 'windows' : 'linux'
@@ -2247,6 +2257,14 @@ function SchedulerSetup() {
 
 	return (
 		<div className="catalogops-setup">
+			{ lead && (
+				<p className="catalogops-setup__lead">
+					{ __(
+						'Set the server up before you rely on a schedule. WordPress only runs background work when someone visits the site, so an overnight schedule will not fire on its own — the change would wait until the first visitor next morning. It takes a few minutes, once.',
+						'catalogops'
+					) }
+				</p>
+			) }
 			<button
 				type="button"
 				className="catalogops-collapse-toggle catalogops-group-label"
@@ -2536,9 +2554,13 @@ function Schedules( { refreshKey, onRan } ) {
 									<td>
 										{ s.status === 'completed'
 											? '—'
-											: s.next_run }
+											: s.next_run_local || s.next_run }
 									</td>
-									<td>{ s.last_run || '—' }</td>
+									<td>
+										{ s.last_run_local ||
+											s.last_run ||
+											'—' }
+									</td>
 									<td>
 										<div className="catalogops-actions">
 											<button
