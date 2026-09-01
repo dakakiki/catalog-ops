@@ -2174,23 +2174,91 @@ function RetentionSetting() {
 const CRON = ( window.catalogopsConfig && window.catalogopsConfig.cron ) || {};
 
 /**
+ * Put text on the clipboard, wherever the admin happens to be served from.
+ *
+ * The async Clipboard API only exists in a secure context. A WordPress admin on
+ * plain HTTP — a staging box, a local domain like example.test — has none, and
+ * `navigator.clipboard` is simply undefined there, which is most of the places
+ * these setup commands get read. So the deprecated execCommand path is not a
+ * legacy nicety here; it is the one that actually runs.
+ *
+ * @param {string} text The text to copy.
+ * @return {Promise} Resolves when copied, rejects when the browser refuses.
+ */
+function copyToClipboard( text ) {
+	if ( window.isSecureContext && navigator.clipboard ) {
+		return navigator.clipboard.writeText( text );
+	}
+
+	return new Promise( ( resolve, reject ) => {
+		const area = document.createElement( 'textarea' );
+		area.value = text;
+		area.setAttribute( 'readonly', '' );
+		// Off-screen rather than hidden: a display:none field cannot be selected.
+		area.style.position = 'fixed';
+		area.style.top = '-1000px';
+		area.style.opacity = '0';
+		document.body.appendChild( area );
+		area.select();
+		area.setSelectionRange( 0, text.length );
+
+		let copied = false;
+		try {
+			copied = document.execCommand( 'copy' );
+		} catch {
+			copied = false;
+		}
+		document.body.removeChild( area );
+
+		if ( copied ) {
+			resolve();
+		} else {
+			reject( new Error( 'copy refused' ) );
+		}
+	} );
+}
+
+/**
  * A command the user is meant to run, with a button that copies it.
+ *
+ * If the browser refuses to copy at all, the command's text is selected instead,
+ * so Ctrl+C still works — a dead button in the middle of setup instructions is
+ * worse than no button.
  *
  * @param {Object} props       Component props.
  * @param {string} props.label What the command is for.
  * @param {string} props.code  The command itself.
  */
 function CommandBox( { label, code } ) {
-	const [ copied, setCopied ] = useState( false );
+	const [ state, setState ] = useState( '' ); // '' | 'copied' | 'select'
+	const pre = useRef( null );
 
-	const copy = () => {
-		if ( ! navigator.clipboard ) {
+	const selectCode = () => {
+		const node = pre.current;
+		const view = node && node.ownerDocument.defaultView;
+
+		if ( ! view || ! view.getSelection ) {
 			return;
 		}
-		navigator.clipboard.writeText( code ).then( () => {
-			setCopied( true );
-			setTimeout( () => setCopied( false ), 2000 );
-		} );
+
+		const range = node.ownerDocument.createRange();
+		range.selectNodeContents( node );
+
+		const selection = view.getSelection();
+		selection.removeAllRanges();
+		selection.addRange( range );
+	};
+
+	const copy = () => {
+		copyToClipboard( code )
+			.then( () => {
+				setState( 'copied' );
+				setTimeout( () => setState( '' ), 2000 );
+			} )
+			.catch( () => {
+				selectCode();
+				setState( 'select' );
+			} );
 	};
 
 	return (
@@ -2202,12 +2270,13 @@ function CommandBox( { label, code } ) {
 					className="button button-small"
 					onClick={ copy }
 				>
-					{ copied
-						? __( 'Copied', 'catalogops' )
-						: __( 'Copy', 'catalogops' ) }
+					{ state === 'copied' && __( 'Copied', 'catalogops' ) }
+					{ state === 'select' &&
+						__( 'Selected — press Ctrl+C', 'catalogops' ) }
+					{ '' === state && __( 'Copy', 'catalogops' ) }
 				</button>
 			</div>
-			<pre>
+			<pre ref={ pre }>
 				<code>{ code }</code>
 			</pre>
 		</div>
