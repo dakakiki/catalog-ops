@@ -589,7 +589,33 @@ final class Query_Engine {
 	}
 
 	/**
-	 * Post-meta comparison, as a correlated EXISTS on postmeta.
+	 * Post-meta comparison against a meta key.
+	 *
+	 * Positive tests drive from the postmeta meta_key index (one pass) rather than
+	 * a correlated EXISTS that re-scans every product's meta — over WooCommerce
+	 * products (~20-30 meta rows each) that difference is ~12x.
+	 *
+	 * A negative test only flips that keyword to NOT IN; the value test inside
+	 * stays positive. Pushing the negation inside instead — `IN (… meta_value !=
+	 * x)` — asks a different question, "has some *other* value for this key",
+	 * which silently drops every product that has no such meta row at all. A
+	 * brand exclusion has to keep the unbranded products: they are, definitively,
+	 * not that brand. (It also builds a near-catalogue-sized id list to do it.)
+	 *
+	 * NOT IN, not a correlated NOT EXISTS. Both are NULL-safe here — postmeta's
+	 * post_id is NOT NULL — but the correlated form re-runs per candidate row,
+	 * and the uncorrelated one is materialised once. Measured on the 18.5k
+	 * catalogue: excluding a brand with nothing else selected took **13.6s** as
+	 * NOT EXISTS and **2.5s** as NOT IN. Once any positive condition narrows the
+	 * candidates the two converge (594ms vs 568ms with a category and a tag
+	 * joined), so the cheap shape costs nothing in the common case and saves the
+	 * degenerate one — a lone exclusion is exactly what a user gets by opening
+	 * the filter and setting one field to "is not".
+	 *
+	 * Unlike positive membership, this subquery is not a plan hazard: an
+	 * anti-join gives the optimiser no join order to re-plan around. Two of them
+	 * in one statement measured 800ms with a category and tag joined (CONTEXT §3
+	 * — the four-minute plan needed positive `IN (SELECT …)` semi-joins).
 	 *
 	 * @param string    $meta_key  The meta key to test.
 	 * @param Condition $condition The condition.
@@ -603,13 +629,25 @@ final class Query_Engine {
 		$postmeta = $this->wpdb->postmeta;
 		$operator = $condition->operator;
 
-		list( $value_test, $value_args ) = $this->meta_value_test( $operator, $condition->value );
+		// A negative operator is asked as its positive twin, and negated by the
+		// keyword outside the subquery.
+		$positive = match ( $operator ) {
+			Operator::NOT_IN     => Operator::IN,
+			Operator::NOT_EQUALS => Operator::EQUALS,
+			Operator::NOT_EXISTS => Operator::EXISTS,
+			default              => null,
+		};
 
-		// Drive from the postmeta meta_key index (one pass) rather than a
-		// correlated EXISTS that re-scans every product's meta — over WooCommerce
-		// products (~20-30 meta rows each) that difference is ~12x.
-		$negate  = Operator::NOT_EXISTS === $operator;
-		$keyword = $negate ? 'NOT IN' : 'IN';
+		if ( ( Operator::IN === $operator || Operator::NOT_IN === $operator )
+			&& array() === array_values( (array) $condition->value ) ) {
+			// An empty list is not a question: asked positively it would decay into
+			// "has this key at all", and negatively into "has it not".
+			return array( '', array() );
+		}
+
+		list( $value_test, $value_args ) = $this->meta_value_test( $positive ?? $operator, $condition->value );
+
+		$keyword = null !== $positive ? 'NOT IN' : 'IN';
 
 		$fragment = "l.product_id {$keyword} (
 			SELECT pm.post_id FROM {$postmeta} pm
@@ -620,9 +658,13 @@ final class Query_Engine {
 	}
 
 	/**
-	 * Build the value comparison inside a meta EXISTS.
+	 * Build the value comparison inside a meta subquery.
 	 *
-	 * @param Operator $operator The operator.
+	 * Positive operators only. Negation belongs to the caller, which wraps this
+	 * test in a NOT EXISTS — see {@see meta_clause()} for why it may not be pushed
+	 * in here alongside the value.
+	 *
+	 * @param Operator $operator The operator, already mapped to its positive form.
 	 * @param mixed    $value    The operand.
 	 * @return array{0: string, 1: list<mixed>} SQL fragment (with leading " AND ") and its args.
 	 */
@@ -634,14 +676,12 @@ final class Query_Engine {
 			Operator::LESS_OR_EQUAL->name    => '<=',
 		);
 
-		if ( Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator ) {
+		if ( Operator::EXISTS === $operator ) {
 			return array( '', array() );
 		}
 
-		if ( Operator::EQUALS === $operator || Operator::NOT_EQUALS === $operator ) {
-			$comparison = Operator::NOT_EQUALS === $operator ? '!=' : '=';
-
-			return array( " AND pm.meta_value {$comparison} %s", array( (string) $value ) );
+		if ( Operator::EQUALS === $operator ) {
+			return array( ' AND pm.meta_value = %s', array( (string) $value ) );
 		}
 
 		if ( Operator::CONTAINS === $operator ) {
@@ -661,16 +701,15 @@ final class Query_Engine {
 			return array( ' AND CAST( pm.meta_value AS DECIMAL(20,4) ) BETWEEN %f AND %f', array( $range[0], $range[1] ) );
 		}
 
-		if ( Operator::IN === $operator || Operator::NOT_IN === $operator ) {
+		if ( Operator::IN === $operator ) {
 			$values = array_map( 'strval', array_values( (array) $value ) );
 			if ( array() === $values ) {
 				return array( '', array() );
 			}
 
 			$placeholders = implode( ', ', array_fill( 0, count( $values ), '%s' ) );
-			$keyword      = Operator::NOT_IN === $operator ? 'NOT IN' : 'IN';
 
-			return array( " AND pm.meta_value {$keyword} ( {$placeholders} )", $values );
+			return array( " AND pm.meta_value IN ( {$placeholders} )", $values );
 		}
 
 		return array( '', array() );

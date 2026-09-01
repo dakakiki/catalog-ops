@@ -22,6 +22,8 @@
 	--co-blue: var(--co-accent);
 	--co-green: #1a7f37;
 	--co-red: #d63638;
+	--co-red-tint: #fcf0f0;   /* red surfaces — an excluded value, not a danger */
+	--co-red-border: #f0b8b9;
 	--co-amber: #bd8600;
 	/* Warm, not red. Sat next to the trash icon's red, orange-600 (#ea580c) reads
 	   as a second red at 18px; pulling it toward amber separates the two. */
@@ -248,7 +250,9 @@
 
 .catalogops-field > label,
 .catalogops-field > .catalogops-field-label,
-.catalogops-ms > .catalogops-field-label {
+/* Descendant, not child: in a multiselect the label shares a row with the
+   include/exclude switch, so it sits one level down. */
+.catalogops-ms .catalogops-field-label {
 	margin: 0;
 	font-size: 11px;
 	font-weight: 600;
@@ -291,6 +295,61 @@
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
+}
+
+/* The label and its include/exclude switch share a row: the switch changes the
+   question the label asks ("Category is…" / "is not…"), not the values below. */
+.catalogops-ms__label-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 16px;
+}
+
+/* Selected with its element, because wp-admin styles bare buttons at
+   class+element strength and a lone class would lose to it. */
+.catalogops button.catalogops-ms__mode {
+	flex: none;
+	margin: 0;
+	padding: 0 6px;
+	border: 1px solid var(--co-border-strong);
+	border-radius: 9px;
+	background: #fff;
+	color: var(--co-muted);
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 15px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	cursor: pointer;
+}
+
+.catalogops button.catalogops-ms__mode:hover {
+	border-color: var(--co-accent);
+	color: var(--co-accent);
+}
+
+.catalogops button.catalogops-ms__mode:focus-visible {
+	outline: none;
+	border-color: var(--co-accent);
+	box-shadow: 0 0 0 1px var(--co-accent);
+}
+
+/* Excluding is the state worth seeing from across the row without reading it,
+   so it carries colour — on the switch, and on the chips it now subtracts. */
+.catalogops .is-excluding button.catalogops-ms__mode {
+	border-color: var(--co-red-border);
+	background: var(--co-red-tint);
+	color: var(--co-red);
+}
+
+.catalogops-ms.is-excluding .catalogops-ms__chip {
+	background: var(--co-red-tint);
+	border-color: var(--co-red-border);
+}
+
+.catalogops-ms.is-excluding .catalogops-ms__chip-remove:hover {
+	background: var(--co-red-border);
 }
 
 /*
