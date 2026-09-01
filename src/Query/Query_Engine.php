@@ -322,6 +322,20 @@ final class Query_Engine {
 	 * The negative forms stay as NOT EXISTS: an anti-join is both the right shape
 	 * and free of NOT IN's NULL pitfalls.
 	 *
+	 * **The subquery reads one table.** term_relationships is keyed by
+	 * term_taxonomy_id, not term_id, so asking it for terms means joining
+	 * term_taxonomy inside the subquery — and that two-table subquery is what the
+	 * optimiser gets wrong. Measured on a 18.5k-product catalogue: three categories
+	 * planned well and answered in 1s; a fourth flipped the plan, `p` lost its
+	 * primary-key path for a range scan with a block-nested-loop join, and the same
+	 * query took **four minutes**. DISTINCT, GROUP BY and a wrapped derived table
+	 * all still timed out.
+	 *
+	 * Resolving the term ids to term_taxonomy_ids first — one small indexed lookup,
+	 * the same trick {@see term_slugs()} already uses — leaves a subquery over a
+	 * single indexed table, which plans correctly at any number of terms: 992ms for
+	 * the four-category case that used to take four minutes, and flat from there.
+	 *
 	 * @param string      $taxonomy  Taxonomy name, e.g. `product_cat` or `pa_color`.
 	 * @param Condition   $condition Term id(s) for IN/NOT_IN, or none for (NOT_)EXISTS.
 	 * @param Query_Scope $scope     The object type being queried.
@@ -332,57 +346,76 @@ final class Query_Engine {
 			return array( '', array() );
 		}
 
-		$relationships = $this->wpdb->term_relationships;
-		$taxonomies    = $this->wpdb->term_taxonomy;
-		$object_column = $scope->is_variation() ? 'p.post_parent' : 'l.product_id';
-		$operator      = $condition->operator;
+		$operator = $condition->operator;
+		$any_term = Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator;
 
-		// "Has any term of this taxonomy" (an attribute chosen with no value), or none.
-		if ( Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator ) {
-			if ( Operator::NOT_EXISTS === $operator ) {
-				$fragment = "NOT EXISTS (
-					SELECT 1 FROM {$relationships} tr
-					INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-					WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s
-				)";
+		// "Has any term of this taxonomy" (an attribute chosen with no value) means
+		// every term of it; otherwise just the ones asked for.
+		$term_ids = $any_term
+			? array()
+			: array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
 
-				return array( $fragment, array( $taxonomy ) );
-			}
-
-			$fragment = "{$object_column} IN (
-				SELECT tr.object_id FROM {$relationships} tr
-				INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-				WHERE tt.taxonomy = %s
-			)";
-
-			return array( $fragment, array( $taxonomy ) );
-		}
-
-		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
-
-		if ( array() === $term_ids ) {
+		if ( ! $any_term && array() === $term_ids ) {
 			return array( '', array() );
 		}
 
-		$placeholders = implode( ', ', array_fill( 0, count( $term_ids ), '%d' ) );
+		$tt_ids = $this->term_taxonomy_ids( $taxonomy, $term_ids );
 
-		if ( Operator::NOT_IN === $operator ) {
+		if ( array() === $tt_ids ) {
+			// Nothing in the catalogue can carry a term that does not exist. "Has
+			// one of these" matches nothing; "has none of these" matches everything.
+			$negative = Operator::NOT_IN === $operator || Operator::NOT_EXISTS === $operator;
+
+			return array( $negative ? '1 = 1' : '1 = 0', array() );
+		}
+
+		$relationships = $this->wpdb->term_relationships;
+		$object_column = $scope->is_variation() ? 'p.post_parent' : 'l.product_id';
+		$placeholders  = implode( ', ', array_fill( 0, count( $tt_ids ), '%d' ) );
+
+		if ( Operator::NOT_IN === $operator || Operator::NOT_EXISTS === $operator ) {
 			$fragment = "NOT EXISTS (
 				SELECT 1 FROM {$relationships} tr
-				INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-				WHERE tr.object_id = {$object_column} AND tt.taxonomy = %s AND tt.term_id IN ( {$placeholders} )
+				WHERE tr.object_id = {$object_column} AND tr.term_taxonomy_id IN ( {$placeholders} )
 			)";
 
-			return array( $fragment, array( $taxonomy, ...$term_ids ) );
+			return array( $fragment, $tt_ids );
 		}
 
 		$fragment = "{$object_column} IN (
 			SELECT tr.object_id FROM {$relationships} tr
-			INNER JOIN {$taxonomies} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
-			WHERE tt.taxonomy = %s AND tt.term_id IN ( {$placeholders} )
+			WHERE tr.term_taxonomy_id IN ( {$placeholders} )
 		)";
 
-		return array( $fragment, array( $taxonomy, ...$term_ids ) );
+		return array( $fragment, $tt_ids );
+	}
+
+	/**
+	 * The term_taxonomy_ids for a taxonomy, optionally narrowed to specific terms.
+	 *
+	 * One indexed lookup that keeps the membership subquery down to a single table
+	 * — see {@see taxonomy_clause()} for why that matters so much.
+	 *
+	 * @param string $taxonomy Taxonomy name.
+	 * @param int[]  $term_ids Term ids, or empty for every term of the taxonomy.
+	 * @return list<int>
+	 */
+	private function term_taxonomy_ids( string $taxonomy, array $term_ids ): array {
+		$taxonomies = $this->wpdb->term_taxonomy;
+
+		$sql  = "SELECT term_taxonomy_id FROM {$taxonomies} WHERE taxonomy = %s";
+		$args = array( $taxonomy );
+
+		if ( array() !== $term_ids ) {
+			$sql .= ' AND term_id IN ( ' . implode( ', ', array_fill( 0, count( $term_ids ), '%d' ) ) . ' )';
+			$args = array( ...$args, ...$term_ids );
+		}
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$ids = $this->wpdb->get_col( $this->wpdb->prepare( $sql, ...$args ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return array_map( 'intval', $ids );
 	}
 
 	/**
