@@ -420,8 +420,11 @@ function MultiSelect( { label, options, value, onChange, placeholder } ) {
 							</span>
 						) ) }
 
+					{ /* Past the chip cap there are no chips to remove things from,
+					     so the count carries the way out. Without it the only escape
+					     is to open the panel and untick one at a time. */ }
 					{ chosen.length > MAX_CHIPS && (
-						<span className="catalogops-ms__count">
+						<span className="catalogops-ms__chip catalogops-ms__chip--count">
 							{ sprintf(
 								/* translators: %d: number of selected items. */
 								_n(
@@ -432,6 +435,20 @@ function MultiSelect( { label, options, value, onChange, placeholder } ) {
 								),
 								chosen.length
 							) }
+							<button
+								type="button"
+								className="catalogops-ms__chip-remove"
+								aria-label={ __(
+									'Clear selection',
+									'catalogops'
+								) }
+								onClick={ ( event ) => {
+									event.stopPropagation();
+									onChange( [] );
+								} }
+							>
+								×
+							</button>
 						</span>
 					) }
 				</span>
@@ -468,20 +485,22 @@ function MultiSelect( { label, options, value, onChange, placeholder } ) {
 						) }
 						{ /* Real checkboxes: native semantics, native keyboard,
 						     nothing to reimplement. */ }
+						{ /* The label is a sibling of its checkbox, not its parent. A
+						     label that both wraps a control and points at it with
+						     htmlFor activates it twice — the box ticks and unticks in
+						     one click, and the selection never takes. */ }
 						{ shown.map( ( o ) => (
-							<label
-								className="catalogops-ms__option"
-								key={ o.id }
-								htmlFor={ `${ inputId }-opt-${ o.id }` }
-							>
+							<div className="catalogops-ms__option" key={ o.id }>
 								<input
 									id={ `${ inputId }-opt-${ o.id }` }
 									type="checkbox"
 									checked={ ids.includes( String( o.id ) ) }
 									onChange={ () => toggle( o.id ) }
 								/>
-								<span>{ o.name }</span>
-							</label>
+								<label htmlFor={ `${ inputId }-opt-${ o.id }` }>
+									{ o.name }
+								</label>
+							</div>
 						) ) }
 					</div>
 

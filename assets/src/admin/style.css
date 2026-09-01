@@ -332,15 +332,17 @@ be more than a few rows however much is chosen.
 	min-width: 0;
 }
 
-.catalogops-ms__placeholder,
-.catalogops-ms__count {
+.catalogops-ms__placeholder {
 	color: var(--co-muted);
 	font-size: 13px;
 	line-height: 22px;
 }
 
-.catalogops-ms__count {
-	color: var(--co-ink);
+/* The count stands in for the chips, so it is one — including its remove. */
+.catalogops-ms__chip--count {
+	background: var(--co-tint);
+	border-color: var(--co-border-strong);
+	font-weight: 600;
 }
 
 .catalogops-ms__chip {
@@ -432,7 +434,6 @@ be more than a few rows however much is chosen.
 	padding: 4px 10px;
 	font-size: 13px;
 	line-height: 1.4;
-	cursor: pointer;
 }
 
 .catalogops-ms__option:hover {
@@ -442,6 +443,18 @@ be more than a few rows however much is chosen.
 .catalogops-ms__option input {
 	flex: none;
 	margin: 0;
+}
+
+/* The row's label is a plain option name, not one of the panel's field labels. */
+.catalogops-ms__option label {
+	flex: 1;
+	margin: 0;
+	font-size: 13px;
+	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
+	color: var(--co-ink);
+	cursor: pointer;
 }
 
 .catalogops-ms__empty {
