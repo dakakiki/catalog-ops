@@ -363,7 +363,7 @@ const SKIP_REASONS = {
 		'catalogops'
 	),
 	sale_not_below_regular: __(
-		'the sale price is not below the regular price — WooCommerce refuses those, and would clear any sale price already set',
+		'the sale price you are setting is not below their regular price — WooCommerce only keeps a sale price lower than the regular price, so it would refuse this one and clear whatever sale price is already there',
 		'catalogops'
 	),
 	stock_managed: __(
@@ -419,6 +419,19 @@ function ReasonList( { items } ) {
  * @return {string} Warning text, or '' for an unknown code.
  */
 function warningText( code, count ) {
+	if ( code === 'sale_price_protected' ) {
+		return sprintf(
+			/* translators: %d: number of omitted products that already have a sale price. */
+			_n(
+				'%d of the products left out already has a sale price. WooCommerce would have deleted it — a sale price is only kept while it is below the regular price — so it was left out instead.',
+				'%d of the products left out already have a sale price. WooCommerce would have deleted them — a sale price is only kept while it is below the regular price — so they were left out instead.',
+				count,
+				'catalogops'
+			),
+			count
+		);
+	}
+
 	if ( code === 'sale_price_cleared' ) {
 		return sprintf(
 			/* translators: %d: number of products whose sale price would be deleted. */
@@ -547,7 +560,7 @@ function ProgressBar( { op } ) {
 			{ waiting && waited >= SLOW_START_SECONDS && (
 				<p className="catalogops-muted catalogops-progress__note">
 					{ __(
-						'Still waiting. Background jobs on this site run when someone visits it, so the change starts on the next request — leaving this page open is enough. Nothing is lost either way: the operation is already saved and will run.',
+						'Still waiting. The background queue was asked to start; if it has not picked this up yet, it will on the next request to the site — leaving this page open is enough. Nothing is lost either way: the operation is saved and will run.',
 						'catalogops'
 					) }
 				</p>
@@ -774,6 +787,37 @@ function BulkEdit( {
 		!! preview && preview.matched > 0 && preview.applicable === 0;
 	const omittedBy = ( preview && preview.omitted_by ) || [];
 	const previewWarnings = ( preview && preview.warnings ) || [];
+
+	/**
+	 * How many items were omitted under one reason code.
+	 *
+	 * @param {string} reason The skip-reason code.
+	 * @return {number} Items omitted under it.
+	 */
+	const omittedFor = ( reason ) =>
+		omittedBy.reduce(
+			( total, item ) => ( item.reason === reason ? item.count : total ),
+			0
+		);
+
+	// The sale-price rule is about the value being typed, not the sale price a
+	// product already has — a distinction the reason list states but which is much
+	// easier to see with the actual number in it.
+	const saleCeiling =
+		mode === 'set' &&
+		field === 'sale_price' &&
+		value !== '' &&
+		! Number.isNaN( Number( value ) ) &&
+		omittedFor( 'sale_not_below_regular' ) > 0
+			? sprintf(
+					/* translators: %s: the sale price the user typed. */
+					__(
+						'You are setting the sale price to %s. WooCommerce keeps it only on products whose regular price is higher than that — so a lower value will reach more of them.',
+						'catalogops'
+					),
+					value
+			  )
+			: '';
 
 	return (
 		<div className="catalogops-bulk-edit">
@@ -1405,14 +1449,16 @@ function BulkEdit( {
 								) }
 							</p>
 							<ReasonList items={ omittedBy } />
-							{ filter.scope === 'product' && (
-								<p>
-									{ __(
-										'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those.',
-										'catalogops'
-									) }
-								</p>
-							) }
+							{ saleCeiling && <p>{ saleCeiling }</p> }
+							{ filter.scope === 'product' &&
+								omittedFor( 'empty_input' ) > 0 && (
+									<p>
+										{ __(
+											'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those.',
+											'catalogops'
+										) }
+									</p>
+								) }
 						</div>
 					) }
 					{ preview.matched > 0 && preview.applicable > 0 && (
@@ -1432,6 +1478,7 @@ function BulkEdit( {
 							{ omittedBy.length > 0 && (
 								<>
 									<ReasonList items={ omittedBy } />
+									{ saleCeiling && <p>{ saleCeiling }</p> }
 									<p className="catalogops-muted">
 										{ sprintf(
 											/* translators: %d: number of products that will be updated. */

@@ -229,8 +229,21 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$operation = $this->operations->find( $op_id );
 		$this->assertSame( Operation_Status::COMPLETED, $operation->status );
 		$this->assertSame( 0, $operation->target_count );
-		// No chunk was ever scheduled.
+		// No chunk was ever scheduled, so there was nothing to start either.
 		$this->assertSame( 0, $this->scheduler->count() );
+		$this->assertSame( 0, $this->scheduler->kick_count() );
+	}
+
+	public function test_queueing_asks_the_background_queue_to_start_now(): void {
+		// Enqueueing a chunk does not start it. Without this nudge the operation
+		// sits queued until some unrelated request wakes Action Scheduler, which is
+		// the gap between pressing Apply and the progress bar moving.
+		$this->make_product( 50 );
+
+		$this->queue_price_change( 'price', Operator::GREATER_THAN, 20, '9.99' );
+
+		$this->assertSame( 1, $this->scheduler->count() );
+		$this->assertSame( 1, $this->scheduler->kick_count() );
 	}
 
 	public function test_unsupported_field_is_rejected_at_create(): void {
