@@ -86,12 +86,22 @@ final class Query_Engine {
 		$postmeta = $this->wpdb->postmeta;
 		$scope    = $filter->scope();
 
-		$sql = "SELECT {$projection}
-			FROM {$lookup} l
-			INNER JOIN {$posts} p ON p.ID = l.product_id
-			WHERE p.post_type = %s AND p.post_status = 'publish'";
-
-		$args = array( $scope->post_type() );
+		// Set membership is joined, not tested in the WHERE clause.
+		//
+		// Every `l.product_id IN (SELECT …)` is an invitation for MySQL to re-plan
+		// the whole query around it, and with two of them present it eventually
+		// takes the invitation: measured on an 18.5k-product catalogue, filtering by
+		// category held its plan up to a point and then flipped — the meta lookup
+		// stopped driving, `posts` lost its primary-key path for a range scan with a
+		// block-nested-loop join, and a one-second query became four minutes and
+		// then a fatal. The tipping point moved with how many rows the optimiser
+		// estimated, which is why it looked like "it breaks past ten thousand".
+		//
+		// Joining says the same thing in a shape with no such freedom, and it is the
+		// only form that stayed stable across every selection measured, all the way
+		// to every category at once.
+		$joins     = array();
+		$join_args = array();
 
 		// Product scope targets simple, priced products. A variable product keeps
 		// its price on its variations — its own _regular_price is empty — so it
@@ -99,11 +109,28 @@ final class Query_Engine {
 		// excludes those parents (and any unpriced product), so a Product-scope
 		// price edit never silently skips what it cannot compute (CONTEXT §4).
 		if ( ! $scope->is_variation() ) {
-			$sql .= " AND l.product_id IN (
-				SELECT pm.post_id FROM {$postmeta} pm
-				WHERE pm.meta_key = '_regular_price' AND pm.meta_value <> ''
-			)";
+			$joins[] = "INNER JOIN {$postmeta} co_price
+				ON co_price.post_id = l.product_id
+				AND co_price.meta_key = '_regular_price'
+				AND co_price.meta_value <> ''";
 		}
+
+		list( $where, $where_args, $condition_joins, $condition_join_args ) = $this->build_where( $filter );
+
+		$joins     = array( ...$joins, ...$condition_joins );
+		$join_args = array( ...$join_args, ...$condition_join_args );
+
+		// After the posts join, not before: under the variation scope a membership
+		// join matches on the parent (p.post_parent), which does not exist yet.
+		$sql = "SELECT {$projection}
+			FROM {$lookup} l
+			INNER JOIN {$posts} p ON p.ID = l.product_id
+			" . implode( "\n\t\t\t", $joins ) . "
+			WHERE p.post_type = %s AND p.post_status = 'publish'";
+
+		// Placeholders bind in the order they appear in the statement, so the join
+		// arguments come first — they sit in the FROM clause, ahead of the WHERE.
+		$args = array( ...$join_args, $scope->post_type() );
 
 		// Applicability: keep only the objects the edit can actually change — ones
 		// carrying every field it reads, and ones whose new value WooCommerce will
@@ -121,8 +148,6 @@ final class Query_Engine {
 			$args = array( ...$args, ...$fragment_args );
 		}
 
-		list( $where, $where_args ) = $this->build_where( $filter );
-
 		if ( '' !== $where ) {
 			$sql .= ' AND ' . $where;
 			$args = array( ...$args, ...$where_args );
@@ -135,17 +160,36 @@ final class Query_Engine {
 	}
 
 	/**
-	 * Translate a filter's conditions into a WHERE fragment and its arguments.
+	 * Translate a filter's conditions into a WHERE fragment, plus any joins the
+	 * clauses would rather be expressed as.
+	 *
+	 * A join is an AND by construction, so a clause may only contribute one when
+	 * the filter's conditions are ANDed together. Under OR every clause stays in
+	 * the WHERE, where it can be combined with the others truthfully — the shape is
+	 * slower, but an OR filter that returns the wrong products would be worse.
 	 *
 	 * @param Filter $filter The filter.
-	 * @return array{0: string, 1: list<mixed>}
+	 * @return array{0: string, 1: list<mixed>, 2: list<string>, 3: list<mixed>}
 	 */
 	private function build_where( Filter $filter ): array {
 		$fragments = array();
 		$args      = array();
+		$joins     = array();
+		$join_args = array();
+		$joinable  = Filter::RELATION_OR !== $filter->relation();
+		$index     = 0;
 
 		foreach ( $filter->conditions() as $condition ) {
-			list( $fragment, $fragment_args ) = $this->clause_for( $condition, $filter->scope() );
+			$clause = $this->clause_for( $condition, $filter->scope(), $joinable ? $index : null );
+			++$index;
+
+			list( $fragment, $fragment_args ) = $clause;
+			$join                             = $clause[2] ?? '';
+
+			if ( '' !== $join ) {
+				$joins[]   = $join;
+				$join_args = array( ...$join_args, ...( $clause[3] ?? array() ) );
+			}
 
 			if ( '' === $fragment ) {
 				continue;
@@ -156,12 +200,12 @@ final class Query_Engine {
 		}
 
 		if ( array() === $fragments ) {
-			return array( '', array() );
+			return array( '', array(), $joins, $join_args );
 		}
 
 		$glue = Filter::RELATION_OR === $filter->relation() ? ' OR ' : ' AND ';
 
-		return array( '( ' . implode( $glue, $fragments ) . ' )', $args );
+		return array( '( ' . implode( $glue, $fragments ) . ' )', $args, $joins, $join_args );
 	}
 
 	/**
@@ -170,9 +214,13 @@ final class Query_Engine {
 	 *
 	 * @param Condition   $condition The condition.
 	 * @param Query_Scope $scope     The object type being queried.
-	 * @return array{0: string, 1: list<mixed>}
+	 * @param int|null    $join_slot A number unique to this condition, used to name
+	 *                               a join alias — or null when the filter's shape
+	 *                               forbids joins (an OR relation), in which case
+	 *                               the clause must stay in the WHERE.
+	 * @return array{0: string, 1: list<mixed>, 2?: string, 3?: list<mixed>}
 	 */
-	private function clause_for( Condition $condition, Query_Scope $scope ): array {
+	private function clause_for( Condition $condition, Query_Scope $scope, ?int $join_slot = null ): array {
 		$field = $condition->field;
 
 		if ( 'price' === $field ) {
@@ -193,12 +241,12 @@ final class Query_Engine {
 
 		if ( 'category' === $field ) {
 			// A variation inherits its category from the parent product.
-			return $this->taxonomy_clause( 'product_cat', $condition, $scope );
+			return $this->taxonomy_clause( 'product_cat', $condition, $scope, $join_slot );
 		}
 
 		if ( 'tag' === $field ) {
 			// Like category, a variation inherits its tags from the parent product.
-			return $this->taxonomy_clause( 'product_tag', $condition, $scope );
+			return $this->taxonomy_clause( 'product_tag', $condition, $scope, $join_slot );
 		}
 
 		if ( str_starts_with( $field, 'attribute:' ) ) {
@@ -208,7 +256,7 @@ final class Query_Engine {
 			// itself, not as a parent taxonomy term.
 			return $scope->is_variation()
 				? $this->variation_attribute_clause( $taxonomy, $condition )
-				: $this->taxonomy_clause( $taxonomy, $condition, $scope );
+				: $this->taxonomy_clause( $taxonomy, $condition, $scope, $join_slot );
 		}
 
 		if ( str_starts_with( $field, 'meta:' ) ) {
@@ -336,12 +384,19 @@ final class Query_Engine {
 	 * single indexed table, which plans correctly at any number of terms: 992ms for
 	 * the four-category case that used to take four minutes, and flat from there.
 	 *
+	 * Positive membership is a join when the filter's shape allows one. See
+	 * {@see select()} for the measurements: as a WHERE subquery this is the clause
+	 * that eventually tips the optimiser into a four-minute plan, and joining is
+	 * the only form that held across every selection tried.
+	 *
 	 * @param string      $taxonomy  Taxonomy name, e.g. `product_cat` or `pa_color`.
 	 * @param Condition   $condition Term id(s) for IN/NOT_IN, or none for (NOT_)EXISTS.
 	 * @param Query_Scope $scope     The object type being queried.
-	 * @return array{0: string, 1: list<mixed>}
+	 * @param int|null    $join_slot Alias number for a join, or null if the clause
+	 *                               must stay in the WHERE (an OR filter).
+	 * @return array{0: string, 1: list<mixed>, 2?: string, 3?: list<mixed>}
 	 */
-	private function taxonomy_clause( string $taxonomy, Condition $condition, Query_Scope $scope ): array {
+	private function taxonomy_clause( string $taxonomy, Condition $condition, Query_Scope $scope, ?int $join_slot = null ): array {
 		if ( '' === $taxonomy ) {
 			return array( '', array() );
 		}
@@ -373,6 +428,9 @@ final class Query_Engine {
 		$object_column = $scope->is_variation() ? 'p.post_parent' : 'l.product_id';
 		$placeholders  = implode( ', ', array_fill( 0, count( $tt_ids ), '%d' ) );
 
+		// Exclusion stays an anti-join in the WHERE: that is the right shape for it,
+		// it is free of NOT IN's NULL pitfalls, and it does not have the plan
+		// problem positive membership does.
 		if ( Operator::NOT_IN === $operator || Operator::NOT_EXISTS === $operator ) {
 			$fragment = "NOT EXISTS (
 				SELECT 1 FROM {$relationships} tr
@@ -382,12 +440,25 @@ final class Query_Engine {
 			return array( $fragment, $tt_ids );
 		}
 
-		$fragment = "{$object_column} IN (
-			SELECT tr.object_id FROM {$relationships} tr
-			WHERE tr.term_taxonomy_id IN ( {$placeholders} )
-		)";
+		if ( null === $join_slot ) {
+			// An OR filter: a join would silently turn this condition into an AND.
+			$fragment = "{$object_column} IN (
+				SELECT tr.object_id FROM {$relationships} tr
+				WHERE tr.term_taxonomy_id IN ( {$placeholders} )
+			)";
 
-		return array( $fragment, $tt_ids );
+			return array( $fragment, $tt_ids );
+		}
+
+		// DISTINCT because a product in two of the chosen categories has two
+		// relationship rows, and without it the join would count it twice.
+		$alias = 'co_tax' . $join_slot;
+		$join  = "INNER JOIN (
+			SELECT DISTINCT tr.object_id FROM {$relationships} tr
+			WHERE tr.term_taxonomy_id IN ( {$placeholders} )
+		) {$alias} ON {$alias}.object_id = {$object_column}";
+
+		return array( '', array(), $join, $tt_ids );
 	}
 
 	/**
