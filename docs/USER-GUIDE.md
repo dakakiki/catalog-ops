@@ -75,6 +75,12 @@ Recorded changes are kept for the **retention window** — the period in which a
 operation can still be undone. It defaults to **30 days** and is configurable
 from 7 to 180 days in the **Retention** panel.
 
+Each row in **Operation history** carries three actions: **Changes** (the audit
+detail), **Undo**, and **Delete**. Delete removes the run and its recorded
+old → new values from the history, so it can no longer be undone — the products
+themselves are untouched, and it cannot be reversed. You are asked to confirm
+first. A running operation cannot be deleted; cancel it first.
+
 ## Scheduling
 
 In **Bulk edit**, expand **Scheduling** to run the same filter + change later, or

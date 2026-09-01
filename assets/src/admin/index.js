@@ -1987,17 +1987,87 @@ function UndoPanel( { op, onDone } ) {
 }
 
 /**
+ * An icon button for a row action.
+ *
+ * Deliberately not a wp-admin `.button`: that class frames every one of them in
+ * blue, so a row of three reads as a block of chrome rather than three distinct
+ * actions, and its line-height leaves the glyph sitting high in the box. This is
+ * a plain button the stylesheet owns end to end — white, grey-bordered, tinted
+ * grey on hover, with the icon carrying the only colour.
+ *
+ * The label reaches everyone: `aria-label` names the button for screen readers,
+ * `data-tooltip` draws a styled tooltip on hover and on keyboard focus. No
+ * `title`, or the browser's own tooltip would surface on top of that one.
+ *
+ * @param {Object}   props          Component props.
+ * @param {string}   props.icon     Dashicons name, without the `dashicons-` prefix.
+ * @param {string}   props.label    What the button does.
+ * @param {string}   props.variant  Colour role: 'view', 'undo' or 'danger'.
+ * @param {Function} props.onClick  Click handler.
+ * @param {boolean}  props.isActive Whether its panel is currently open.
+ * @param {boolean}  props.disabled Whether it is unavailable.
+ */
+function IconButton( {
+	icon,
+	label,
+	variant,
+	onClick,
+	isActive = false,
+	disabled = false,
+} ) {
+	return (
+		<button
+			type="button"
+			className={ `catalogops-icon-button catalogops-icon-button--${ variant }${
+				isActive ? ' is-active' : ''
+			}` }
+			onClick={ onClick }
+			disabled={ disabled }
+			data-tooltip={ label }
+			aria-label={ label }
+		>
+			<span
+				className={ `dashicons dashicons-${ icon }` }
+				aria-hidden="true"
+			/>
+		</button>
+	);
+}
+
+/**
  * One row of the operation history, expandable to its audit detail or undo flow.
  *
  * @param {Object}   props           Component props.
  * @param {Object}   props.op        The operation.
- * @param {Function} props.onChanged Called when an undo from this row finishes.
+ * @param {Function} props.onChanged Called when an undo or delete from this row
+ *                                   finishes, so the list reloads.
  */
 function OperationRow( { op, onChanged } ) {
-	const [ open, setOpen ] = useState( null ); // 'changes' | 'undo' | null
+	const [ open, setOpen ] = useState( null ); // 'changes' | 'undo' | 'delete' | null
+	const [ busy, setBusy ] = useState( false );
+	const [ error, setError ] = useState( '' );
 
 	const toggle = ( which ) =>
 		setOpen( ( cur ) => ( cur === which ? null : which ) );
+
+	// Deleting mid-write would strand the operation's remaining chunks, so the
+	// control is closed off until the run is cancelled.
+	const stillRunning = op.status === 'queued' || op.status === 'running';
+
+	const confirmDelete = () => {
+		setBusy( true );
+		setError( '' );
+		apiFetch( {
+			path: `/catalogops/v1/operations/${ op.id }`,
+			method: 'DELETE',
+		} )
+			.then( () => {
+				setOpen( null );
+				onChanged();
+			} )
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusy( false ) );
+	};
 
 	return (
 		<>
@@ -2035,22 +2105,41 @@ function OperationRow( { op, onChanged } ) {
 				</td>
 				<td>{ op.user_name || '—' }</td>
 				<td>{ op.created_at }</td>
-				<td>
+				<td className="catalogops-cell--actions">
 					<div className="catalogops-actions">
-						<button
-							className="button button-small"
+						<IconButton
+							icon="list-view"
+							variant="view"
+							label={ __( 'View changes', 'catalogops' ) }
 							onClick={ () => toggle( 'changes' ) }
-						>
-							{ __( 'Changes', 'catalogops' ) }
-						</button>
+							isActive={ open === 'changes' }
+						/>
 						{ op.can_undo && (
-							<button
-								className="button button-small"
+							<IconButton
+								icon="undo"
+								variant="undo"
+								label={ __( 'Undo this run', 'catalogops' ) }
 								onClick={ () => toggle( 'undo' ) }
-							>
-								{ __( 'Undo', 'catalogops' ) }
-							</button>
+								isActive={ open === 'undo' }
+							/>
 						) }
+						<IconButton
+							icon="trash"
+							variant="danger"
+							// A disabled control still owes an explanation; the
+							// tooltip is where it fits.
+							label={
+								stillRunning
+									? __(
+											'Cancel the run before deleting it',
+											'catalogops'
+									  )
+									: __( 'Delete from history', 'catalogops' )
+							}
+							onClick={ () => toggle( 'delete' ) }
+							isActive={ open === 'delete' }
+							disabled={ stillRunning }
+						/>
 					</div>
 				</td>
 			</tr>
@@ -2066,6 +2155,67 @@ function OperationRow( { op, onChanged } ) {
 									onChanged();
 								} }
 							/>
+						) }
+						{ open === 'delete' && (
+							<div className="catalogops-confirm">
+								<p className="catalogops-confirm__lead catalogops-confirm__lead--danger">
+									{ sprintf(
+										/* translators: %d: operation id. */
+										__(
+											'Delete operation #%d from the history?',
+											'catalogops'
+										),
+										op.id
+									) }
+								</p>
+								<p>
+									{ op.can_undo
+										? __(
+												'This removes the record of what it changed, so it can no longer be undone. The products themselves are left exactly as they are now. This cannot be reversed.',
+												'catalogops'
+										  )
+										: __(
+												'This removes the record of what it changed. The products themselves are left exactly as they are now. This cannot be reversed.',
+												'catalogops'
+										  ) }
+								</p>
+								{ error && (
+									<div className="notice notice-error">
+										<p>{ error }</p>
+									</div>
+								) }
+								<div className="catalogops-confirm__actions">
+									<button
+										className="button catalogops-button--danger"
+										onClick={ confirmDelete }
+										disabled={ busy }
+									>
+										{ __(
+											'Delete permanently',
+											'catalogops'
+										) }
+									</button>
+									<button
+										className="button"
+										onClick={ () => setOpen( null ) }
+										disabled={ busy }
+									>
+										{ __( 'Cancel', 'catalogops' ) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Deleting…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+							</div>
 						) }
 					</td>
 				</tr>
@@ -2138,7 +2288,9 @@ function History( { refreshKey, onChanged } ) {
 						<th>{ __( 'Progress', 'catalogops' ) }</th>
 						<th>{ __( 'By', 'catalogops' ) }</th>
 						<th>{ __( 'Created', 'catalogops' ) }</th>
-						<th>{ __( 'Actions', 'catalogops' ) }</th>
+						<th className="catalogops-cell--actions">
+							{ __( 'Actions', 'catalogops' ) }
+						</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -2559,6 +2711,128 @@ function SchedulerSetup( { lead = false } ) {
 	);
 }
 
+/**
+ * One row of the Schedules list, with its actions as icons and its own inline
+ * delete confirmation.
+ *
+ * @param {Object}   props          Component props.
+ * @param {Object}   props.schedule The schedule.
+ * @param {boolean}  props.busy     Whether a request for this row is in flight.
+ * @param {Function} props.onAct    Runs a verb (run, pause, resume) on the row.
+ * @param {Function} props.onDelete Deletes the row.
+ */
+function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
+	const [ confirming, setConfirming ] = useState( false );
+
+	const done = schedule.status === 'completed';
+	const name = schedule.name || `#${ schedule.id }`;
+
+	return (
+		<>
+			<tr>
+				<td>{ name }</td>
+				<td>{ schedule.recurrence }</td>
+				<td>
+					<span
+						className={ `catalogops-badge catalogops-status-badge is-${ schedule.status }` }
+					>
+						{ schedule.status }
+					</span>
+				</td>
+				<td>
+					{ done
+						? '—'
+						: schedule.next_run_local || schedule.next_run }
+				</td>
+				<td>{ schedule.last_run_local || schedule.last_run || '—' }</td>
+				<td className="catalogops-cell--actions">
+					<div className="catalogops-actions">
+						{ /* Four actions, four meanings, no two alike: play runs it once
+						     now, pause holds it, the cycle arrows put it back on its
+						     schedule, the bin destroys it. */ }
+						<IconButton
+							icon="controls-play"
+							variant="run"
+							label={ __( 'Run now', 'catalogops' ) }
+							onClick={ () => onAct( schedule.id, 'run' ) }
+							disabled={ done || busy }
+						/>
+						{ schedule.status === 'active' && (
+							<IconButton
+								icon="controls-pause"
+								variant="pause"
+								label={ __( 'Pause', 'catalogops' ) }
+								onClick={ () => onAct( schedule.id, 'pause' ) }
+								disabled={ busy }
+							/>
+						) }
+						{ schedule.status === 'paused' && (
+							<IconButton
+								icon="update"
+								variant="accent"
+								label={ __( 'Resume', 'catalogops' ) }
+								onClick={ () => onAct( schedule.id, 'resume' ) }
+								disabled={ busy }
+							/>
+						) }
+						<IconButton
+							icon="trash"
+							variant="danger"
+							label={ __( 'Delete schedule', 'catalogops' ) }
+							onClick={ () => setConfirming( ! confirming ) }
+							isActive={ confirming }
+							disabled={ busy }
+						/>
+					</div>
+				</td>
+			</tr>
+			{ confirming && (
+				<tr className="catalogops-detail">
+					<td colSpan="6">
+						<div className="catalogops-confirm">
+							<p className="catalogops-confirm__lead catalogops-confirm__lead--danger">
+								{ sprintf(
+									/* translators: %s: schedule name. */
+									__(
+										'Delete the schedule “%s”?',
+										'catalogops'
+									),
+									name
+								) }
+							</p>
+							<p>
+								{ __(
+									'It will stop running from now on. Operations it has already run stay in the history, and the products they changed are untouched. This cannot be reversed.',
+									'catalogops'
+								) }
+							</p>
+							<div className="catalogops-confirm__actions">
+								<button
+									className="button catalogops-button--danger"
+									onClick={ () => {
+										setConfirming( false );
+										onDelete( schedule.id );
+									} }
+									disabled={ busy }
+								>
+									{ __( 'Delete permanently', 'catalogops' ) }
+								</button>
+								<button
+									className="button"
+									onClick={ () => setConfirming( false ) }
+									disabled={ busy }
+								>
+									{ __( 'Cancel', 'catalogops' ) }
+								</button>
+							</div>
+						</div>
+					</td>
+				</tr>
+			) }
+		</>
+	);
+}
+
 function Schedules( { refreshKey, onRan } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
@@ -2602,11 +2876,11 @@ function Schedules( { refreshKey, onRan } ) {
 			.finally( () => setBusyId( null ) );
 	};
 
+	// No window.confirm: a browser dialog cannot say what is actually lost, cannot
+	// be styled to look destructive, and appears somewhere other than the row it
+	// belongs to. The row expands into its own confirmation instead, the same way
+	// deleting from Operation history does.
 	const remove = ( id ) => {
-		// eslint-disable-next-line no-alert
-		if ( ! window.confirm( __( 'Delete this schedule?', 'catalogops' ) ) ) {
-			return;
-		}
 		setError( '' );
 		setBusyId( id );
 		apiFetch( {
@@ -2649,7 +2923,9 @@ function Schedules( { refreshKey, onRan } ) {
 							<th>{ __( 'Status', 'catalogops' ) }</th>
 							<th>{ __( 'Next run', 'catalogops' ) }</th>
 							<th>{ __( 'Last run', 'catalogops' ) }</th>
-							<th>{ __( 'Actions', 'catalogops' ) }</th>
+							<th className="catalogops-cell--actions">
+								{ __( 'Actions', 'catalogops' ) }
+							</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -2661,87 +2937,13 @@ function Schedules( { refreshKey, onRan } ) {
 							</tr>
 						) : (
 							items.map( ( s ) => (
-								<tr key={ s.id }>
-									<td>{ s.name || `#${ s.id }` }</td>
-									<td>{ s.recurrence }</td>
-									<td>
-										<span
-											className={ `catalogops-badge catalogops-status-badge is-${ s.status }` }
-										>
-											{ s.status }
-										</span>
-									</td>
-									<td>
-										{ s.status === 'completed'
-											? '—'
-											: s.next_run_local || s.next_run }
-									</td>
-									<td>
-										{ s.last_run_local ||
-											s.last_run ||
-											'—' }
-									</td>
-									<td>
-										<div className="catalogops-actions">
-											<button
-												className="button button-small"
-												onClick={ () =>
-													act( s.id, 'run' )
-												}
-												disabled={
-													s.status === 'completed' ||
-													busyId === s.id
-												}
-											>
-												{ __(
-													'Run now',
-													'catalogops'
-												) }
-											</button>
-											{ s.status === 'active' ? (
-												<button
-													className="button button-small"
-													onClick={ () =>
-														act( s.id, 'pause' )
-													}
-													disabled={ busyId === s.id }
-												>
-													{ __(
-														'Pause',
-														'catalogops'
-													) }
-												</button>
-											) : (
-												s.status === 'paused' && (
-													<button
-														className="button button-small"
-														onClick={ () =>
-															act(
-																s.id,
-																'resume'
-															)
-														}
-														disabled={
-															busyId === s.id
-														}
-													>
-														{ __(
-															'Resume',
-															'catalogops'
-														) }
-													</button>
-												)
-											) }
-											<button
-												className="button button-small button-link-delete"
-												onClick={ () => remove( s.id ) }
-												disabled={ busyId === s.id }
-											>
-												{ __( 'Delete', 'catalogops' ) }
-											</button>
-										</div>
-									</td>
-								</tr>
+								<ScheduleRow
+									key={ s.id }
+									schedule={ s }
+									busy={ busyId === s.id }
+									onAct={ act }
+									onDelete={ remove }
+								/>
 							) )
 						) }
 					</tbody>

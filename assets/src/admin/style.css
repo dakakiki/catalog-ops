@@ -23,6 +23,9 @@
 	--co-green: #1a7f37;
 	--co-red: #d63638;
 	--co-amber: #bd8600;
+	/* Warm, not red. Sat next to the trash icon's red, orange-600 (#ea580c) reads
+	   as a second red at 18px; pulling it toward amber separates the two. */
+	--co-orange: #d97706;
 	--co-tint: #f6f7f7;
 	--co-control-h: 30px;
 	max-width: 1180px;
@@ -725,6 +728,214 @@ without claiming a position it does not know.
 .catalogops-why {
 	max-width: 340px;
 	color: var(--co-muted);
+}
+
+/* --- Row action icons -------------------------------------------------- */
+
+/*
+Not wp-admin buttons. That class frames each one in blue, so three side by side
+read as a single block of chrome instead of three separate actions — and its
+line-height leaves the glyph sitting high in a square box. Here the frame stays
+quiet (white, grey border) and the icon carries the only colour, so the actions
+are told apart at a glance rather than by reading.
+*/
+.catalogops-icon-button {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: var(--co-control-h);
+	height: var(--co-control-h);
+	padding: 0;
+	border: 1px solid var(--co-border);
+	border-radius: 4px;
+	background: #fff;
+	color: var(--co-muted);
+	cursor: pointer;
+	transition:
+		background-color 0.12s ease,
+		border-color 0.12s ease;
+}
+
+/* Flex centring needs the glyph to be a block with no line-height of its own. */
+.catalogops-icon-button .dashicons {
+	display: block;
+	width: 18px;
+	height: 18px;
+	font-size: 18px;
+	line-height: 18px;
+}
+
+/*
+One colour per meaning, so a row is read rather than deciphered: green shows or
+starts, orange reverses, amber holds, indigo runs once, red destroys.
+*/
+.catalogops-icon-button--view,
+.catalogops-icon-button--run {
+	color: var(--co-green);
+}
+
+.catalogops-icon-button--undo {
+	color: var(--co-orange);
+}
+
+.catalogops-icon-button--accent {
+	color: var(--co-accent);
+}
+
+.catalogops-icon-button--pause {
+	color: var(--co-amber);
+}
+
+.catalogops-icon-button--danger {
+	color: var(--co-red);
+}
+
+.catalogops-icon-button:hover:not( :disabled ) {
+	background: var(--co-tint);
+	border-color: var(--co-border-strong);
+}
+
+/* The open panel's button stays pressed, so the row says which one is showing. */
+.catalogops-icon-button.is-active {
+	background: var(--co-tint);
+	border-color: currentColor;
+}
+
+.catalogops-icon-button:focus-visible {
+	outline: 2px solid var(--co-accent);
+	outline-offset: 1px;
+}
+
+.catalogops-icon-button:disabled {
+	color: var(--co-border-strong);
+	background: var(--co-tint);
+	cursor: default;
+}
+
+/*
+Tooltip. An icon-only control has to name itself, and the native title attribute
+takes a second to appear and cannot be styled — so aria-label carries the name
+for screen readers and this carries it for everyone else, on focus as well as
+hover.
+*/
+.catalogops-icon-button::after {
+	content: attr( data-tooltip );
+	position: absolute;
+	bottom: calc( 100% + 7px );
+	left: 50%;
+	transform: translateX( -50% );
+	z-index: 20;
+	padding: 5px 8px;
+	border-radius: 3px;
+	background: var(--co-ink);
+	color: #fff;
+	font-size: 11px;
+	line-height: 1.3;
+	white-space: nowrap;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity 0.12s ease,
+		visibility 0.12s ease;
+}
+
+/* The little pointer under the bubble. */
+.catalogops-icon-button::before {
+	content: "";
+	position: absolute;
+	bottom: calc( 100% + 3px );
+	left: 50%;
+	z-index: 20;
+	margin-left: -4px;
+	border: 4px solid transparent;
+	border-top-color: var(--co-ink);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition:
+		opacity 0.12s ease,
+		visibility 0.12s ease;
+}
+
+.catalogops-icon-button:hover::after,
+.catalogops-icon-button:hover::before,
+.catalogops-icon-button:focus-visible::after,
+.catalogops-icon-button:focus-visible::before {
+	opacity: 1;
+	visibility: visible;
+}
+
+/*
+Solid red from the start, not on hover. This button destroys an audit trail and
+cannot be undone; the moment to look like that is before the click, not during
+it. Its Cancel neighbour stays a plain button, so the pair reads at a glance.
+*/
+/*
+Actions sit at the right edge, header included. They are the one column whose
+width is driven by its buttons rather than its content, so anchoring them to the
+table's edge keeps them in a straight line whatever the rows in between hold.
+
+Element selectors on purpose: wp-admin aligns list-table cells with rules like
+`.widefat th`, a class plus an element, which outranks a bare class of ours — so
+`.catalogops-cell--actions` alone loses and the heading drifts back over empty
+space while the buttons stay right.
+*/
+.catalogops th.catalogops-cell--actions,
+.catalogops td.catalogops-cell--actions {
+	text-align: right;
+}
+
+.catalogops .catalogops-cell--actions .catalogops-actions {
+	justify-content: flex-end;
+}
+
+/*
+The rightmost button's tooltip would otherwise hang off the table. Anchor it to
+that button's right edge instead of centring it; the arrow stays on the button.
+*/
+.catalogops-cell--actions .catalogops-actions > :last-child::after {
+	left: auto;
+	right: 0;
+	transform: none;
+}
+
+/*
+Scoped under .catalogops on purpose. wp-admin styles its buttons as
+`.wp-core-ui .button`, two classes deep, which outranks a single class of ours —
+so an unscoped rule here loses and the button comes out grey. Matching that
+specificity and loading later is what makes it red.
+*/
+.catalogops .catalogops-button--danger,
+.catalogops .catalogops-button--danger:visited {
+	border-color: #b32d2e;
+	background: var(--co-red);
+	color: #fff;
+	text-shadow: none;
+}
+
+.catalogops .catalogops-button--danger:hover:not( :disabled ),
+.catalogops .catalogops-button--danger:focus:not( :disabled ) {
+	border-color: #8a2424;
+	background: #b32d2e;
+	color: #fff;
+}
+
+.catalogops .catalogops-button--danger:focus:not( :disabled ) {
+	box-shadow: 0 0 0 1px #fff, 0 0 0 3px var(--co-red);
+}
+
+.catalogops .catalogops-button--danger:disabled {
+	border-color: var(--co-border-strong);
+	background: var(--co-border-strong);
+	color: #fff;
+}
+
+/* The question names what is about to be destroyed, so it is coloured for it. */
+.catalogops-confirm__lead--danger {
+	color: var(--co-red);
 }
 
 .catalogops-schedule-preview {

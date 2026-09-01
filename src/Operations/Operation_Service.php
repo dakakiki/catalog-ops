@@ -470,6 +470,53 @@ final class Operation_Service {
 	}
 
 	/**
+	 * Remove an operation from the history, along with the deltas it recorded.
+	 *
+	 * This is the one deletion a user performs by hand, and it is not reversible:
+	 * the recorded old → new values are what undo replays, so once they are gone
+	 * the operation can never be rolled back. It is the same loss the retention
+	 * window causes on its own schedule — the difference is that here somebody
+	 * chose it, which is why the UI asks first and this method does not.
+	 *
+	 * A running operation cannot be deleted; deleting the row mid-write would
+	 * leave its remaining chunks pointing at nothing. Cancel it first, then delete
+	 * the paused result.
+	 *
+	 * @param int $op_id Operation id.
+	 *
+	 * @throws InvalidArgumentException When the operation does not exist.
+	 * @throws Operation_Blocked        When it is still queued or running.
+	 */
+	public function delete( int $op_id ): void {
+		$operation = $this->operations->find( $op_id );
+
+		if ( null === $operation ) {
+			throw new InvalidArgumentException( 'Operation not found.' );
+		}
+
+		if ( $operation->status->is_active() ) {
+			throw new Operation_Blocked( 'A running operation cannot be deleted; cancel it first.' );
+		}
+
+		// The deltas first: an operations row with no changes is a harmless stub,
+		// whereas changes with no operation would be unreachable rows nothing ever
+		// cleans up.
+		$this->changes->delete_for_operation( $op_id );
+
+		// Undos spawned from this operation outlive it; drop the link rather than
+		// leave them pointing at a missing parent.
+		$this->operations->detach_children( $op_id );
+
+		// Belt and braces. Lock::acquire() already steals a lock whose holder has
+		// vanished, so this cannot wedge the catalog either way — but leaving a
+		// stale holder id behind would make the next acquisition look like a theft
+		// in the logs rather than a clean take.
+		$this->lock->release( $op_id );
+
+		$this->operations->delete( $op_id );
+	}
+
+	/**
 	 * Cancel a running or queued operation: stop scheduling, pause it, and free
 	 * the lock. Already-applied changes remain (undo is a separate M3 operation).
 	 *
