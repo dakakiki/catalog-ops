@@ -641,6 +641,100 @@
 	background: var(--co-amber);
 }
 
+/*
+An operation that has processed nothing yet has no measurable progress to show —
+it is queued, waiting for the background runner. A 0%-wide bar reads as "stuck",
+so the bar goes indeterminate instead: a shuttle that says work is pending
+without claiming a position it does not know.
+*/
+.catalogops-progress.is-waiting .catalogops-progress__fill {
+	width: 35%;
+	transition: none;
+	animation: catalogops-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes catalogops-indeterminate {
+	from {
+		transform: translateX( -100% );
+	}
+	to {
+		transform: translateX( 300% );
+	}
+}
+
+.catalogops-progress p .catalogops-spinner {
+	width: 12px;
+	height: 12px;
+	margin-right: 8px;
+	vertical-align: -1px;
+}
+
+/* The same "queued, not stuck" cue, sized for a history-table cell. */
+.catalogops-num .catalogops-inline-loading {
+	margin-left: 8px;
+	font-size: 12px;
+}
+
+.catalogops-num .catalogops-spinner {
+	width: 11px;
+	height: 11px;
+}
+
+.catalogops-progress__note {
+	margin-top: 8px;
+}
+
+.catalogops-progress__note p {
+	font-weight: 400;
+}
+
+@media ( prefers-reduced-motion: reduce ) {
+	.catalogops-progress.is-waiting .catalogops-progress__fill {
+		animation: none;
+		opacity: 0.5;
+	}
+
+	.catalogops-spinner {
+		animation: none;
+	}
+}
+
+/* --- Skip reasons ------------------------------------------------------ */
+
+.catalogops-reasons {
+	margin: 4px 0 0;
+	padding-left: 18px;
+	list-style: disc;
+}
+
+.catalogops-reasons li {
+	margin: 0 0 2px;
+}
+
+.catalogops-skip-summary {
+	margin: 0 0 12px;
+	padding: 10px 12px;
+	border-left: 4px solid var(--co-amber);
+	background: #fff;
+}
+
+.catalogops-skip-summary p {
+	margin: 0;
+}
+
+.catalogops-why {
+	max-width: 340px;
+	color: var(--co-muted);
+}
+
+.catalogops-schedule-preview {
+	display: block;
+}
+
+.catalogops-schedule-preview p {
+	margin: 0 0 4px;
+}
+
 /* --- Preview / undo ---------------------------------------------------- */
 
 .catalogops-preview {

@@ -23,7 +23,7 @@ import {
 } from '@wordpress/element';
 import apiFetch from '@wordpress/api-fetch';
 import { FormTokenField } from '@wordpress/components';
-import { __, sprintf } from '@wordpress/i18n';
+import { __, _n, sprintf } from '@wordpress/i18n';
 import './style.css';
 
 const PER_PAGE = 10;
@@ -353,22 +353,181 @@ function useOperationPoll( operation, setOperation, onDone ) {
 }
 
 /**
+ * Why an item was left untouched, keyed by the code the server records on the
+ * change row (CatalogOps\Operations\Skip_Reason). Written as lowercase clauses so
+ * they read as the tail of "N items — …" in a list.
+ */
+const SKIP_REASONS = {
+	empty_input: __(
+		'a field the change reads is empty or non-numeric, so no value could be worked out (never set to 0)',
+		'catalogops'
+	),
+	sale_not_below_regular: __(
+		'the sale price is not below the regular price — WooCommerce refuses those, and would clear any sale price already set',
+		'catalogops'
+	),
+	stock_managed: __(
+		'stock is managed here, so WooCommerce sets the status from the quantity and backorder setting instead',
+		'catalogops'
+	),
+	unchanged: __( 'the value was already set', 'catalogops' ),
+	rejected: __(
+		'WooCommerce did not keep the value — another plugin may be overriding it',
+		'catalogops'
+	),
+	drift: __( 'the item changed after the operation ran', 'catalogops' ),
+	no_record: __( 'there is no recorded value to restore', 'catalogops' ),
+};
+
+/**
+ * A readable explanation for a skip-reason code.
+ *
+ * @param {string} code The stored reason code.
+ * @return {string} Human-readable clause.
+ */
+function skipReasonLabel( code ) {
+	return SKIP_REASONS[ code ] || __( 'no reason recorded', 'catalogops' );
+}
+
+/**
+ * A count-and-reason breakdown. This is the whole point of recording reasons: a
+ * bare "432 skipped" tells nobody anything they can act on.
+ *
+ * @param {Object} props       Component props.
+ * @param {Array}  props.items Entries of { reason, count }.
+ */
+function ReasonList( { items } ) {
+	return (
+		<ul className="catalogops-reasons">
+			{ items.map( ( item ) => (
+				<li key={ item.reason || 'unknown' }>
+					<strong>{ item.count }</strong>
+					{ ' — ' }
+					{ skipReasonLabel( item.reason ) }
+				</li>
+			) ) }
+		</ul>
+	);
+}
+
+/**
+ * The copy for a preview warning: something the change applies to perfectly well
+ * but damages on the way past.
+ *
+ * @param {string} code  Warning code from the server.
+ * @param {number} count Items affected.
+ * @return {string} Warning text, or '' for an unknown code.
+ */
+function warningText( code, count ) {
+	if ( code === 'sale_price_cleared' ) {
+		return sprintf(
+			/* translators: %d: number of products whose sale price would be deleted. */
+			_n(
+				'%d matching product has a sale price at or above the new regular price. WooCommerce only keeps a sale price below the regular price, so applying this will delete that sale price — and the deletion is not recorded, so Undo cannot bring it back.',
+				'%d matching products have a sale price at or above the new regular price. WooCommerce only keeps a sale price below the regular price, so applying this will delete those sale prices — and the deletion is not recorded, so Undo cannot bring them back.',
+				count,
+				'catalogops'
+			),
+			count
+		);
+	}
+
+	return '';
+}
+
+/**
+ * Seconds elapsed since `active` last became true, ticking once a second.
+ * Resets whenever it goes false, so a run that stalls after making progress
+ * measures the new wait rather than its whole lifetime.
+ *
+ * @param {boolean} active Whether to keep counting.
+ * @return {number} Whole seconds spent waiting.
+ */
+function useWaitingSeconds( active ) {
+	const [ seconds, setSeconds ] = useState( 0 );
+
+	useEffect( () => {
+		if ( ! active ) {
+			setSeconds( 0 );
+			return undefined;
+		}
+
+		const started = Date.now();
+		const timer = setInterval(
+			() => setSeconds( Math.round( ( Date.now() - started ) / 1000 ) ),
+			1000
+		);
+
+		return () => clearInterval( timer );
+	}, [ active ] );
+
+	return seconds;
+}
+
+/** After this long with no progress, explain what the wait is actually for. */
+const SLOW_START_SECONDS = 20;
+
+/**
  * A labelled progress bar for an in-flight or finished operation.
+ *
+ * Applying does not start the work — it queues it, and the background runner
+ * picks it up on its own schedule. On a site where WP-Cron only fires on the
+ * next page load that gap can be minutes, during which a plain 0% bar looks
+ * indistinguishable from a stuck one. So an operation that has processed nothing
+ * yet gets an explicitly indeterminate bar and a spinner: something is happening,
+ * it just is not measurable yet. If the wait runs long, the bar says why.
  *
  * @param {Object} props    Component props.
  * @param {Object} props.op The operation to render.
  */
 function ProgressBar( { op } ) {
+	const settled = isTerminal( op );
+	const waiting = ! settled && op.processed === 0;
+	const waited = useWaitingSeconds( waiting );
+	const skipped = ( op.skip_reasons || [] ).filter( ( r ) => r.count > 0 );
+
 	return (
-		<div className={ `catalogops-progress is-${ op.status }` }>
-			<p>
-				{ sprintf(
-					/* translators: 1: status, 2: processed, 3: target. */
-					__( 'Operation %1$s — %2$d / %3$d', 'catalogops' ),
-					op.status,
-					op.processed,
-					op.target_count
+		<div
+			className={ `catalogops-progress is-${ op.status }${
+				waiting ? ' is-waiting' : ''
+			}` }
+		>
+			<p aria-live="polite">
+				{ waiting && (
+					<span className="catalogops-spinner" aria-hidden="true" />
 				) }
+				{ waiting && op.status === 'queued' && (
+					<>
+						{ sprintf(
+							/* translators: %d: number of items queued. */
+							__(
+								'Queued — waiting for the background runner to start on %d items…',
+								'catalogops'
+							),
+							op.target_count
+						) }
+					</>
+				) }
+				{ waiting && op.status !== 'queued' && (
+					<>
+						{ sprintf(
+							/* translators: %d: number of items in the operation. */
+							__(
+								'Started — working through %d items…',
+								'catalogops'
+							),
+							op.target_count
+						) }
+					</>
+				) }
+				{ ! waiting &&
+					sprintf(
+						/* translators: 1: status, 2: processed, 3: target. */
+						__( 'Operation %1$s — %2$d / %3$d', 'catalogops' ),
+						op.status,
+						op.processed,
+						op.target_count
+					) }
 				{ op.failed > 0 &&
 					' ' +
 						sprintf(
@@ -380,9 +539,25 @@ function ProgressBar( { op } ) {
 			<div className="catalogops-progress__track">
 				<div
 					className="catalogops-progress__fill"
-					style={ { width: `${ op.percent }%` } }
+					style={
+						waiting ? undefined : { width: `${ op.percent }%` }
+					}
 				/>
 			</div>
+			{ waiting && waited >= SLOW_START_SECONDS && (
+				<p className="catalogops-muted catalogops-progress__note">
+					{ __(
+						'Still waiting. Background jobs on this site run when someone visits it, so the change starts on the next request — leaving this page open is enough. Nothing is lost either way: the operation is already saved and will run.',
+						'catalogops'
+					) }
+				</p>
+			) }
+			{ settled && skipped.length > 0 && (
+				<div className="catalogops-progress__note">
+					<p>{ __( 'Not changed:', 'catalogops' ) }</p>
+					<ReasonList items={ skipped } />
+				</div>
+			) }
 		</div>
 	);
 }
@@ -590,12 +765,15 @@ function BulkEdit( {
 
 	const running = operation && ! isTerminal( operation );
 
-	// A formula whose source field is empty or non-numeric yields null for every
-	// object, so it is omitted. The preview reports counts only: how many the
-	// filter matched, and of those how many the edit will actually change
-	// (applicable) versus omit. None-will-change is an all-omitted match.
+	// The preview reports counts and reasons: how many the filter matched, of
+	// those how many the edit will actually change (applicable), and — for the
+	// rest — which rule left each one out. An item is omitted when a field the
+	// change reads is empty, or when WooCommerce would refuse the new value and
+	// keep what was there. None-will-change is an all-omitted match.
 	const noneWillChange =
 		!! preview && preview.matched > 0 && preview.applicable === 0;
+	const omittedBy = ( preview && preview.omitted_by ) || [];
+	const previewWarnings = ( preview && preview.warnings ) || [];
 
 	return (
 		<div className="catalogops-bulk-edit">
@@ -1130,6 +1308,41 @@ function BulkEdit( {
 								</div>
 							</div>
 
+							<div className="catalogops-filter-row catalogops-schedule-preview">
+								{ preview ? (
+									<>
+										<p>
+											{ sprintf(
+												/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
+												__(
+													'As of now: %1$d matched · %2$d would change · %3$d would not.',
+													'catalogops'
+												),
+												preview.matched,
+												preview.applicable,
+												preview.omitted
+											) }
+										</p>
+										{ omittedBy.length > 0 && (
+											<ReasonList items={ omittedBy } />
+										) }
+									</>
+								) : (
+									<p>
+										{ __(
+											'Run Preview first to see how many items this would change, and why the rest would not.',
+											'catalogops'
+										) }
+									</p>
+								) }
+								<p className="catalogops-muted">
+									{ __(
+										'A schedule re-checks the catalog every time it runs, so these numbers can differ when it fires — the same rules decide, against the catalog as it is then.',
+										'catalogops'
+									) }
+								</p>
+							</div>
+
 							<div className="catalogops-filter-row">
 								<button
 									className="button button-primary"
@@ -1185,16 +1398,17 @@ function BulkEdit( {
 								{ sprintf(
 									/* translators: %d: number of matched products. */
 									__(
-										'Preview: none of the %d matching products will change — a field the change reads is empty or non-numeric for all of them, so they are omitted (never set to 0).',
+										'Preview: none of the %d matching products will change. Nothing will be written when you Apply.',
 										'catalogops'
 									),
 									preview.matched
 								) }
 							</p>
+							<ReasonList items={ omittedBy } />
 							{ filter.scope === 'product' && (
 								<p>
 									{ __(
-										'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those. Otherwise, check that the change reads a field these products have a value in.',
+										'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those.',
 										'catalogops'
 									) }
 								</p>
@@ -1204,27 +1418,44 @@ function BulkEdit( {
 					{ preview.matched > 0 && preview.applicable > 0 && (
 						<div className="notice notice-success">
 							<p>
-								{ preview.omitted > 0
-									? sprintf(
-											/* translators: 1: products that will change, 2: products omitted. */
-											__(
-												'Preview OK — %1$d products will be updated when you Apply. %2$d omitted because a field the change reads is empty or non-numeric (never set to 0). Only these %1$d go to the operation, so its progress and undo always match.',
-												'catalogops'
-											),
-											preview.applicable,
-											preview.omitted
-									  )
-									: sprintf(
+								{ sprintf(
+									/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
+									__(
+										'Preview: %1$d matched · %2$d will change · %3$d will not.',
+										'catalogops'
+									),
+									preview.matched,
+									preview.applicable,
+									preview.omitted
+								) }
+							</p>
+							{ omittedBy.length > 0 && (
+								<>
+									<ReasonList items={ omittedBy } />
+									<p className="catalogops-muted">
+										{ sprintf(
 											/* translators: %d: number of products that will be updated. */
 											__(
-												'Preview OK — %d products will be updated when you Apply.',
+												'Only the %d that will change go into the operation, so its progress, history, and undo all match this number.',
 												'catalogops'
 											),
 											preview.applicable
-									  ) }
-							</p>
+										) }
+									</p>
+								</>
+							) }
 						</div>
 					) }
+					{ previewWarnings.map( ( warning ) => (
+						<div
+							className="notice notice-warning"
+							key={ warning.code }
+						>
+							<p>
+								{ warningText( warning.code, warning.count ) }
+							</p>
+						</div>
+					) ) }
 				</div>
 			) }
 
@@ -1288,6 +1519,13 @@ function ChangesTable( { id } ) {
 		Math.ceil( ( data.total || 0 ) / CHANGES_PER_PAGE )
 	);
 
+	// The whole run's skip breakdown, not just this page's — the reasons are the
+	// answer to "why is applied smaller than the number I was shown", and paging
+	// through rows to reconstruct that would be absurd.
+	const skipBreakdown = ( data.skip_reasons || [] ).filter(
+		( r ) => r.count > 0
+	);
+
 	return (
 		<div>
 			<div className="catalogops-results-bar catalogops-results-bar--end">
@@ -1322,6 +1560,22 @@ function ChangesTable( { id } ) {
 				</p>
 			) }
 
+			{ skipBreakdown.length > 0 && (
+				<div className="catalogops-skip-summary">
+					<p>
+						{ sprintf(
+							/* translators: %d: number of items left unchanged. */
+							__(
+								'%d of this run’s items were not changed:',
+								'catalogops'
+							),
+							data.counts.skipped
+						) }
+					</p>
+					<ReasonList items={ skipBreakdown } />
+				</div>
+			) }
+
 			<div
 				className={ `catalogops-table-scroll${
 					loading ? ' catalogops-loading-dim' : ''
@@ -1336,12 +1590,13 @@ function ChangesTable( { id } ) {
 							<th>{ __( 'Old', 'catalogops' ) }</th>
 							<th>{ __( 'New', 'catalogops' ) }</th>
 							<th>{ __( 'Status', 'catalogops' ) }</th>
+							<th>{ __( 'Why', 'catalogops' ) }</th>
 						</tr>
 					</thead>
 					<tbody>
 						{ data.items.length === 0 ? (
 							<tr className="catalogops-empty">
-								<td colSpan="6">
+								<td colSpan="7">
 									{ __(
 										'No matching changes.',
 										'catalogops'
@@ -1382,6 +1637,15 @@ function ChangesTable( { id } ) {
 										>
 											{ c.status }
 										</span>
+									</td>
+									<td className="catalogops-why">
+										{ c.status === 'skipped' ? (
+											skipReasonLabel( c.skip_reason )
+										) : (
+											<span className="catalogops-muted">
+												—
+											</span>
+										) }
 									</td>
 								</tr>
 							) )
@@ -1629,6 +1893,18 @@ function OperationRow( { op, onChanged } ) {
 								__( '(%d failed)', 'catalogops' ),
 								op.failed
 							) }
+					{ op.status === 'queued' && (
+						<span
+							className="catalogops-inline-loading"
+							aria-live="polite"
+						>
+							<span
+								className="catalogops-spinner"
+								aria-hidden="true"
+							/>
+							{ __( 'waiting to start', 'catalogops' ) }
+						</span>
+					) }
 				</td>
 				<td>{ op.user_name || '—' }</td>
 				<td>{ op.created_at }</td>
