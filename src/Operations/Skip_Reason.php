@@ -51,6 +51,14 @@ enum Skip_Reason: string {
 	case STOCK_MANAGED = 'stock_managed';
 
 	/**
+	 * The computed value came out below zero for a field that holds money. A
+	 * negative price is not a price, and nothing downstream would refuse it —
+	 * WooCommerce's setters store what they are handed — so the write is dropped
+	 * here rather than corrected, guessed at, or let through.
+	 */
+	case NEGATIVE_VALUE = 'negative_value';
+
+	/**
 	 * The object already held the target value, so there was nothing to write.
 	 */
 	case UNCHANGED = 'unchanged';
@@ -83,6 +91,7 @@ enum Skip_Reason: string {
 			self::EMPTY_INPUT             => __( 'a field the change reads is empty or non-numeric', 'catalogops' ),
 			self::SALE_NOT_BELOW_REGULAR  => __( 'the sale price being set is not below their regular price', 'catalogops' ),
 			self::STOCK_MANAGED           => __( 'stock is managed, so WooCommerce sets the status from the quantity', 'catalogops' ),
+			self::NEGATIVE_VALUE          => __( 'the new value would be a negative price', 'catalogops' ),
 			self::UNCHANGED               => __( 'the value was already set', 'catalogops' ),
 			self::REJECTED                => __( 'WooCommerce did not keep the value', 'catalogops' ),
 			self::DRIFT                   => __( 'the object changed after the operation ran', 'catalogops' ),

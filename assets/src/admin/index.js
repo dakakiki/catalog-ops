@@ -833,6 +833,10 @@ const SKIP_REASONS = {
 		'stock is managed here, so WooCommerce sets the status from the quantity and backorder setting instead',
 		'catalogops'
 	),
+	negative_value: __(
+		'the new price would have come out negative, so their price was left as it is — a formula that subtracts a fixed amount does this to items cheaper than that amount',
+		'catalogops'
+	),
 	unchanged: __( 'the value was already set', 'catalogops' ),
 	rejected: __(
 		'WooCommerce did not keep the value — another plugin may be overriding it',

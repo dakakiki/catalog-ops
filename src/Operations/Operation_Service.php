@@ -149,6 +149,7 @@ final class Operation_Service {
 	): int {
 		$this->assert_fields_supported( $actions );
 		$this->assert_formulas_allowed( $actions );
+		$this->assert_values_writable( $actions );
 
 		return $this->operations->create( $filter, $actions, $mode, $source, $user_id );
 	}
@@ -182,6 +183,7 @@ final class Operation_Service {
 	 */
 	public function preview( Filter $filter, array $actions ): array {
 		$this->assert_fields_supported( $actions );
+		$this->assert_values_writable( $actions );
 
 		$matched      = $this->engine->count( $filter );
 		$requirements = $this->rules->requirements( $actions );
@@ -592,6 +594,50 @@ final class Operation_Service {
 					sprintf( 'No provider handles the field "%s".', $action->field() )
 				);
 			}
+		}
+	}
+
+	/**
+	 * Fail fast if an action writes a value the field cannot hold whatever object
+	 * it lands on — today, a negative price.
+	 *
+	 * Only actions with a fixed result are judged here: a literal `Set to -5`, and
+	 * a formula carrying no variables (`0 - 10`), both of which are that value for
+	 * every object in the catalogue. Refusing them at the boundary means the user
+	 * is told when they press Preview or Apply, rather than watching an operation
+	 * run to completion having changed nothing.
+	 *
+	 * A formula that reads a field cannot be judged here — `regular_price - 10` is
+	 * a fine edit that happens to go negative on cheap products — so it is left to
+	 * {@see Apply_Plan}, which drops those objects one at a time with a reason.
+	 *
+	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to check.
+	 *
+	 * @throws InvalidArgumentException When an action's fixed value is refused.
+	 */
+	private function assert_values_writable( array $actions ): void {
+		foreach ( $actions as $action ) {
+			if ( array() !== $action->reads() ) {
+				// Depends on the object; only the plan can answer it.
+				continue;
+			}
+
+			// The resolver takes no parameter because it answers nothing: an action
+			// that reads a field was already skipped above, so nothing asks.
+			$value = $action->apply( null, static fn(): mixed => null );
+
+			if ( ! $this->rules->refuses( $action->field(), $value ) ) {
+				continue;
+			}
+
+			$message = sprintf(
+				'A price cannot be negative: this would set %1$s to %2$s.',
+				$action->field(),
+				Values::to_string( $value )
+			);
+
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- UI-facing message, sanitized at the REST boundary.
+			throw new InvalidArgumentException( $message );
 		}
 	}
 

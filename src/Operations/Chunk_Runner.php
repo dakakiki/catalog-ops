@@ -211,7 +211,7 @@ final class Chunk_Runner {
 			return new Revert_Plan( $this->providers, $parent_deltas, $policy );
 		}
 
-		return new Apply_Plan( $operation->actions(), $this->providers );
+		return new Apply_Plan( $operation->actions(), $this->providers, $this->rules );
 	}
 
 	/**
