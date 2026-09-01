@@ -57,8 +57,12 @@ final class Scheduler implements Operation_Scheduler {
 	 * How often the schedule supervisor runs, in seconds. Interval presets are
 	 * hourly at the finest, so a 5-minute cadence is timely without flooding the
 	 * queue; the exact firing time depends on the host's cron regardless.
+	 *
+	 * Public because the admin screen quotes it when explaining how often the
+	 * operating system needs to drive the queue — the setup instructions and this
+	 * number have to agree, so they read the same constant.
 	 */
-	private const SCHEDULES_INTERVAL = 5 * MINUTE_IN_SECONDS;
+	public const SCHEDULES_INTERVAL = 5 * MINUTE_IN_SECONDS;
 
 	/**
 	 * Enqueue the next chunk of an operation, in its own cancellable group.
@@ -79,6 +83,50 @@ final class Scheduler implements Operation_Scheduler {
 			),
 			$this->group( $op_id )
 		);
+	}
+
+	/**
+	 * Ask Action Scheduler to start its queue now.
+	 *
+	 * Enqueueing a chunk does not start it. Action Scheduler runs its queue from
+	 * WP-Cron, or — when cron is disabled or slow — from an async loopback request
+	 * it dispatches on `shutdown`. That dispatch is gated on `is_admin()`, and the
+	 * admin app polls the REST API, where `is_admin()` is false. So nothing the
+	 * user does on the page kicks the queue: it waits for some *other* admin request
+	 * to come along (in practice WordPress's own heartbeat, every ~15 seconds, or
+	 * the next page load), which is the dead gap between pressing Apply and seeing
+	 * the bar move.
+	 *
+	 * This closes it by dispatching that same async request ourselves, deferred to
+	 * `shutdown` exactly as Action Scheduler does: the loopback costs a round trip
+	 * (about a second on a local stack), which does not belong inside the request
+	 * the user is waiting on. Registering the same callback twice is a no-op, so
+	 * calling this more than once per request dispatches once.
+	 */
+	public function kick(): void {
+		if ( ! class_exists( '\ActionScheduler' ) || ! class_exists( '\ActionScheduler_AsyncRequest_QueueRunner' ) ) {
+			return;
+		}
+
+		add_action( 'shutdown', array( $this, 'dispatch_queue_runner' ), 20 );
+	}
+
+	/**
+	 * Dispatch Action Scheduler's async queue runner. Public only because it is a
+	 * hook callback; {@see kick()} is the way in.
+	 *
+	 * Goes through Action Scheduler's own class so its guards apply unchanged — it
+	 * does nothing when the queue is at its concurrency limit, when nothing is due,
+	 * or when a site has filtered async running off. The request it makes is
+	 * non-blocking, so a host that drops loopbacks falls back to the old timing
+	 * instead of hanging the shutdown.
+	 */
+	public function dispatch_queue_runner(): void {
+		if ( ! class_exists( '\ActionScheduler' ) || ! class_exists( '\ActionScheduler_AsyncRequest_QueueRunner' ) ) {
+			return;
+		}
+
+		( new \ActionScheduler_AsyncRequest_QueueRunner( \ActionScheduler::store() ) )->maybe_dispatch();
 	}
 
 	/**

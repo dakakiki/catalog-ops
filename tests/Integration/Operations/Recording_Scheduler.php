@@ -37,6 +37,20 @@ final class Recording_Scheduler implements Operation_Scheduler {
 	}
 
 	/**
+	 * Kicks recorded, so a test can assert the queue was asked to start.
+	 *
+	 * @var int
+	 */
+	private int $kicks = 0;
+
+	/**
+	 * Record a kick rather than dispatching a loopback request.
+	 */
+	public function kick(): void {
+		++$this->kicks;
+	}
+
+	/**
 	 * Cancellation is a no-op for the recorder.
 	 *
 	 * @param int $op_id Operation id.
@@ -48,5 +62,12 @@ final class Recording_Scheduler implements Operation_Scheduler {
 	 */
 	public function count(): int {
 		return count( $this->enqueued );
+	}
+
+	/**
+	 * How many times the queue was asked to start.
+	 */
+	public function kick_count(): int {
+		return $this->kicks;
 	}
 }

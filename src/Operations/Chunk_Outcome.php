@@ -17,7 +17,8 @@ namespace CatalogOps\Operations;
  *
  * Each applied entry carries the value read before the write (old) and the value
  * staged (new); each skipped entry carries the value read before skipping, if
- * any, so it can be recorded on the row.
+ * any, plus the {@see Skip_Reason} for it — a skip a user cannot see the reason
+ * for is not a report, it is a shrug.
  */
 final class Chunk_Outcome {
 
@@ -29,9 +30,9 @@ final class Chunk_Outcome {
 	private array $applied = array();
 
 	/**
-	 * Rows left untouched, each {row: Change, old: ?string}.
+	 * Rows left untouched, each {row: Change, old: ?string, reason: Skip_Reason}.
 	 *
-	 * @var list<array{row: Change, old: ?string}>
+	 * @var list<array{row: Change, old: ?string, reason: Skip_Reason}>
 	 */
 	private array $skipped = array();
 
@@ -53,13 +54,15 @@ final class Chunk_Outcome {
 	/**
 	 * Record that a row was skipped (an empty formula, or a drift conflict).
 	 *
-	 * @param Change      $row The change row.
-	 * @param string|null $old Value read before skipping, if any.
+	 * @param Change      $row    The change row.
+	 * @param string|null $old    Value read before skipping, if any.
+	 * @param Skip_Reason $reason Why the row was left untouched.
 	 */
-	public function record_skipped( Change $row, ?string $old ): void {
+	public function record_skipped( Change $row, ?string $old, Skip_Reason $reason ): void {
 		$this->skipped[] = array(
-			'row' => $row,
-			'old' => $old,
+			'row'    => $row,
+			'old'    => $old,
+			'reason' => $reason,
 		);
 	}
 
@@ -75,7 +78,7 @@ final class Chunk_Outcome {
 	/**
 	 * The rows left untouched.
 	 *
-	 * @return list<array{row: Change, old: ?string}>
+	 * @return list<array{row: Change, old: ?string, reason: Skip_Reason}>
 	 */
 	public function skipped(): array {
 		return $this->skipped;

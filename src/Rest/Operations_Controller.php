@@ -313,7 +313,18 @@ final class Operations_Controller {
 			return $this->error( 'catalogops_not_found', 'Operation not found.', 404 );
 		}
 
-		return new WP_REST_Response( $this->to_array( $operation ) );
+		$body = $this->to_array( $operation );
+
+		// The reason breakdown is what turns a finished run's "N skipped" into
+		// something a user can act on, so the result bar gets it as soon as the
+		// operation settles. Only then: while it is still running the counts are
+		// half-formed, and a grouped scan of the operation's rows on every 1.5s poll
+		// would be paid for nothing.
+		if ( ! $operation->status->is_active() ) {
+			$body['skip_reasons'] = $this->changes->skip_reasons( $operation->id );
+		}
+
+		return new WP_REST_Response( $body );
 	}
 
 	/**
@@ -427,10 +438,11 @@ final class Operations_Controller {
 
 		return new WP_REST_Response(
 			array(
-				'items'  => $rows,
-				'counts' => $this->changes->counts( $id ),
-				'total'  => $this->changes->count_page( $id, $object_id, $sku ),
-				'page'   => $page,
+				'items'        => $rows,
+				'counts'       => $this->changes->counts( $id ),
+				'skip_reasons' => $this->changes->skip_reasons( $id ),
+				'total'        => $this->changes->count_page( $id, $object_id, $sku ),
+				'page'         => $page,
 			)
 		);
 	}
@@ -608,6 +620,7 @@ final class Operations_Controller {
 			'old_value'   => $change->old_value,
 			'new_value'   => $change->new_value,
 			'status'      => $labels[ $change->status->value ] ?? 'pending',
+			'skip_reason' => null === $change->skip_reason ? '' : $change->skip_reason->value,
 		);
 	}
 

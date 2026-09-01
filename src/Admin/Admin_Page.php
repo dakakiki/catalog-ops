@@ -8,6 +8,7 @@
 namespace CatalogOps\Admin;
 
 use CatalogOps\Licensing\License;
+use CatalogOps\Operations\Scheduler;
 
 /**
  * Registers the top-level admin menu, renders the mount point, and enqueues the
@@ -146,7 +147,33 @@ final class Admin_Page {
 					// null means unbounded (paid); a number is the free-tier cap.
 					'maxObjectsPerOp' => $this->license->is_premium() ? null : $this->license->max_objects_per_op(),
 				),
+				'cron'         => $this->cron_config(),
 			)
+		);
+	}
+
+	/**
+	 * What the Scheduling panel needs to print working setup commands for *this*
+	 * install rather than a generic example.
+	 *
+	 * A schedule is only as reliable as whatever drives WordPress's background
+	 * queue, so the Scheduling panel shows the one-time task or cron entry that
+	 * does it — with this site's URL filled in, to be copied rather than adapted.
+	 *
+	 * Both platforms fetch the same URL with curl, which needs nothing installed:
+	 * shop owners have a Task Scheduler dialog or a hosting panel, not a shell and
+	 * not WP-CLI, and an instruction they cannot follow is not an instruction.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function cron_config(): array {
+		return array(
+			'cronUrl'           => site_url( 'wp-cron.php?doing_wp_cron=1' ),
+			// Which tab to open first. Only a default — both are always available,
+			// since the browser's OS need not be the server's.
+			'isWindows'         => 'WIN' === strtoupper( substr( PHP_OS, 0, 3 ) ),
+			// How often the queue must be driven for schedules to fire on time.
+			'supervisorMinutes' => (int) ( Scheduler::SCHEDULES_INTERVAL / MINUTE_IN_SECONDS ),
 		);
 	}
 }

@@ -88,6 +88,13 @@ final class Operation_Service {
 	private License $license;
 
 	/**
+	 * The rules deciding which objects a change can actually be written to.
+	 *
+	 * @var Write_Rules
+	 */
+	private Write_Rules $rules;
+
+	/**
 	 * Build the service.
 	 *
 	 * @param Query_Engine        $engine     Query engine.
@@ -98,6 +105,8 @@ final class Operation_Service {
 	 * @param Operation_Scheduler $scheduler Scheduler for chunk hand-off/cancel.
 	 * @param License|null        $license    Plan gating; defaults to unlimited
 	 *                                        (unlicensed development and tests).
+	 * @param Write_Rules|null    $rules      Applicability rules; the default set is
+	 *                                        stateless, so it is built when omitted.
 	 */
 	public function __construct(
 		Query_Engine $engine,
@@ -106,7 +115,8 @@ final class Operation_Service {
 		Field_Providers $providers,
 		Lock $lock,
 		Operation_Scheduler $scheduler,
-		?License $license = null
+		?License $license = null,
+		?Write_Rules $rules = null
 	) {
 		$this->engine     = $engine;
 		$this->operations = $operations;
@@ -115,6 +125,7 @@ final class Operation_Service {
 		$this->lock       = $lock;
 		$this->scheduler  = $scheduler;
 		$this->license    = $license ?? License::unlimited();
+		$this->rules      = $rules ?? new Write_Rules();
 	}
 
 	/**
@@ -144,69 +155,94 @@ final class Operation_Service {
 
 	/**
 	 * Dry-run a filter and actions without writing (CONTEXT §2, the Preview step):
-	 * how many objects the filter matches, and of those how many the edit will
-	 * actually change versus omit.
+	 * how many objects the filter matches, of those how many the edit will actually
+	 * change, and — for the rest — exactly why not.
 	 *
-	 * An object is omitted when the edit reads a field it does not carry: the
-	 * formula engine skips on any empty or non-numeric input (strict null
-	 * propagation), so requiring the read fields present up front makes the
-	 * "applicable" count equal what execution applies — and what an undo reverts.
-	 * A literal {@see Actions\Set_Value} reads nothing, so every match is applicable.
+	 * An object is omitted when the edit cannot be written to it: it lacks a field
+	 * the change reads (the formula engine skips on any empty or non-numeric input,
+	 * never coercing to zero), or WooCommerce would refuse the value on save and
+	 * keep what was there. Each of those is a {@see Write_Rules} requirement,
+	 * enforced identically here and at {@see queue()}, which is what makes the
+	 * previewed count equal what execution applies — and what an undo reverts.
+	 *
+	 * The per-reason counts partition the omitted total exactly: each requirement is
+	 * added to the previous ones, so an object is attributed to the first rule it
+	 * fails rather than to every rule it fails. They therefore always sum to
+	 * `omitted`, whatever the overlap between rules.
+	 *
+	 * Warnings are the other direction — objects the change applies to perfectly
+	 * well but damages in passing, such as the sale prices a lower regular price
+	 * wipes. They are counted, never subtracted.
 	 *
 	 * @param Filter                                  $filter  Target filter.
 	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to apply.
-	 * @return array{matched: int, applicable: int, omitted: int}
+	 * @return array{matched: int, applicable: int, omitted: int, omitted_by: list<array{reason: string, count: int}>, warnings: list<array{code: string, count: int}>}
 	 *
 	 * @throws InvalidArgumentException When an action targets an unsupported field.
 	 */
 	public function preview( Filter $filter, array $actions ): array {
 		$this->assert_fields_supported( $actions );
 
-		$matched  = $this->engine->count( $filter );
-		$required = $this->required_meta_keys( $actions );
+		$matched      = $this->engine->count( $filter );
+		$requirements = $this->rules->requirements( $actions );
 
-		$applicable = array() === $required
-			? $matched
-			: $this->engine->count( $filter, $required );
+		$applicable = $matched;
+		$omitted_by = array();
+		$applied    = array();
+
+		// Add one requirement at a time: the drop in the count is precisely the
+		// objects this rule is the first to exclude.
+		foreach ( $requirements as $requirement ) {
+			$applied[]  = $requirement;
+			$remaining  = 0 === $applicable ? 0 : $this->engine->count( $filter, $applied );
+			$difference = $applicable - $remaining;
+			$applicable = $remaining;
+
+			if ( $difference > 0 ) {
+				$omitted_by[] = array(
+					'reason' => $requirement->reason(),
+					'count'  => $difference,
+				);
+			}
+		}
 
 		return array(
 			'matched'    => $matched,
 			'applicable' => $applicable,
 			'omitted'    => $matched - $applicable,
+			'omitted_by' => $omitted_by,
+			'warnings'   => $this->count_warnings( $filter, $actions, $matched ),
 		);
 	}
 
 	/**
-	 * The postmeta keys an object must carry non-empty for the actions to compute
-	 * a value — the actions' read fields ({@see Actions\Action::reads()}) mapped to
-	 * where WooCommerce stores them. Core price/stock fields live under their `_`
-	 * meta keys; `meta:` fields under the bare key. Unknown reads impose no
-	 * constraint (their presence cannot be tested here), erring toward including.
+	 * Count the objects each of the actions' collateral warnings applies to,
+	 * dropping the ones that affect nothing so the UI only ever shows live numbers.
 	 *
-	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to inspect.
-	 * @return list<string>
+	 * @param Filter                                  $filter  Target filter.
+	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to apply.
+	 * @param int                                     $matched Objects the filter matched.
+	 * @return list<array{code: string, count: int}>
 	 */
-	private function required_meta_keys( array $actions ): array {
-		$core = array(
-			'regular_price'  => '_regular_price',
-			'sale_price'     => '_sale_price',
-			'stock_quantity' => '_stock',
-			'weight'         => '_weight',
-		);
+	private function count_warnings( Filter $filter, array $actions, int $matched ): array {
+		if ( 0 === $matched ) {
+			return array();
+		}
 
-		$keys = array();
+		$warnings = array();
 
-		foreach ( $actions as $action ) {
-			foreach ( $action->reads() as $field ) {
-				if ( isset( $core[ $field ] ) ) {
-					$keys[] = $core[ $field ];
-				} elseif ( str_starts_with( $field, 'meta:' ) ) {
-					$keys[] = substr( $field, strlen( 'meta:' ) );
-				}
+		foreach ( $this->rules->warnings( $actions ) as $warning ) {
+			$count = $this->engine->count( $filter, $warning['predicates'] );
+
+			if ( $count > 0 ) {
+				$warnings[] = array(
+					'code'  => $warning['code'],
+					'count' => $count,
+				);
 			}
 		}
 
-		return array_values( array_unique( $keys ) );
+		return $warnings;
 	}
 
 	/**
@@ -360,6 +396,13 @@ final class Operation_Service {
 			$this->operations->touch( $op_id );
 
 			$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
+
+			// Enqueueing does not start the work. Ask the queue to begin now, so the
+			// user watches a bar move rather than a queued operation sitting still
+			// until some unrelated request wakes the scheduler. Best-effort: the run
+			// happens either way, this only decides how soon.
+			$this->scheduler->kick();
+
 			$handed_off = true;
 		} finally {
 			if ( ! $handed_off ) {
@@ -385,11 +428,14 @@ final class Operation_Service {
 		$filter = $operation->filter();
 
 		// The one-and-only filter resolution (CONTEXT §2), narrowed to the objects
-		// the edit can actually change: those carrying every field it reads. An
-		// object missing one would be skipped at execution, so leaving it out here
-		// makes the frozen target count equal what is applied — and what an undo
-		// later reverts — so progress never disagrees with the outcome.
-		$ids = $this->engine->resolve( $filter, $this->required_meta_keys( $actions ) );
+		// the edit can actually change: those carrying every field it reads, and
+		// those whose new value WooCommerce will keep rather than override on save.
+		// An object failing either would be skipped at execution, so leaving it out
+		// here makes the frozen target count equal what is applied — and what an
+		// undo later reverts — so progress never disagrees with the outcome. These
+		// are the same requirements {@see preview()} counted, so the number the user
+		// was shown is the number that runs.
+		$ids = $this->engine->resolve( $filter, $this->rules->requirements( $actions ) );
 
 		if ( array() === $ids ) {
 			return 0;

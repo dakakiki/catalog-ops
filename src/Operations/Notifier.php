@@ -125,6 +125,22 @@ final class Notifier {
 			__( 'Targets:', 'catalogops' ) . '  ' . $operation->target_count,
 			__( 'Changed:', 'catalogops' ) . '  ' . $counts['applied'],
 			__( 'Skipped:', 'catalogops' ) . '  ' . $counts['skipped'],
+		);
+
+		// A bare skipped count leaves the reader guessing at exactly the moment they
+		// cannot come and look; the breakdown is the point of the report.
+		foreach ( $this->changes->skip_reasons( $operation->id ) as $reason ) {
+			$explanation = Skip_Reason::tryFrom( $reason['reason'] );
+
+			$lines[] = '  - ' . $reason['count'] . ': ' . (
+				null === $explanation
+					? __( 'no reason recorded', 'catalogops' )
+					: $explanation->label()
+			);
+		}
+
+		$lines = array(
+			...$lines,
 			__( 'Failed:', 'catalogops' ) . '   ' . $counts['failed'],
 			'',
 			sprintf(

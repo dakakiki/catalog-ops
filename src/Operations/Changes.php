@@ -384,15 +384,57 @@ final class Changes {
 	}
 
 	/**
-	 * Mark a still-pending row as skipped (e.g. a formula over an empty field, or
-	 * a drift conflict in M3).
+	 * Mark a still-pending row as skipped, recording why. The reason is what makes
+	 * the row useful afterwards: "432 skipped" is noise, "432 skipped — the sale
+	 * price is not below the regular price" is an answer.
 	 *
-	 * @param int         $id        Change row id.
-	 * @param string|null $old_value Value read before skipping, if any.
+	 * @param int              $id        Change row id.
+	 * @param string|null      $old_value Value read before skipping, if any.
+	 * @param Skip_Reason|null $reason    Why the row was left untouched. Null only for
+	 *                                    a caller that genuinely cannot tell.
 	 * @return bool Whether this call claimed the row.
 	 */
-	public function mark_skipped( int $id, ?string $old_value = null ): bool {
-		return $this->set_terminal_status( $id, Change_Status::SKIPPED, $old_value );
+	public function mark_skipped( int $id, ?string $old_value = null, ?Skip_Reason $reason = null ): bool {
+		return $this->set_terminal_status( $id, Change_Status::SKIPPED, $old_value, $reason );
+	}
+
+	/**
+	 * How many of an operation's rows were skipped for each reason, largest group
+	 * first — the breakdown behind a completed operation's "N skipped". Rows written
+	 * before the reason column existed group under an empty code, which the readers
+	 * render as an unspecified skip rather than inventing one.
+	 *
+	 * @param int $operation_id Operation id.
+	 * @return list<array{reason: string, count: int}>
+	 */
+	public function skip_reasons( int $operation_id ): array {
+		$table = $this->schema->changes_table();
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT skip_reason, COUNT(*) AS total
+				FROM {$table}
+				WHERE operation_id = %d AND status = %d
+				GROUP BY skip_reason
+				ORDER BY total DESC",
+				$operation_id,
+				Change_Status::SKIPPED->value
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$reasons = array();
+
+		foreach ( $rows as $row ) {
+			$reasons[] = array(
+				'reason' => (string) ( $row['skip_reason'] ?? '' ),
+				'count'  => (int) $row['total'],
+			);
+		}
+
+		return $reasons;
 	}
 
 	/**
@@ -499,19 +541,21 @@ final class Changes {
 	/**
 	 * Flip a pending row to a terminal status, recording the old value if given.
 	 *
-	 * @param int           $id     Change row id.
-	 * @param Change_Status $status Terminal status to set.
-	 * @param string|null   $old    Value read before the transition, if any.
+	 * @param int              $id     Change row id.
+	 * @param Change_Status    $status Terminal status to set.
+	 * @param string|null      $old    Value read before the transition, if any.
+	 * @param Skip_Reason|null $reason Why the row was skipped, when it was.
 	 */
-	private function set_terminal_status( int $id, Change_Status $status, ?string $old ): bool {
+	private function set_terminal_status( int $id, Change_Status $status, ?string $old, ?Skip_Reason $reason = null ): bool {
 		$table = $this->schema->changes_table();
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$affected = $this->wpdb->query(
 			$this->wpdb->prepare(
-				"UPDATE {$table} SET status = %d, old_value = %s WHERE id = %d AND status = 0",
+				"UPDATE {$table} SET status = %d, old_value = %s, skip_reason = %s WHERE id = %d AND status = 0",
 				$status->value,
 				$old,
+				null === $reason ? null : $reason->value,
 				$id
 			)
 		);
@@ -536,6 +580,7 @@ final class Changes {
 			null === $row['old_value'] ? null : (string) $row['old_value'],
 			null === $row['new_value'] ? null : (string) $row['new_value'],
 			Change_Status::from( (int) $row['status'] ),
+			Skip_Reason::tryFrom( (string) ( $row['skip_reason'] ?? '' ) ),
 		);
 	}
 }
