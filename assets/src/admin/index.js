@@ -3891,6 +3891,7 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 }
 
 function Schedules( { refreshKey, onRan } ) {
+	const canSchedule = can( 'canSchedule' );
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ localKey, setLocalKey ] = useState( 0 );
@@ -3956,15 +3957,36 @@ function Schedules( { refreshKey, onRan } ) {
 			.finally( () => setBusyId( null ) );
 	};
 
+	// On a plan without scheduling the card would otherwise stand there with an
+	// empty table and instructions for a control the user cannot reach. It says
+	// what it is instead. Existing schedules still show: a plan can lapse, and the
+	// endpoints that pause, run and delete are deliberately ungated so nobody is
+	// locked out of cleaning up what they already made.
+	const gated = ! canSchedule && items.length === 0;
+
 	return (
 		<div className="catalogops-card catalogops-schedules">
 			<h2>{ __( 'Schedules', 'catalogops' ) }</h2>
 			<p className="description">
-				{ __(
-					'Operations set to run later or on a recurring basis. Create one in Bulk edit above: set the change, then pick “On a schedule” under When. A completion report is emailed for each run.',
-					'catalogops'
-				) }
+				{ canSchedule
+					? __(
+							'Operations set to run later or on a recurring basis. Create one in Bulk edit above: set the change, then pick “On a schedule” under When. A completion report is emailed for each run.',
+							'catalogops'
+					  )
+					: __(
+							'Run a change later, or over and over — nightly repricing, a sale that starts on Friday — with a completion report emailed for each run.',
+							'catalogops'
+					  ) }
 			</p>
+
+			{ ! canSchedule && (
+				<UpsellNotice>
+					{ __(
+						'Scheduling is available on a paid plan.',
+						'catalogops'
+					) }
+				</UpsellNotice>
+			) }
 
 			{ error && (
 				<div className="notice notice-error">
@@ -3978,56 +4000,63 @@ function Schedules( { refreshKey, onRan } ) {
 				</div>
 			) }
 
-			<div className="catalogops-overlay-wrap">
-				<table className="wp-list-table widefat fixed striped">
-					<thead>
-						<tr>
-							<th>{ __( 'Name', 'catalogops' ) }</th>
-							<th>{ __( 'Repeat', 'catalogops' ) }</th>
-							<th>{ __( 'Status', 'catalogops' ) }</th>
-							<th>{ __( 'Next run', 'catalogops' ) }</th>
-							<th>{ __( 'Last run', 'catalogops' ) }</th>
-							<th className="catalogops-cell--actions">
-								{ __( 'Actions', 'catalogops' ) }
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						{ items.length === 0 ? (
-							<tr className="catalogops-empty">
-								<td colSpan="6">
-									{ __( 'No schedules yet.', 'catalogops' ) }
-								</td>
+			{ ! gated && (
+				<div className="catalogops-overlay-wrap">
+					<table className="wp-list-table widefat fixed striped">
+						<thead>
+							<tr>
+								<th>{ __( 'Name', 'catalogops' ) }</th>
+								<th>{ __( 'Repeat', 'catalogops' ) }</th>
+								<th>{ __( 'Status', 'catalogops' ) }</th>
+								<th>{ __( 'Next run', 'catalogops' ) }</th>
+								<th>{ __( 'Last run', 'catalogops' ) }</th>
+								<th className="catalogops-cell--actions">
+									{ __( 'Actions', 'catalogops' ) }
+								</th>
 							</tr>
-						) : (
-							items.map( ( s ) => (
-								<ScheduleRow
-									key={ s.id }
-									schedule={ s }
-									busy={ busyId === s.id }
-									onAct={ act }
-									onDelete={ remove }
-								/>
-							) )
-						) }
-					</tbody>
-				</table>
-				{ busyId !== null && (
-					<div className="catalogops-overlay">
-						<span
-							className="catalogops-spinner"
-							aria-hidden="true"
-						/>
-					</div>
-				) }
-			</div>
+						</thead>
+						<tbody>
+							{ items.length === 0 ? (
+								<tr className="catalogops-empty">
+									<td colSpan="6">
+										{ __(
+											'No schedules yet.',
+											'catalogops'
+										) }
+									</td>
+								</tr>
+							) : (
+								items.map( ( s ) => (
+									<ScheduleRow
+										key={ s.id }
+										schedule={ s }
+										busy={ busyId === s.id }
+										onAct={ act }
+										onDelete={ remove }
+									/>
+								) )
+							) }
+						</tbody>
+					</table>
+					{ busyId !== null && (
+						<div className="catalogops-overlay">
+							<span
+								className="catalogops-spinner"
+								aria-hidden="true"
+							/>
+						</div>
+					) }
+				</div>
+			) }
 
-			<Pagination
-				page={ page }
-				pages={ Math.ceil( total / perPage ) }
-				busy={ busyId !== null }
-				onPage={ setPage }
-			/>
+			{ ! gated && (
+				<Pagination
+					page={ page }
+					pages={ Math.ceil( total / perPage ) }
+					busy={ busyId !== null }
+					onPage={ setPage }
+				/>
+			) }
 		</div>
 	);
 }

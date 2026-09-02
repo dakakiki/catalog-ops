@@ -4,7 +4,7 @@ Tags: woocommerce, bulk edit, products, variations, undo
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.7.0
+Stable tag: 0.7.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -78,6 +78,9 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 
 == Changelog ==
 
+= 0.7.1 =
+* The Schedules panel says scheduling is a paid feature instead of showing an empty table and instructions for a control the plan cannot reach. Schedules already created stay listed and manageable.
+
 = 0.7.0 =
 * **Preview shows the work, not just the count** — a table of old → new values for the products the change would touch, with a SKU search to check any one of them.
 * **Amount** — raise or lower a price by a fixed sum, alongside the percentage. Available on the free plan.
@@ -105,6 +108,9 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 * Read-only query engine, filter structure, saved filters, product table.
 
 == Upgrade Notice ==
+
+= 0.7.1 =
+The Schedules panel now explains itself on a plan without scheduling. No action needed.
 
 = 0.7.0 =
 Preview now shows old → new values per product, prices can be moved by a fixed amount, and applying versus scheduling is a single choice. No action needed.
