@@ -1512,16 +1512,22 @@ function BulkEdit( {
 	const searching = previewSku.trim() !== '';
 
 	// Ten rows out of thousands is a sample, and saying so is the difference
-	// between an illustration and a false promise of completeness.
+	// between an illustration and a false promise of completeness. Unlike the
+	// results table above, these rows have no pager behind them: the search is the
+	// only way to reach a product that is not among the ten, so the caption says
+	// so rather than leaving it to be discovered.
 	const sampleCaption = searching
 		? sprintf(
 				/* translators: %s: the SKU searched for. */
-				__( 'Matching “%s”:', 'catalogops' ),
+				__( 'Matching “%s”.', 'catalogops' ),
 				previewSku.trim()
 		  )
 		: sprintf(
 				/* translators: 1: rows shown, 2: total that will change. */
-				__( 'Showing %1$d of %2$d that will change:', 'catalogops' ),
+				__(
+					'A sample: %1$d of the %2$d that will change. Search by SKU to check a particular one.',
+					'catalogops'
+				),
 				previewSample.length,
 				preview ? preview.applicable : 0
 		  );
