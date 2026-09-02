@@ -161,6 +161,40 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertNotEmpty( $response->get_data()['items'] );
 	}
 
+	public function test_index_pages_the_history_and_reports_how_far_it_goes(): void {
+		// Twelve, so the default ten leaves a second page with a remainder on it.
+		$ids = array();
+		for ( $i = 0; $i < 12; $i++ ) {
+			$ids[] = $this->draft_operation();
+		}
+
+		$first = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/operations' ) )->get_data();
+
+		$this->assertCount( 10, $first['items'] );
+		// The count is the whole history, not the page — without it the list used
+		// to stop at its own page size with no sign there was more behind it.
+		$this->assertSame( 12, $first['total'] );
+		$this->assertSame( 1, $first['page'] );
+		$this->assertSame( 10, $first['per_page'] );
+
+		// Newest first, so the first page opens on the last operation created.
+		$this->assertSame( end( $ids ), $first['items'][0]['id'] );
+
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/operations' );
+		$request->set_param( 'page', 2 );
+		$second = rest_do_request( $request )->get_data();
+
+		$this->assertCount( 2, $second['items'] );
+		$this->assertSame( 2, $second['page'] );
+
+		// The two pages partition the history — no row is shown twice or missed.
+		$paged = array_merge(
+			array_column( $first['items'], 'id' ),
+			array_column( $second['items'], 'id' )
+		);
+		$this->assertSame( array_reverse( $ids ), $paged );
+	}
+
 	public function test_changes_endpoint_returns_deltas_and_counts(): void {
 		$op_id = $this->completed_operation( array( 501, 502 ) );
 
@@ -357,6 +391,19 @@ final class OperationsControllerTest extends Operations_Database_Case {
 	 * @param int[] $object_ids Object ids that were changed.
 	 * @return int Operation id.
 	 */
+	/**
+	 * A bare draft operation, for tests that only care that a row exists.
+	 */
+	private function draft_operation(): int {
+		return $this->operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			get_current_user_id()
+		);
+	}
+
 	private function completed_operation( array $object_ids ): int {
 		$op_id = $this->operations->create(
 			new Filter(),

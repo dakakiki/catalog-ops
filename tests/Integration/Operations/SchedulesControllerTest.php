@@ -13,15 +13,19 @@
 namespace CatalogOps\Tests\Integration\Operations;
 
 use CatalogOps\Licensing\License;
+use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Changes;
 use CatalogOps\Operations\Fields\Core_Fields;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Operations\Fields\Meta_Fields;
 use CatalogOps\Operations\Lock;
 use CatalogOps\Operations\Operation_Service;
+use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Recurrence;
 use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedules;
+use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Rest\Schedules_Controller;
 use WP_Error;
@@ -63,6 +67,43 @@ final class SchedulesControllerTest extends Operations_Database_Case {
 		$this->assertInstanceOf( WP_REST_Response::class, $response );
 		$this->assertSame( 201, $response->get_status() );
 		$this->assertNotEmpty( $this->schedules->all() );
+	}
+
+	public function test_index_pages_the_list_and_reports_the_whole_count(): void {
+		$ids = array();
+		for ( $i = 0; $i < 12; $i++ ) {
+			$ids[] = $this->schedules->create(
+				'QC Schedule ' . $i,
+				new Filter(),
+				array( new Set_Value( 'regular_price', '9.99' ) ),
+				Operation_Mode::SAFE,
+				Recurrence::DAILY,
+				'2026-09-02 03:00:00',
+				'',
+				get_current_user_id()
+			);
+		}
+
+		$controller = $this->controller_for( License::unlimited() );
+
+		$first = $controller->index( new WP_REST_Request( 'GET', '/catalogops/v1/schedules' ) )->get_data();
+
+		$this->assertCount( 10, $first['items'] );
+		$this->assertSame( 12, $first['total'] );
+		$this->assertSame( 1, $first['page'] );
+
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/schedules' );
+		$request->set_param( 'page', 2 );
+		$second = $controller->index( $request )->get_data();
+
+		$this->assertCount( 2, $second['items'] );
+
+		// Newest first, and the two pages together are the whole list exactly once.
+		$paged = array_merge(
+			array_column( $first['items'], 'id' ),
+			array_column( $second['items'], 'id' )
+		);
+		$this->assertSame( array_reverse( $ids ), $paged );
 	}
 
 	public function test_start_time_is_read_as_the_sites_own_clock(): void {

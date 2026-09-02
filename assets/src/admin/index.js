@@ -93,6 +93,17 @@ const EDITABLE_FIELDS = [
 ];
 
 /**
+ * The fields that hold money, and so cannot take a value below zero. Mirrors the
+ * server-side rule in CatalogOps\Operations\Write_Rules, so the control refuses
+ * what the write engine would refuse and the answer arrives before the request
+ * rather than after it.
+ *
+ * Stock quantity is deliberately absent: WooCommerce uses negative quantities for
+ * backorders, so a minus there is meaningful.
+ */
+const MONEY_FIELDS = [ 'regular_price', 'sale_price' ];
+
+/**
  * The fields a formula or percentage change can target — prices only. Percentage
  * and formula edits don't make sense for stock quantity or status, so those are
  * "Set to" only; `stock` is still available as a formula variable to read.
@@ -334,6 +345,51 @@ const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
  * readable well before it stops fitting.
  */
 const MAX_CHIPS = 3;
+
+/**
+ * Previous / Next around a page count.
+ *
+ * Renders nothing for a single page: a pager with both buttons disabled is a
+ * control whose only message is that there is nowhere to go.
+ *
+ * @param {Object}   props        Component props.
+ * @param {number}   props.page   Current page, 1-based.
+ * @param {number}   props.pages  How many pages there are.
+ * @param {boolean}  props.busy   Whether a request is in flight.
+ * @param {Function} props.onPage Called with the page to move to.
+ */
+function Pagination( { page, pages, busy = false, onPage } ) {
+	if ( pages <= 1 ) {
+		return null;
+	}
+
+	return (
+		<div className="catalogops-pagination">
+			<button
+				className="button"
+				disabled={ page <= 1 || busy }
+				onClick={ () => onPage( page - 1 ) }
+			>
+				{ __( 'Previous', 'catalogops' ) }
+			</button>
+			<span className="catalogops-page">
+				{ sprintf(
+					/* translators: 1: current page, 2: total pages. */
+					__( 'Page %1$d of %2$d', 'catalogops' ),
+					page,
+					pages
+				) }
+			</span>
+			<button
+				className="button"
+				disabled={ page >= pages || busy }
+				onClick={ () => onPage( page + 1 ) }
+			>
+				{ __( 'Next', 'catalogops' ) }
+			</button>
+		</div>
+	);
+}
 
 /**
  * What to do when a filter finds nothing here but something next door.
@@ -1210,11 +1266,20 @@ function BulkEdit( {
 		( mode === 'formula' && expression.trim() !== '' ) ||
 		( mode === 'percent' && percentExpression !== '' );
 
+	// Any edit to the change invalidates the last answer — the preview, and equally
+	// whatever the server refused. Leaving a refusal on screen while the inputs
+	// move on is how "a price cannot be negative" ends up sitting under a
+	// percentage that has nothing to do with it.
+	const invalidate = () => {
+		setPreview( null );
+		setError( '' );
+	};
+
 	// Switching to a numeric-only mode off a non-numeric field (stock_status)
 	// falls back to a sensible numeric field.
 	const changeMode = ( next ) => {
 		setMode( next );
-		setPreview( null );
+		invalidate();
 		if (
 			next !== 'set' &&
 			! NUMERIC_FIELDS.some( ( f ) => f.key === field )
@@ -1440,7 +1505,7 @@ function BulkEdit( {
 									onChange={ ( e ) => {
 										setField( e.target.value );
 										setValue( '' );
-										setPreview( null );
+										invalidate();
 									} }
 								>
 									{ fieldOptions.map( ( f ) => (
@@ -1460,9 +1525,10 @@ function BulkEdit( {
 										<select
 											id="catalogops-value"
 											value={ value }
-											onChange={ ( e ) =>
-												setValue( e.target.value )
-											}
+											onChange={ ( e ) => {
+												invalidate();
+												setValue( e.target.value );
+											} }
 										>
 											<option value="">
 												{ __(
@@ -1490,13 +1556,28 @@ function BulkEdit( {
 											</option>
 										</select>
 									) : (
+										// Every other editable field is a number, and
+										// a price is a number that cannot be negative.
+										// The engine refuses one either way; saying so
+										// in the control beats saying it in an error.
 										<input
 											id="catalogops-value"
-											type="text"
-											value={ value }
-											onChange={ ( e ) =>
-												setValue( e.target.value )
+											type="number"
+											step={
+												'stock_quantity' === field
+													? '1'
+													: 'any'
 											}
+											min={
+												MONEY_FIELDS.includes( field )
+													? '0'
+													: undefined
+											}
+											value={ value }
+											onChange={ ( e ) => {
+												invalidate();
+												setValue( e.target.value );
+											} }
 										/>
 									) }
 								</div>
@@ -1527,9 +1608,10 @@ function BulkEdit( {
 													? ' is-active'
 													: ''
 											}` }
-											onClick={ () =>
-												setDirection( 'increase' )
-											}
+											onClick={ () => {
+												invalidate();
+												setDirection( 'increase' );
+											} }
 										>
 											{ __( 'Increase', 'catalogops' ) }
 										</button>
@@ -1540,9 +1622,10 @@ function BulkEdit( {
 													? ' is-active'
 													: ''
 											}` }
-											onClick={ () =>
-												setDirection( 'decrease' )
-											}
+											onClick={ () => {
+												invalidate();
+												setDirection( 'decrease' );
+											} }
 										>
 											{ __( 'Decrease', 'catalogops' ) }
 										</button>
@@ -1572,9 +1655,10 @@ function BulkEdit( {
 												: undefined
 										}
 										value={ percent }
-										onChange={ ( e ) =>
-											setPercent( e.target.value )
-										}
+										onChange={ ( e ) => {
+											invalidate();
+											setPercent( e.target.value );
+										} }
 									/>
 								</div>
 							) }
@@ -1590,9 +1674,10 @@ function BulkEdit( {
 										rows={ 3 }
 										placeholder="roundto( cost * 1.35, 0.99 )"
 										value={ expression }
-										onChange={ ( e ) =>
-											setExpression( e.target.value )
-										}
+										onChange={ ( e ) => {
+											invalidate();
+											setExpression( e.target.value );
+										} }
 									/>
 									<div className="catalogops-formula-guide">
 										<p>
@@ -1843,6 +1928,11 @@ function BulkEdit( {
 					) }
 				</p>
 			) }
+
+			{ /* Scheduling is a different question from the change itself — when to
+			     run it, not what it does — so it gets a rule to sit behind rather
+			     than reading as one more row of the Change group. */ }
+			<hr className="catalogops-divider" />
 
 			<div className="catalogops-controls catalogops-schedule-form">
 				<div className="catalogops-control-group">
@@ -2335,30 +2425,12 @@ function ChangesTable( { id } ) {
 				</table>
 			</div>
 
-			<div className="catalogops-pagination">
-				<button
-					className="button"
-					disabled={ page <= 1 || loading }
-					onClick={ () => setPage( page - 1 ) }
-				>
-					{ __( 'Previous', 'catalogops' ) }
-				</button>
-				<span className="catalogops-page">
-					{ sprintf(
-						/* translators: 1: current page, 2: total pages. */
-						__( 'Page %1$d of %2$d', 'catalogops' ),
-						page,
-						pages
-					) }
-				</span>
-				<button
-					className="button"
-					disabled={ page >= pages || loading }
-					onClick={ () => setPage( page + 1 ) }
-				>
-					{ __( 'Next', 'catalogops' ) }
-				</button>
-			</div>
+			<Pagination
+				page={ page }
+				pages={ pages }
+				busy={ loading }
+				onPage={ setPage }
+			/>
 		</div>
 	);
 }
@@ -2626,7 +2698,6 @@ function OperationRow( { op, onChanged } ) {
 	return (
 		<>
 			<tr>
-				<td>{ op.id }</td>
 				<td>{ op.source }</td>
 				<td>
 					<span
@@ -2699,7 +2770,7 @@ function OperationRow( { op, onChanged } ) {
 			</tr>
 			{ open && (
 				<tr className="catalogops-detail">
-					<td colSpan="7">
+					<td colSpan="6">
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
 						{ open === 'undo' && (
 							<UndoPanel
@@ -2789,16 +2860,23 @@ function History( { refreshKey, onChanged } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ tick, setTick ] = useState( 0 );
+	// The server decides the page size; the pager only needs to know how many
+	// pages that makes, and never guesses when the list is still empty.
+	const [ page, setPage ] = useState( 1 );
+	const [ total, setTotal ] = useState( 0 );
+	const [ perPage, setPerPage ] = useState( 10 );
 	const timer = useRef( null );
 
 	useEffect( () => {
 		let cancelled = false;
-		apiFetch( { path: '/catalogops/v1/operations' } )
+		apiFetch( { path: `/catalogops/v1/operations?page=${ page }` } )
 			.then( ( res ) => {
 				if ( cancelled ) {
 					return;
 				}
 				setItems( res.items );
+				setTotal( res.total || res.items.length );
+				setPerPage( res.per_page || 10 );
 				// Keep polling while any operation is still moving, so a queued or
 				// running op — e.g. a schedule's "Run now" — visibly progresses to
 				// completion here without a manual refresh.
@@ -2815,7 +2893,7 @@ function History( { refreshKey, onChanged } ) {
 			cancelled = true;
 			clearTimeout( timer.current );
 		};
-	}, [ refreshKey, tick ] );
+	}, [ refreshKey, tick, page ] );
 
 	return (
 		<div className="catalogops-history">
@@ -2836,7 +2914,6 @@ function History( { refreshKey, onChanged } ) {
 			<table className="wp-list-table widefat fixed striped">
 				<thead>
 					<tr>
-						<th>{ __( 'ID', 'catalogops' ) }</th>
 						<th>{ __( 'Source', 'catalogops' ) }</th>
 						<th>{ __( 'Status', 'catalogops' ) }</th>
 						<th>{ __( 'Progress', 'catalogops' ) }</th>
@@ -2850,7 +2927,7 @@ function History( { refreshKey, onChanged } ) {
 				<tbody>
 					{ items.length === 0 ? (
 						<tr className="catalogops-empty">
-							<td colSpan="7">
+							<td colSpan="6">
 								{ __( 'No operations yet.', 'catalogops' ) }
 							</td>
 						</tr>
@@ -2865,6 +2942,12 @@ function History( { refreshKey, onChanged } ) {
 					) }
 				</tbody>
 			</table>
+
+			<Pagination
+				page={ page }
+				pages={ Math.ceil( total / perPage ) }
+				onPage={ setPage }
+			/>
 		</div>
 	);
 }
@@ -2920,22 +3003,23 @@ function RetentionSetting() {
 					data.max
 				) }
 			</p>
-			<input
-				type="number"
-				min={ data.min }
-				max={ data.max }
-				value={ days }
-				onChange={ ( e ) => setDays( e.target.value ) }
-				style={ { width: '6em' } }
-			/>{ ' ' }
-			<button className="button" onClick={ save }>
-				{ __( 'Save', 'catalogops' ) }
-			</button>
-			{ saved && (
-				<span style={ { marginLeft: '8px', color: '#1a7f37' } }>
-					{ __( 'Saved.', 'catalogops' ) }
-				</span>
-			) }
+			<div className="catalogops-retention__row">
+				<input
+					type="number"
+					min={ data.min }
+					max={ data.max }
+					value={ days }
+					onChange={ ( e ) => setDays( e.target.value ) }
+				/>
+				<button className="button" onClick={ save }>
+					{ __( 'Save', 'catalogops' ) }
+				</button>
+				{ saved && (
+					<span className="catalogops-saved">
+						{ __( 'Saved.', 'catalogops' ) }
+					</span>
+				) }
+			</div>
 		</div>
 	);
 }
@@ -3395,12 +3479,19 @@ function Schedules( { refreshKey, onRan } ) {
 	// and disable rather than leaving the user unsure anything happened.
 	const [ busyId, setBusyId ] = useState( null );
 	const [ runMsg, setRunMsg ] = useState( '' );
+	const [ page, setPage ] = useState( 1 );
+	const [ total, setTotal ] = useState( 0 );
+	const [ perPage, setPerPage ] = useState( 10 );
 
 	useEffect( () => {
-		apiFetch( { path: '/catalogops/v1/schedules' } )
-			.then( ( res ) => setItems( res.items ) )
+		apiFetch( { path: `/catalogops/v1/schedules?page=${ page }` } )
+			.then( ( res ) => {
+				setItems( res.items );
+				setTotal( res.total || res.items.length );
+				setPerPage( res.per_page || 10 );
+			} )
 			.catch( ( err ) => setError( err.message ) );
-	}, [ refreshKey, localKey ] );
+	}, [ refreshKey, localKey, page ] );
 
 	const reload = () => setLocalKey( ( k ) => k + 1 );
 
@@ -3511,6 +3602,13 @@ function Schedules( { refreshKey, onRan } ) {
 					</div>
 				) }
 			</div>
+
+			<Pagination
+				page={ page }
+				pages={ Math.ceil( total / perPage ) }
+				busy={ busyId !== null }
+				onPage={ setPage }
+			/>
 		</div>
 	);
 }
@@ -3915,32 +4013,12 @@ function App() {
 										}
 									/>
 								</div>
-
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-stock">
-										{ __( 'Stock', 'catalogops' ) }
-									</label>
-									<select
-										id="catalogops-stock"
-										value={ form.stockStatus }
-										onChange={ update( 'stockStatus' ) }
-									>
-										<option value="">
-											{ __( 'Any', 'catalogops' ) }
-										</option>
-										<option value="instock">
-											{ __( 'In stock', 'catalogops' ) }
-										</option>
-										<option value="outofstock">
-											{ __(
-												'Out of stock',
-												'catalogops'
-											) }
-										</option>
-									</select>
-								</div>
 							</div>
 
+							{ /* Stock and price are the two conditions about an
+							     item's own numbers, so they sit together and last —
+							     after the terms that say *which* items, and after
+							     the attribute pair that only exists for variations. */ }
 							<div className="catalogops-filter-row">
 								{ 'variation' === scope &&
 									attributes.length > 0 && (
@@ -4018,6 +4096,30 @@ function App() {
 											/>
 										</div>
 									) }
+
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-stock">
+										{ __( 'Stock', 'catalogops' ) }
+									</label>
+									<select
+										id="catalogops-stock"
+										value={ form.stockStatus }
+										onChange={ update( 'stockStatus' ) }
+									>
+										<option value="">
+											{ __( 'Any', 'catalogops' ) }
+										</option>
+										<option value="instock">
+											{ __( 'In stock', 'catalogops' ) }
+										</option>
+										<option value="outofstock">
+											{ __(
+												'Out of stock',
+												'catalogops'
+											) }
+										</option>
+									</select>
+								</div>
 
 								<div className="catalogops-field catalogops-field--price">
 									<label htmlFor="catalogops-price-min">
@@ -4206,30 +4308,12 @@ function App() {
 					</tbody>
 				</table>
 
-				<div className="catalogops-pagination tablenav">
-					<button
-						className="button"
-						disabled={ page <= 1 || loading }
-						onClick={ () => run( page - 1 ) }
-					>
-						{ __( 'Previous', 'catalogops' ) }
-					</button>
-					<span className="catalogops-page">
-						{ sprintf(
-							/* translators: 1: current page, 2: total pages. */
-							__( 'Page %1$d of %2$d', 'catalogops' ),
-							page,
-							pages
-						) }
-					</span>
-					<button
-						className="button"
-						disabled={ page >= pages || loading }
-						onClick={ () => run( page + 1 ) }
-					>
-						{ __( 'Next', 'catalogops' ) }
-					</button>
-				</div>
+				<Pagination
+					page={ page }
+					pages={ pages }
+					busy={ loading }
+					onPage={ run }
+				/>
 			</div>
 
 			<BulkEdit

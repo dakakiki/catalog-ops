@@ -1417,8 +1417,33 @@ tr.is-drift td {
 
 /* --- Retention --------------------------------------------------------- */
 
-.catalogops-retention input[type='number'] {
+.catalogops-retention__row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+/* The same 30px band the filter and bulk-edit controls stand in. wp-admin sizes
+   both of these itself — the input through its own number-field rules, the
+   button through `.wp-core-ui .button` — so each override is selected at least
+   as specifically as the rule it is answering. */
+.catalogops .catalogops-retention input[type='number'] {
 	width: 6em;
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	box-sizing: border-box;
+	line-height: normal;
+}
+
+.catalogops .catalogops-retention .button {
+	height: var(--co-control-h);
+	box-sizing: border-box;
+	line-height: 1;
+}
+
+.catalogops-saved {
+	color: var(--co-green);
+	font-size: 13px;
 }
 
 /* --- Formulas & percentage (bulk edit) --------------------------------- */
