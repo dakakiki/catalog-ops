@@ -1200,8 +1200,11 @@ function BulkEdit( {
 	const [ confirming, setConfirming ] = useState( false );
 	const [ backupChecked, setBackupChecked ] = useState( false );
 
-	// Scheduling: the same filter + action, deferred and possibly recurring.
-	const [ showSchedule, setShowSchedule ] = useState( false );
+	// When the change should run: straight away, or on a schedule (the same filter
+	// and action, deferred and possibly recurring). One question with two answers,
+	// not a primary action and an optional extra — which is what a collapsed
+	// "Scheduling" section made it look like.
+	const [ when, setWhen ] = useState( 'now' );
 	const [ name, setName ] = useState( '' );
 	const [ recurrence, setRecurrence ] = useState( 'once' );
 	const [ startsAt, setStartsAt ] = useState( '' );
@@ -1228,7 +1231,7 @@ function BulkEdit( {
 		setRecurrence( 'once' );
 		setStartsAt( '' );
 		setNotifyEmail( '' );
-		setShowSchedule( false );
+		setWhen( 'now' );
 	}, [ resetKey ] );
 
 	// A cut deeper than 100% would produce a negative price, and nothing further
@@ -1425,7 +1428,7 @@ function BulkEdit( {
 			<h2>{ __( 'Bulk edit', 'catalogops' ) }</h2>
 			<p className="description">
 				{ __(
-					'Change a field for every item in the filter above. Preview shows old → new; nothing is written until you Apply. You can also schedule it to run later or on a recurring basis.',
+					'Change a field for every item in the filter above. Preview shows what it would do; nothing is written until you commit. Then choose when it runs — now, or on a schedule.',
 					'catalogops'
 				) }
 			</p>
@@ -1824,6 +1827,21 @@ function BulkEdit( {
 							</p>
 						</div>
 
+						{ mode === 'percent' && percentExpression && (
+							<div className="catalogops-filter-row">
+								<p className="catalogops-field-hint catalogops-formula-help">
+									{ sprintf(
+										/* translators: %s: the generated formula. */
+										__( 'Applies: %s', 'catalogops' ),
+										percentExpression
+									) }
+								</p>
+							</div>
+						) }
+
+						{ /* Preview belongs to the change, not to the commitment:
+						     it asks what this would do, and the answer is the same
+						     whether the change runs now or on a schedule. */ }
 						<div className="catalogops-filter-row">
 							<button
 								className="button"
@@ -1831,15 +1849,6 @@ function BulkEdit( {
 								disabled={ busy || running || ! ready }
 							>
 								{ __( 'Preview', 'catalogops' ) }
-							</button>
-							<button
-								className="button button-primary"
-								onClick={ () => setConfirming( true ) }
-								disabled={
-									busy || running || ! ready || confirming
-								}
-							>
-								{ __( 'Apply', 'catalogops' ) }
 							</button>
 							{ busy && (
 								<span
@@ -1854,6 +1863,276 @@ function BulkEdit( {
 								</span>
 							) }
 						</div>
+					</div>
+				</div>
+			</div>
+
+			{ /* When to run it. Apply and Schedule answer the same question, so
+			     they are one choice with one commit button — not a primary action
+			     and an optional extra hidden behind a collapsed section that never
+			     mentioned the other. */ }
+			<hr className="catalogops-divider" />
+
+			<div className="catalogops-controls catalogops-schedule-form">
+				<div className="catalogops-control-group">
+					<span
+						className="catalogops-group-label"
+						id="catalogops-when-label"
+					>
+						{ __( 'When', 'catalogops' ) }
+					</span>
+					<div className="catalogops-filter-rows">
+						<div className="catalogops-filter-row">
+							<div
+								className="catalogops-segmented"
+								role="group"
+								aria-labelledby="catalogops-when-label"
+							>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										when === 'now' ? ' is-active' : ''
+									}` }
+									onClick={ () => setWhen( 'now' ) }
+								>
+									{ __( 'Now', 'catalogops' ) }
+								</button>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										when === 'schedule' ? ' is-active' : ''
+									}${ canSchedule ? '' : ' is-locked' }` }
+									onClick={ () => setWhen( 'schedule' ) }
+									disabled={ ! canSchedule }
+									title={
+										canSchedule
+											? undefined
+											: __(
+													'Available on a paid plan',
+													'catalogops'
+											  )
+									}
+								>
+									{ __( 'On a schedule', 'catalogops' ) }
+								</button>
+							</div>
+							{ ! canSchedule && (
+								<UpsellNotice>
+									{ __(
+										'Schedule changes to run later or on a recurring basis with a paid plan.',
+										'catalogops'
+									) }
+								</UpsellNotice>
+							) }
+						</div>
+
+						{ 'now' === when && (
+							<>
+								<div className="catalogops-filter-row">
+									<p className="catalogops-field-hint">
+										{ sprintf(
+											/* translators: %d: the number of days a change stays reversible. */
+											__(
+												'The change is written as soon as you confirm. It works through the catalog in the background, so you can leave this page — and the whole run can be undone from History for %d days.',
+												'catalogops'
+											),
+											retentionDays || 30
+										) }
+									</p>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<button
+										className="button button-primary"
+										onClick={ () => setConfirming( true ) }
+										disabled={
+											busy ||
+											running ||
+											! ready ||
+											confirming
+										}
+									>
+										{ __( 'Apply', 'catalogops' ) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Working…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+							</>
+						) }
+
+						{ 'schedule' === when && canSchedule && (
+							<>
+								{ /* Before the form, not after it: a schedule nothing
+								     drives is a promise the site cannot keep, so this
+								     has to be read before the first one is created. */ }
+								<SchedulerSetup lead />
+
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-sched-name">
+											{ __( 'Name', 'catalogops' ) }
+										</label>
+										<input
+											id="catalogops-sched-name"
+											type="text"
+											value={ name }
+											onChange={ ( e ) =>
+												setName( e.target.value )
+											}
+										/>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field catalogops-field--repeat">
+										<label htmlFor="catalogops-sched-recur">
+											{ __( 'Repeat', 'catalogops' ) }
+										</label>
+										<select
+											id="catalogops-sched-recur"
+											value={ recurrence }
+											onChange={ ( e ) =>
+												setRecurrence( e.target.value )
+											}
+										>
+											{ RECURRENCES.map( ( r ) => (
+												<option
+													key={ r.value }
+													value={ r.value }
+												>
+													{ r.label }
+												</option>
+											) ) }
+										</select>
+										<p className="catalogops-field-hint">
+											{ __(
+												'The filter is re-checked each run, so a repeating schedule keeps applying to new or changed products that match — not just today’s. Use “Once” for a one-time change.',
+												'catalogops'
+											) }
+										</p>
+									</div>
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-sched-start">
+											{ __( 'Start', 'catalogops' ) }
+										</label>
+										<input
+											id="catalogops-sched-start"
+											type="datetime-local"
+											value={ startsAt }
+											onChange={ ( e ) =>
+												setStartsAt( e.target.value )
+											}
+										/>
+										<p className="catalogops-field-hint">
+											{ __(
+												'Leave empty to start at the next run.',
+												'catalogops'
+											) }
+										</p>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-sched-email">
+											{ __(
+												'Send notification to',
+												'catalogops'
+											) }
+										</label>
+										<input
+											id="catalogops-sched-email"
+											type="email"
+											placeholder={ __(
+												'site admin',
+												'catalogops'
+											) }
+											value={ notifyEmail }
+											onChange={ ( e ) =>
+												setNotifyEmail( e.target.value )
+											}
+										/>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row catalogops-schedule-preview">
+									{ preview ? (
+										<>
+											<p>
+												{ sprintf(
+													/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
+													__(
+														'As of now: %1$d matched · %2$d would change · %3$d would not.',
+														'catalogops'
+													),
+													preview.matched,
+													preview.applicable,
+													preview.omitted
+												) }
+											</p>
+											{ omittedBy.length > 0 && (
+												<ReasonList
+													items={ omittedBy }
+												/>
+											) }
+										</>
+									) : (
+										<p>
+											{ __(
+												'Run Preview first to see how many items this would change, and why the rest would not.',
+												'catalogops'
+											) }
+										</p>
+									) }
+									<p className="catalogops-muted">
+										{ __(
+											'A schedule re-checks the catalog every time it runs, so these numbers can differ when it fires — the same rules decide, against the catalog as it is then.',
+											'catalogops'
+										) }
+									</p>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<button
+										className="button button-primary"
+										onClick={ createSchedule }
+										disabled={ busy || ! ready }
+									>
+										{ __(
+											'Create schedule',
+											'catalogops'
+										) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Working…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+								{ scheduleMsg && (
+									<p className="catalogops-saved">
+										{ scheduleMsg }
+									</p>
+								) }
+							</>
+						) }
 					</div>
 				</div>
 			</div>
@@ -1918,229 +2197,6 @@ function BulkEdit( {
 					</div>
 				</div>
 			) }
-
-			{ mode === 'percent' && percentExpression && (
-				<p className="description catalogops-formula-help">
-					{ sprintf(
-						/* translators: %s: the generated formula. */
-						__( 'Applies: %s', 'catalogops' ),
-						percentExpression
-					) }
-				</p>
-			) }
-
-			{ /* Scheduling is a different question from the change itself — when to
-			     run it, not what it does — so it gets a rule to sit behind rather
-			     than reading as one more row of the Change group. */ }
-			<hr className="catalogops-divider" />
-
-			<div className="catalogops-controls catalogops-schedule-form">
-				<div className="catalogops-control-group">
-					<button
-						type="button"
-						className={ `catalogops-collapse-toggle catalogops-group-label${
-							canSchedule ? '' : ' is-locked'
-						}` }
-						onClick={ () => setShowSchedule( ! showSchedule ) }
-						aria-expanded={ canSchedule && showSchedule }
-						disabled={ ! canSchedule }
-						title={
-							canSchedule
-								? undefined
-								: __( 'Available on a paid plan', 'catalogops' )
-						}
-					>
-						{ __( 'Scheduling', 'catalogops' ) }
-						<svg
-							className="catalogops-collapse-toggle__arrow"
-							width="12"
-							height="12"
-							viewBox="0 0 12 12"
-							aria-hidden="true"
-							focusable="false"
-						>
-							<path
-								d={
-									showSchedule
-										? 'M2.5 7.5 6 4 9.5 7.5'
-										: 'M2.5 4.5 6 8 9.5 4.5'
-								}
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="1.6"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							/>
-						</svg>
-					</button>
-					{ ! canSchedule && (
-						<UpsellNotice>
-							{ __(
-								'Schedule changes to run later or on a recurring basis with a paid plan.',
-								'catalogops'
-							) }
-						</UpsellNotice>
-					) }
-					{ canSchedule && showSchedule && (
-						<div className="catalogops-filter-rows">
-							{ /* Before the form, not after it: a schedule nothing
-							     drives is a promise the site cannot keep, so this
-							     has to be read before the first one is created. */ }
-							<SchedulerSetup lead />
-
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-sched-name">
-										{ __( 'Name', 'catalogops' ) }
-									</label>
-									<input
-										id="catalogops-sched-name"
-										type="text"
-										value={ name }
-										onChange={ ( e ) =>
-											setName( e.target.value )
-										}
-									/>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field catalogops-field--repeat">
-									<label htmlFor="catalogops-sched-recur">
-										{ __( 'Repeat', 'catalogops' ) }
-									</label>
-									<select
-										id="catalogops-sched-recur"
-										value={ recurrence }
-										onChange={ ( e ) =>
-											setRecurrence( e.target.value )
-										}
-									>
-										{ RECURRENCES.map( ( r ) => (
-											<option
-												key={ r.value }
-												value={ r.value }
-											>
-												{ r.label }
-											</option>
-										) ) }
-									</select>
-									<p className="catalogops-field-hint">
-										{ __(
-											'The filter is re-checked each run, so a repeating schedule keeps applying to new or changed products that match — not just today’s. Use “Once” for a one-time change.',
-											'catalogops'
-										) }
-									</p>
-								</div>
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-sched-start">
-										{ __( 'Start', 'catalogops' ) }
-									</label>
-									<input
-										id="catalogops-sched-start"
-										type="datetime-local"
-										value={ startsAt }
-										onChange={ ( e ) =>
-											setStartsAt( e.target.value )
-										}
-									/>
-									<p className="catalogops-field-hint">
-										{ __(
-											'Leave empty to start at the next run.',
-											'catalogops'
-										) }
-									</p>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-sched-email">
-										{ __(
-											'Send notification to',
-											'catalogops'
-										) }
-									</label>
-									<input
-										id="catalogops-sched-email"
-										type="email"
-										placeholder={ __(
-											'site admin',
-											'catalogops'
-										) }
-										value={ notifyEmail }
-										onChange={ ( e ) =>
-											setNotifyEmail( e.target.value )
-										}
-									/>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row catalogops-schedule-preview">
-								{ preview ? (
-									<>
-										<p>
-											{ sprintf(
-												/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
-												__(
-													'As of now: %1$d matched · %2$d would change · %3$d would not.',
-													'catalogops'
-												),
-												preview.matched,
-												preview.applicable,
-												preview.omitted
-											) }
-										</p>
-										{ omittedBy.length > 0 && (
-											<ReasonList items={ omittedBy } />
-										) }
-									</>
-								) : (
-									<p>
-										{ __(
-											'Run Preview first to see how many items this would change, and why the rest would not.',
-											'catalogops'
-										) }
-									</p>
-								) }
-								<p className="catalogops-muted">
-									{ __(
-										'A schedule re-checks the catalog every time it runs, so these numbers can differ when it fires — the same rules decide, against the catalog as it is then.',
-										'catalogops'
-									) }
-								</p>
-							</div>
-
-							<div className="catalogops-filter-row">
-								<button
-									className="button button-primary"
-									onClick={ createSchedule }
-									disabled={ busy || ! ready }
-								>
-									{ __( 'Create schedule', 'catalogops' ) }
-								</button>
-								{ busy && (
-									<span
-										className="catalogops-inline-loading"
-										aria-live="polite"
-									>
-										<span
-											className="catalogops-spinner"
-											aria-hidden="true"
-										/>
-										{ __( 'Working…', 'catalogops' ) }
-									</span>
-								) }
-							</div>
-							{ scheduleMsg && (
-								<p className="catalogops-saved">
-									{ scheduleMsg }
-								</p>
-							) }
-						</div>
-					) }
-				</div>
-			</div>
 
 			{ error && (
 				<div className="notice notice-error">
@@ -3542,7 +3598,7 @@ function Schedules( { refreshKey, onRan } ) {
 			<h2>{ __( 'Schedules', 'catalogops' ) }</h2>
 			<p className="description">
 				{ __(
-					'Operations set to run later or on a recurring basis. Create one from the Bulk edit panel above (“Schedule instead…”). A completion report is emailed for each run.',
+					'Operations set to run later or on a recurring basis. Create one in Bulk edit above: set the change, then pick “On a schedule” under When. A completion report is emailed for each run.',
 					'catalogops'
 				) }
 			</p>
