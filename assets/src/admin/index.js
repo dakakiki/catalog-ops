@@ -1186,7 +1186,13 @@ function BulkEdit( {
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
-	const [ busy, setBusy ] = useState( false );
+	// Which request is in flight — 'preview', 'apply', 'schedule', or '' for none.
+	// Not a boolean: every control has to be disabled while any of them runs, but
+	// only the one that was pressed should say it is working. One shared flag put
+	// the spinner beside Preview and Apply at the same time, so the panel claimed
+	// to be doing two things at once.
+	const [ busyWith, setBusyWith ] = useState( '' );
+	const busy = '' !== busyWith;
 
 	// Percent and Formula modes both compile to a formula action, which the free
 	// tier cannot run (the REST layer returns 402); scheduling is paid too. Gate
@@ -1296,7 +1302,7 @@ function BulkEdit( {
 	useOperationPoll( operation, setOperation, onDone );
 
 	const runPreview = () => {
-		setBusy( true );
+		setBusyWith( 'preview' );
 		setError( '' );
 		setPreview( null );
 		// Drop any finished operation's result bar: the render gates the preview
@@ -1310,14 +1316,14 @@ function BulkEdit( {
 		} )
 			.then( setPreview )
 			.catch( ( err ) => setError( err.message ) )
-			.finally( () => setBusy( false ) );
+			.finally( () => setBusyWith( '' ) );
 	};
 
 	// Actually queue the operation. Reached only after the apply confirmation
 	// (and, the first time, the backup acknowledgement) is satisfied.
 	const doApply = () => {
 		setConfirming( false );
-		setBusy( true );
+		setBusyWith( 'apply' );
 		setError( '' );
 		// The preview is superseded by the running operation, and any previous
 		// operation's bar is replaced by this one — clear both so the panel shows
@@ -1331,7 +1337,7 @@ function BulkEdit( {
 		} )
 			.then( setOperation )
 			.catch( ( err ) => setError( err.message ) )
-			.finally( () => setBusy( false ) );
+			.finally( () => setBusyWith( '' ) );
 	};
 
 	// Confirm the apply. The first time (no backup acknowledgement yet) the
@@ -1355,7 +1361,7 @@ function BulkEdit( {
 	};
 
 	const createSchedule = () => {
-		setBusy( true );
+		setBusyWith( 'schedule' );
 		setError( '' );
 		setScheduleMsg( '' );
 		apiFetch( {
@@ -1377,7 +1383,7 @@ function BulkEdit( {
 				}
 			} )
 			.catch( ( err ) => setError( err.message ) )
-			.finally( () => setBusy( false ) );
+			.finally( () => setBusyWith( '' ) );
 	};
 
 	const running = operation && ! isTerminal( operation );
@@ -1850,7 +1856,7 @@ function BulkEdit( {
 							>
 								{ __( 'Preview', 'catalogops' ) }
 							</button>
-							{ busy && (
+							{ 'preview' === busyWith && (
 								<span
 									className="catalogops-inline-loading"
 									aria-live="polite"
@@ -1954,7 +1960,7 @@ function BulkEdit( {
 									>
 										{ __( 'Apply', 'catalogops' ) }
 									</button>
-									{ busy && (
+									{ 'apply' === busyWith && (
 										<span
 											className="catalogops-inline-loading"
 											aria-live="polite"
@@ -2113,7 +2119,7 @@ function BulkEdit( {
 											'catalogops'
 										) }
 									</button>
-									{ busy && (
+									{ 'schedule' === busyWith && (
 										<span
 											className="catalogops-inline-loading"
 											aria-live="polite"
