@@ -43,4 +43,16 @@ enum Query_Scope: string {
 	public function is_variation(): bool {
 		return self::VARIATION === $this;
 	}
+
+	/**
+	 * The other scope — the one the Products/Variations toggle would switch to.
+	 *
+	 * There are two, and a filter that finds nothing in one is often a filter
+	 * pointed at the wrong one: a variable product keeps its price, stock and SKU
+	 * on its variations, so a price filter over parents passes straight over the
+	 * whole catalogue it was meant to find (CONTEXT §4).
+	 */
+	public function other(): self {
+		return self::VARIATION === $this ? self::PRODUCT : self::VARIATION;
+	}
 }

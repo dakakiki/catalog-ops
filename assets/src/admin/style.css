@@ -605,6 +605,29 @@ be more than a few rows however much is chosen.
 	line-height: 1.5;
 }
 
+/* An empty result that has somewhere to send you. Accent rather than warning
+   colours: nothing is wrong, the filter is just pointed at the other half of the
+   catalogue. */
+.catalogops-scope-hint {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	margin: 12px 0 0;
+	padding: 10px 14px;
+	border: 1px solid var(--co-accent-border);
+	border-radius: 4px;
+	background: var(--co-accent-tint);
+}
+
+.catalogops-scope-hint p {
+	flex: 1 1 20em;
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--co-ink);
+}
+
 /* A rejected value's reason, under the control that holds it. */
 .catalogops-field-error {
 	margin: 2px 0 0;

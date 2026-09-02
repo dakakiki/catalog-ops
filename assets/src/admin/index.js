@@ -336,6 +336,63 @@ const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
 const MAX_CHIPS = 3;
 
 /**
+ * What to do when a filter finds nothing here but something next door.
+ *
+ * The Products/Variations split is invisible until it bites: a variable product
+ * keeps its price, stock and SKU on its variations, so a price or stock filter
+ * over parents sails past every variable product in the catalogue and reports
+ * nothing found (CONTEXT §4). An empty result is exactly the moment to say so.
+ *
+ * The switch is offered rather than described. Telling someone to go and click a
+ * control they have already looked past is how the old preview tip put it, and a
+ * button that just does it is one step instead of three.
+ *
+ * @param {Object}   props          Component props.
+ * @param {Object}   props.other    { scope, total } as the query answered.
+ * @param {Function} props.onSwitch Called with the scope to switch to.
+ */
+function ScopeHint( { other, onSwitch } ) {
+	const toVariations = 'variation' === other.scope;
+
+	const sentence = toVariations
+		? sprintf(
+				/* translators: %d: number of matching variations. */
+				_n(
+					'No products match, but %d variation does. Variable products keep their price, stock and SKU on their variations, not on the parent.',
+					'No products match, but %d variations do. Variable products keep their price, stock and SKU on their variations, not on the parent.',
+					other.total,
+					'catalogops'
+				),
+				other.total
+		  )
+		: sprintf(
+				/* translators: %d: number of matching products. */
+				_n(
+					'No variations match, but %d product does.',
+					'No variations match, but %d products do.',
+					other.total,
+					'catalogops'
+				),
+				other.total
+		  );
+
+	return (
+		<div className="catalogops-scope-hint">
+			<p>{ sentence }</p>
+			<button
+				type="button"
+				className="button"
+				onClick={ () => onSwitch( other.scope ) }
+			>
+				{ toVariations
+					? __( 'Switch to Variations', 'catalogops' )
+					: __( 'Switch to Products', 'catalogops' ) }
+			</button>
+		</div>
+	);
+}
+
+/**
  * A multiselect bound to an array of ids: chips for what is chosen, a searchable
  * checkbox list for choosing.
  *
@@ -3546,6 +3603,9 @@ function App() {
 	const [ form, setForm ] = useState( emptyForm );
 	const [ items, setItems ] = useState( [] );
 	const [ total, setTotal ] = useState( 0 );
+	// { scope, total } when this filter found nothing here but something in the
+	// other scope; null the rest of the time (the server only sends it then).
+	const [ otherScope, setOtherScope ] = useState( null );
 	const [ page, setPage ] = useState( 1 );
 	const [ loading, setLoading ] = useState( false );
 	const [ error, setError ] = useState( '' );
@@ -3617,6 +3677,9 @@ function App() {
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
+			// Drop the previous run's suggestion up front: a failed request would
+			// otherwise leave it pointing at a result that is no longer on screen.
+			setOtherScope( null );
 			apiFetch( {
 				path: '/catalogops/v1/products/query',
 				method: 'POST',
@@ -3630,6 +3693,7 @@ function App() {
 					setItems( res.items );
 					setTotal( res.total );
 					setPage( res.page );
+					setOtherScope( res.other_scope || null );
 				} )
 				.catch( ( err ) =>
 					setError(
@@ -3661,6 +3725,7 @@ function App() {
 		setAppliedFilter( buildFilter( empty, scope, brandField ) );
 		setItems( [] );
 		setTotal( 0 );
+		setOtherScope( null );
 		setPage( 1 );
 		setResetKey( ( k ) => k + 1 );
 	}, [ scope, brandField ] );
@@ -4053,6 +4118,10 @@ function App() {
 					<div className="notice notice-error">
 						<p>{ error }</p>
 					</div>
+				) }
+
+				{ ! loading && otherScope && (
+					<ScopeHint other={ otherScope } onSwitch={ setScope } />
 				) }
 
 				<table

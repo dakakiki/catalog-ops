@@ -118,12 +118,51 @@ final class Query_Controller {
 
 		return new WP_REST_Response(
 			array(
-				'total'    => $total,
-				'page'     => $page,
-				'per_page' => $per_page,
-				'scope'    => $filter->scope()->value,
-				'items'    => $this->rows_for( $page_ids, $filter->scope() ),
+				'total'       => $total,
+				'page'        => $page,
+				'per_page'    => $per_page,
+				'scope'       => $filter->scope()->value,
+				'items'       => $this->rows_for( $page_ids, $filter->scope() ),
+				'other_scope' => $this->other_scope( $filter, $total ),
 			)
+		);
+	}
+
+	/**
+	 * How many objects the same filter would match in the other scope, when this
+	 * one matched nothing.
+	 *
+	 * An empty result is the moment the Products/Variations distinction actually
+	 * bites: a variable product keeps its price, stock and SKU on its variations,
+	 * so a price or stock filter over parents sails past every variable product in
+	 * the catalogue and reports nothing found (CONTEXT §4). The count is what turns
+	 * "no products match this filter" from a dead end into a signpost, and the UI
+	 * offers the switch rather than describing it.
+	 *
+	 * Only asked when the answer can be acted on — the result was empty — so the
+	 * extra count never rides along with a query that already found something.
+	 *
+	 * @param Filter $filter The filter as asked.
+	 * @param int    $total  What it matched in its own scope.
+	 * @return array{scope: string, total: int}|null Null when there is nothing to suggest.
+	 */
+	private function other_scope( Filter $filter, int $total ): ?array {
+		if ( $total > 0 ) {
+			return null;
+		}
+
+		$other = $filter->scope()->other();
+		$count = $this->engine->count( $filter->for_scope( $other ) );
+
+		if ( 0 === $count ) {
+			// Nothing there either: the filter is simply too narrow, and pointing
+			// at an equally empty scope would only add noise.
+			return null;
+		}
+
+		return array(
+			'scope' => $other->value,
+			'total' => $count,
 		);
 	}
 
