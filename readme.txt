@@ -79,6 +79,8 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 == Changelog ==
 
 = 0.7.1 =
+* The results table leads with the SKU and shows brand and tags — both filterable, and until now invisible in the results.
+* An operation refused before it ran — over the free plan's object cap, or while another was already writing — no longer leaves a "draft" row in the history.
 * The Schedules panel says scheduling is a paid feature instead of showing an empty table and instructions for a control the plan cannot reach. Schedules already created stay listed and manageable.
 
 = 0.7.0 =
