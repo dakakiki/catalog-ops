@@ -14,6 +14,7 @@
 namespace CatalogOps\Tests\Integration\Operations;
 
 use CatalogOps\Operations\Actions\Formula;
+use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Changes;
 use CatalogOps\Operations\Chunk_Runner;
 use CatalogOps\Operations\Fields\Core_Fields;
@@ -29,6 +30,7 @@ use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
+use InvalidArgumentException;
 use WC_Product_Simple;
 
 /**
@@ -179,6 +181,108 @@ final class FormulaWriteTest extends Operations_Database_Case {
 		$this->drive( $op_id );
 
 		$this->assertSame( '45', wc_get_product( $product )->get_regular_price() );
+	}
+
+	public function test_a_formula_that_goes_negative_leaves_that_price_alone(): void {
+		$dear  = $this->make_product( 50, '10' );
+		$cheap = $this->make_product( 4, '2' );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( Formula::from_source( 'regular_price', 'regular_price - 10' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		// The same formula is a fine edit for one product and nonsense for the
+		// other, which is why this cannot be settled for the whole set up front.
+		$this->assertSame( '40', wc_get_product( $dear )->get_regular_price() );
+
+		// Not -6, and not 0 either: the price it already had.
+		$this->assertSame( '4', wc_get_product( $cheap )->get_regular_price() );
+
+		$counts = $this->changes->counts( $op_id );
+		$this->assertSame( 1, $counts['applied'] );
+		$this->assertSame( 1, $counts['skipped'] );
+
+		$this->assertSame(
+			'negative_value',
+			$this->skipped_row( $op_id, $cheap )->skip_reason
+		);
+	}
+
+	public function test_a_negative_literal_price_is_refused_before_an_operation_exists(): void {
+		$product = $this->make_product( 50, '10' );
+
+		$before = count( $this->operations->recent( 100 ) );
+
+		try {
+			$this->service->create(
+				new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+				array( new Set_Value( 'regular_price', '-5' ) ),
+				Operation_Mode::SAFE,
+				Operation_Source::UI,
+				1
+			);
+
+			$this->fail( 'A negative literal price should be refused.' );
+		} catch ( InvalidArgumentException $e ) {
+			$this->assertStringContainsString( 'negative', $e->getMessage() );
+		}
+
+		// Nothing queued, nothing written: the refusal is at the boundary.
+		$this->assertSame( $before, count( $this->operations->recent( 100 ) ) );
+		$this->assertSame( '50', wc_get_product( $product )->get_regular_price() );
+	}
+
+	public function test_a_formula_that_reads_nothing_and_is_negative_is_refused(): void {
+		// `0 - 10` reads no field, so it is that value for every object in the
+		// catalogue — knowable without loading a single product.
+		$this->make_product( 50, '10' );
+
+		$this->expectException( InvalidArgumentException::class );
+
+		$this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( Formula::from_source( 'regular_price', '0 - 10' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+	}
+
+	public function test_preview_refuses_a_negative_literal_too(): void {
+		// Preview is where the user looks first, so it has to say the same thing
+		// rather than quoting a count for an operation that cannot be created.
+		$this->make_product( 50, '10' );
+
+		$this->expectException( InvalidArgumentException::class );
+
+		$this->service->preview(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'sale_price', '-1' ) )
+		);
+	}
+
+	public function test_a_negative_is_only_refused_where_it_makes_no_sense(): void {
+		// Stock is the counter-example: WooCommerce uses negative quantities for
+		// backorders, so the rule must not reach past prices.
+		$product = $this->make_product( 50, '10' );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'stock_quantity', '-3' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( -3, wc_get_product( $product )->get_stock_quantity() );
 	}
 
 	/**

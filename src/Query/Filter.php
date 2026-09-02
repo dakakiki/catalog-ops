@@ -63,6 +63,18 @@ final class Filter {
 	}
 
 	/**
+	 * Return the same filter aimed at a different object type (immutable).
+	 *
+	 * Asking the same conditions of the other scope is how the empty-result hint
+	 * knows whether the products the user is looking for are variations.
+	 *
+	 * @param Query_Scope $scope The object type to target.
+	 */
+	public function for_scope( Query_Scope $scope ): self {
+		return new self( $this->conditions, $this->relation, $scope );
+	}
+
+	/**
 	 * The conditions in this filter.
 	 *
 	 * @return list<Condition>

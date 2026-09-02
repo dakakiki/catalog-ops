@@ -20,6 +20,13 @@ use WC_Product;
  * An action whose {@see Action::apply()} returns null (e.g. a formula over an
  * empty field) skips the object rather than writing, and is recorded as skipped —
  * never coerced to zero (CONTEXT §3).
+ *
+ * A result the field cannot hold is treated the same way. A formula is only
+ * negative for *some* objects — `regular_price - 10` is fine at 40 and nonsense
+ * at 4 — so this cannot be settled up front for the whole set the way the SQL
+ * applicability rules settle a literal. It is settled here, per object, before
+ * anything is staged: {@see Write_Rules::refuses()} decides, the object is
+ * skipped with a reason, and the rest of the operation carries on.
  */
 final class Apply_Plan implements Chunk_Plan {
 
@@ -38,14 +45,25 @@ final class Apply_Plan implements Chunk_Plan {
 	private Field_Providers $providers;
 
 	/**
+	 * The rules saying what a field may be written.
+	 *
+	 * @var Write_Rules
+	 */
+	private Write_Rules $rules;
+
+	/**
 	 * Build the plan.
 	 *
-	 * @param Action[]        $actions   The operation's actions.
-	 * @param Field_Providers $providers Field provider registry.
+	 * @param Action[]         $actions   The operation's actions.
+	 * @param Field_Providers  $providers Field provider registry.
+	 * @param Write_Rules|null $rules     What a field may be written; the default
+	 *                                    set is stateless, so it is built when
+	 *                                    omitted.
 	 */
-	public function __construct( array $actions, Field_Providers $providers ) {
+	public function __construct( array $actions, Field_Providers $providers, ?Write_Rules $rules = null ) {
 		$this->actions   = array_values( $actions );
 		$this->providers = $providers;
+		$this->rules     = $rules ?? new Write_Rules();
 	}
 
 	/**
@@ -91,6 +109,13 @@ final class Apply_Plan implements Chunk_Plan {
 				// list already excludes objects missing a read field, so reaching
 				// here means the input was present but unusable.
 				$outcome->record_skipped( $row, Values::to_string( $current ), Skip_Reason::EMPTY_INPUT );
+				continue;
+			}
+
+			if ( $this->rules->refuses( $action->field(), $new ) ) {
+				// A price below zero. Not staged, not rounded up to zero, not
+				// written: the object keeps the price it has and says why.
+				$outcome->record_skipped( $row, Values::to_string( $current ), Skip_Reason::NEGATIVE_VALUE );
 				continue;
 			}
 

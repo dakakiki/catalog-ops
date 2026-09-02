@@ -118,6 +118,81 @@ final class QueryControllerTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'large', $item['name'] );
 	}
 
+	public function test_an_empty_product_result_points_at_the_variations_that_match(): void {
+		$this->make_variable_product();
+
+		$data = $this->dispatch(
+			array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 30 ) ) )
+		);
+
+		// A variable parent keeps no price of its own, so the Products scope has
+		// nothing to match here — what the user is looking for is one scope over,
+		// and an empty table alone would never say so.
+		$this->assertSame( 0, $data['total'] );
+		$this->assertSame(
+			array(
+				'scope' => 'variation',
+				'total' => 1,
+			),
+			$data['other_scope']
+		);
+	}
+
+	public function test_an_empty_variation_result_points_back_at_products(): void {
+		$this->make_product( 100 );
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'scope'  => 'variation',
+				'filter' => array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 50 ) ) ),
+			)
+		);
+
+		$response = rest_do_request( $request );
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+
+		// The suggestion runs both ways: a catalogue of simple products has no
+		// variations to find, and saying so beats an unexplained empty table.
+		$this->assertSame( 0, $data['total'] );
+		$this->assertSame(
+			array(
+				'scope' => 'product',
+				'total' => 1,
+			),
+			$data['other_scope']
+		);
+	}
+
+	public function test_a_result_with_matches_suggests_nothing(): void {
+		$this->make_product( 100 );
+		$this->make_variable_product();
+
+		$data = $this->dispatch(
+			array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 30 ) ) )
+		);
+
+		// Variations match this too, but the user is looking at results — there is
+		// nothing to point out, and the second count is never even run.
+		$this->assertSame( 1, $data['total'] );
+		$this->assertNull( $data['other_scope'] );
+	}
+
+	public function test_a_filter_that_matches_nowhere_suggests_nothing(): void {
+		$this->make_product( 10 );
+		$this->make_variable_product();
+
+		$data = $this->dispatch(
+			array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 500 ) ) )
+		);
+
+		// Too narrow, not pointed at the wrong scope. Offering a switch to an
+		// equally empty table would be noise.
+		$this->assertSame( 0, $data['total'] );
+		$this->assertNull( $data['other_scope'] );
+	}
+
 	/**
 	 * Create a variable product with a Small and a Large variation.
 	 *

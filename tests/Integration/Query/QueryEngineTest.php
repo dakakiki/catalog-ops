@@ -317,6 +317,96 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertNotContains( $other, $ids );
 	}
 
+	public function test_meta_not_in_keeps_products_that_have_no_such_meta(): void {
+		// "Not this brand" has to keep the unbranded products: they are not that
+		// brand either. Asking it as `IN (… meta_value != x)` would answer a
+		// different question — "has some other brand" — and drop them.
+		$acme   = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$globex = $this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
+		$plain  = $this->make_product( array( 'price' => 10 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'meta:_brand', Operator::NOT_IN, array( 'Acme' ) ) ) )
+		);
+
+		$this->assertNotContains( $acme, $ids );
+		$this->assertContains( $globex, $ids );
+		$this->assertContains( $plain, $ids );
+	}
+
+	public function test_meta_not_equals_keeps_products_that_have_no_such_meta(): void {
+		$acme  = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$plain = $this->make_product( array( 'price' => 10 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'meta:_brand', Operator::NOT_EQUALS, 'Acme' ) ) )
+		);
+
+		$this->assertNotContains( $acme, $ids );
+		$this->assertContains( $plain, $ids );
+	}
+
+	public function test_meta_not_exists_matches_only_products_without_the_key(): void {
+		$acme  = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$plain = $this->make_product( array( 'price' => 10 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'meta:_brand', Operator::NOT_EXISTS ) ) )
+		);
+
+		$this->assertSame( array( $plain ), $ids );
+		$this->assertNotContains( $acme, $ids );
+	}
+
+	public function test_meta_not_in_nothing_excludes_nobody(): void {
+		// An empty exclusion list is not a question. It must not decay into
+		// "has no brand at all", which is what an empty value test would leave.
+		$acme  = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$plain = $this->make_product( array( 'price' => 10 ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'meta:_brand', Operator::NOT_IN, array() ) ) )
+		);
+
+		$this->assertEqualsCanonicalizing( array( $acme, $plain ), $ids );
+	}
+
+	public function test_an_exclusion_narrows_an_inclusion_rather_than_replacing_it(): void {
+		// The shape the filter UI emits: one category joined, one brand excluded.
+		// The join and the anti-join have to compose.
+		$keep    = $this->make_product(
+			array(
+				'category' => $this->cat_a,
+				'meta'     => array( '_brand' => 'Globex' ),
+			)
+		);
+		$wrong   = $this->make_product(
+			array(
+				'category' => $this->cat_a,
+				'meta'     => array( '_brand' => 'Acme' ),
+			)
+		);
+		$off_cat = $this->make_product(
+			array(
+				'category' => $this->cat_b,
+				'meta'     => array( '_brand' => 'Globex' ),
+			)
+		);
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array(
+					new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+					new Condition( 'meta:_brand', Operator::NOT_IN, array( 'Acme' ) ),
+				)
+			)
+		);
+
+		$this->assertSame( array( $keep ), $ids );
+		$this->assertNotContains( $wrong, $ids );
+		$this->assertNotContains( $off_cat, $ids );
+	}
+
 	public function test_meta_numeric_greater_than(): void {
 		$this->make_product( array( 'meta' => array( '_cost' => '5.00' ) ) );
 		$expensive = $this->make_product( array( 'meta' => array( '_cost' => '42.50' ) ) );

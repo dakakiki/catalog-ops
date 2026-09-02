@@ -169,24 +169,65 @@ const FIELD_NOUNS = {
  * out of `sale_price * 1.5`. And a stock status is not stored at all where stock
  * is managed; WooCommerce derives it from the quantity on every save.
  *
- * @param {string} field      The selected field key.
- * @param {string} mode       'set' | 'percent' | 'formula'.
- * @param {string} expression The formula being applied, for percent and formula
- *                            modes — the source of the fields it reads.
+ * @param {string} field         The selected field key.
+ * @param {string} mode          'set' | 'percent' | 'formula'.
+ * @param {string} expression    The formula being applied, for percent and formula
+ *                               modes — the source of the fields it reads.
+ * @param {Object} percentChange For percent mode, { direction, amount }: the
+ *                               sentence names which way the price moves rather
+ *                               than pointing at the control that says so.
  * @return {string} The hint sentence.
  */
-function changeHint( field, mode, expression = '' ) {
+function changeHint( field, mode, expression = '', percentChange = null ) {
 	const noun = FIELD_NOUNS[ field ] || field;
 	let sentence;
 	if ( mode === 'percent' ) {
-		sentence = sprintf(
-			/* translators: %s: the field being changed, e.g. "the regular price". */
-			__(
-				'Changes %s by the percentage above, for every matching product.',
-				'catalogops'
-			),
-			noun
-		);
+		const down =
+			'decrease' === ( percentChange && percentChange.direction );
+		const amount = percentChange ? percentChange.amount : '';
+
+		const named = '' !== amount && ! Number.isNaN( Number( amount ) );
+		const shown = named ? Math.abs( Number( amount ) ) : 0;
+
+		if ( named && down ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: a percentage, e.g. "10". */
+				__(
+					'Lowers %1$s by %2$s%%, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( named ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: a percentage, e.g. "10". */
+				__(
+					'Raises %1$s by %2$s%%, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( down ) {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Lowers %s by the percentage above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		} else {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Raises %s by the percentage above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		}
 	} else if ( mode === 'formula' ) {
 		sentence = sprintf(
 			/* translators: %s: the field being changed, e.g. "the regular price". */
@@ -256,16 +297,33 @@ const RECURRENCES = [
 ];
 
 /**
- * Build the percentage-change factor as a clean decimal string, so a "-10%"
- * becomes the formula `<field> * 0.9` with no floating-point noise in the text.
+ * Build the percentage-change factor as a clean decimal string, so a 10%
+ * decrease becomes the formula `<field> * 0.9` with no floating-point noise in
+ * the text.
  *
- * @param {number|string} percent The percentage delta (e.g. -10 or 15).
+ * The sign comes from the direction alone; the amount is read as a magnitude.
+ * Otherwise a typed "-10" under Decrease would negate the negation and quietly
+ * raise prices — the exact confusion the direction control exists to remove.
+ *
+ * @param {number|string} percent   The percentage amount (e.g. 15).
+ * @param {string}        direction 'increase' or 'decrease'.
  * @return {string} The multiplier as a trimmed decimal string.
  */
-function percentFactor( percent ) {
-	const factor = 1 + Number( percent ) / 100;
+function percentFactor( percent, direction ) {
+	const amount = Math.abs( Number( percent ) );
+	const delta = 'decrease' === direction ? -amount : amount;
+	const factor = 1 + delta / 100;
+
 	return String( Number( factor.toFixed( 6 ) ) );
 }
+
+/**
+ * The deepest cut a percentage change may express. At 100% the price lands on
+ * zero, which is a real thing to want; past it the factor goes negative and the
+ * write path has nothing to stop it — WooCommerce's setters store what they are
+ * given, so a mistyped 150 would put negative prices across the catalogue.
+ */
+const MAX_DECREASE = 100;
 
 const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
 
@@ -276,6 +334,63 @@ const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
  * readable well before it stops fitting.
  */
 const MAX_CHIPS = 3;
+
+/**
+ * What to do when a filter finds nothing here but something next door.
+ *
+ * The Products/Variations split is invisible until it bites: a variable product
+ * keeps its price, stock and SKU on its variations, so a price or stock filter
+ * over parents sails past every variable product in the catalogue and reports
+ * nothing found (CONTEXT §4). An empty result is exactly the moment to say so.
+ *
+ * The switch is offered rather than described. Telling someone to go and click a
+ * control they have already looked past is how the old preview tip put it, and a
+ * button that just does it is one step instead of three.
+ *
+ * @param {Object}   props          Component props.
+ * @param {Object}   props.other    { scope, total } as the query answered.
+ * @param {Function} props.onSwitch Called with the scope to switch to.
+ */
+function ScopeHint( { other, onSwitch } ) {
+	const toVariations = 'variation' === other.scope;
+
+	const sentence = toVariations
+		? sprintf(
+				/* translators: %d: number of matching variations. */
+				_n(
+					'No products match, but %d variation does. Variable products keep their price, stock and SKU on their variations, not on the parent.',
+					'No products match, but %d variations do. Variable products keep their price, stock and SKU on their variations, not on the parent.',
+					other.total,
+					'catalogops'
+				),
+				other.total
+		  )
+		: sprintf(
+				/* translators: %d: number of matching products. */
+				_n(
+					'No variations match, but %d product does.',
+					'No variations match, but %d products do.',
+					other.total,
+					'catalogops'
+				),
+				other.total
+		  );
+
+	return (
+		<div className="catalogops-scope-hint">
+			<p>{ sentence }</p>
+			<button
+				type="button"
+				className="button"
+				onClick={ () => onSwitch( other.scope ) }
+			>
+				{ toVariations
+					? __( 'Switch to Variations', 'catalogops' )
+					: __( 'Switch to Products', 'catalogops' ) }
+			</button>
+		</div>
+	);
+}
 
 /**
  * A multiselect bound to an array of ids: chips for what is chosen, a searchable
@@ -293,14 +408,27 @@ const MAX_CHIPS = 3;
  * list rather than type-to-filter tokens, and a count instead of an unbounded
  * pile of pills.
  *
- * @param {Object}   props             Component props.
- * @param {string}   props.label       Field label.
- * @param {Array}    props.options     Selectable options as { id, name }.
- * @param {string[]} props.value       Currently-selected ids.
- * @param {Function} props.onChange    Called with the new array of id strings.
- * @param {string}   props.placeholder Shown when nothing is selected.
+ * @param {Object}   props              Component props.
+ * @param {string}   props.label        Field label.
+ * @param {Array}    props.options      Selectable options as { id, name }.
+ * @param {string[]} props.value        Currently-selected ids.
+ * @param {Function} props.onChange     Called with the new array of id strings.
+ * @param {string}   props.placeholder  Shown when nothing is selected.
+ * @param {string}   props.mode         'in' or 'not_in' — whether the selection is
+ *                                      what to keep or what to exclude. Omit,
+ *                                      along with onModeChange, for a field that
+ *                                      cannot be negated.
+ * @param {Function} props.onModeChange Called with the new mode.
  */
-function MultiSelect( { label, options, value, onChange, placeholder } ) {
+function MultiSelect( {
+	label,
+	options,
+	value,
+	onChange,
+	placeholder,
+	mode,
+	onModeChange,
+} ) {
 	const [ open, setOpen ] = useState( false );
 	const [ query, setQuery ] = useState( '' );
 	const root = useRef( null );
@@ -365,13 +493,57 @@ function MultiSelect( { label, options, value, onChange, placeholder } ) {
 		  )
 		: options;
 
+	const excluding = 'not_in' === mode;
+
 	return (
-		<div className="catalogops-ms" ref={ root }>
-			<span
-				className="catalogops-field-label"
-				id={ `${ inputId }-label` }
-			>
-				{ label }
+		<div
+			className={ `catalogops-ms${ excluding ? ' is-excluding' : '' }` }
+			ref={ root }
+		>
+			<span className="catalogops-ms__label-row">
+				<span
+					className="catalogops-field-label"
+					id={ `${ inputId }-label` }
+				>
+					{ label }
+				</span>
+
+				{ /* The include/exclude switch sits in the label row because it
+				     modifies the label's question ("Category is…" / "is not…"),
+				     not the values. The visible word is also the start of the
+				     accessible name, so the two agree. */ }
+				{ onModeChange && (
+					<button
+						type="button"
+						className="catalogops-ms__mode"
+						aria-label={
+							excluding
+								? sprintf(
+										/* translators: %s: the filter field's name, e.g. Brand. */
+										__(
+											'is not — %s: click to include instead of exclude',
+											'catalogops'
+										),
+										label
+								  )
+								: sprintf(
+										/* translators: %s: the filter field's name, e.g. Brand. */
+										__(
+											'is — %s: click to exclude instead of include',
+											'catalogops'
+										),
+										label
+								  )
+						}
+						onClick={ () =>
+							onModeChange( excluding ? 'in' : 'not_in' )
+						}
+					>
+						{ excluding
+							? __( 'is not', 'catalogops' )
+							: __( 'is', 'catalogops' ) }
+					</button>
+				) }
 			</span>
 
 			{ /* A div rather than a button: the chips carry their own remove
@@ -534,6 +706,50 @@ function MultiSelect( { label, options, value, onChange, placeholder } ) {
 }
 
 /**
+ * A blank filter form.
+ *
+ * Returned fresh each time rather than shared: the form holds arrays, and one
+ * shared constant would hand every reset the same ones.
+ *
+ * The `…Mode` keys carry each set-valued field's include/exclude choice, so the
+ * form can express "category YY but not brand XX" without growing a second
+ * control per field.
+ *
+ * @return {Object} An empty form.
+ */
+function emptyForm() {
+	return {
+		priceMin: '',
+		priceMax: '',
+		stockStatus: '',
+		sku: '',
+		category: [],
+		categoryMode: 'in',
+		tag: [],
+		tagMode: 'in',
+		brand: [],
+		brandMode: 'in',
+		attribute: '',
+		attributeValues: [],
+		attributeMode: 'in',
+	};
+}
+
+/**
+ * The API operator for a set-valued field's include/exclude mode.
+ *
+ * Anything that is not an explicit exclusion reads as an inclusion, so a form
+ * (or a filter saved before modes existed) without the key keeps its original
+ * meaning.
+ *
+ * @param {string} value The field's mode.
+ * @return {string} 'in' or 'not_in'.
+ */
+function operatorFor( value ) {
+	return 'not_in' === value ? 'not_in' : 'in';
+}
+
+/**
  * Build the filter payload from the form state and target scope.
  *
  * @param {Object} form       Form values.
@@ -573,24 +789,29 @@ function buildFilter( form, scope, brandField ) {
 			value: form.sku.trim(),
 		} );
 	}
+	// A set-valued field carries its own include/exclude mode, so one filter can
+	// say "in category YY, but not brand XX". Every condition is still ANDed
+	// (see the return): an exclusion narrows the match, it does not widen it.
+	// An empty selection is no condition at all in either mode — excluding
+	// nothing excludes nobody.
 	if ( form.category.length ) {
 		conditions.push( {
 			field: 'category',
-			operator: 'in',
+			operator: operatorFor( form.categoryMode ),
 			value: form.category.map( Number ),
 		} );
 	}
 	if ( form.tag && form.tag.length ) {
 		conditions.push( {
 			field: 'tag',
-			operator: 'in',
+			operator: operatorFor( form.tagMode ),
 			value: form.tag.map( Number ),
 		} );
 	}
 	if ( form.brand.length && brandField ) {
 		conditions.push( {
 			field: brandField,
-			operator: 'in',
+			operator: operatorFor( form.brandMode ),
 			value: form.brand,
 		} );
 	}
@@ -600,14 +821,20 @@ function buildFilter( form, scope, brandField ) {
 		// otherwise, and this guards a stale value from a prior scope.
 		// A value picked → match those attribute terms; none picked → match any
 		// object that has this attribute at all. Values are term ids.
+		// With no value chosen the question is about the attribute itself rather
+		// than its values: has one at all, or has none.
 		if ( form.attributeValues.length ) {
 			conditions.push( {
 				field: form.attribute,
-				operator: 'in',
+				operator: operatorFor( form.attributeMode ),
 				value: form.attributeValues.map( Number ),
 			} );
 		} else {
-			conditions.push( { field: form.attribute, operator: 'exists' } );
+			conditions.push( {
+				field: form.attribute,
+				operator:
+					'not_in' === form.attributeMode ? 'not_exists' : 'exists',
+			} );
 		}
 	}
 
@@ -661,6 +888,10 @@ const SKIP_REASONS = {
 	),
 	stock_managed: __(
 		'stock is managed here, so WooCommerce sets the status from the quantity and backorder setting instead',
+		'catalogops'
+	),
+	negative_value: __(
+		'the new price would have come out negative, so their price was left as it is — a formula that subtracts a fixed amount does this to items cheaper than that amount',
 		'catalogops'
 	),
 	unchanged: __( 'the value was already set', 'catalogops' ),
@@ -895,6 +1126,7 @@ function BulkEdit( {
 	const [ value, setValue ] = useState( '' );
 	const [ expression, setExpression ] = useState( '' );
 	const [ percent, setPercent ] = useState( '' );
+	const [ direction, setDirection ] = useState( 'increase' );
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
@@ -933,6 +1165,7 @@ function BulkEdit( {
 		setValue( '' );
 		setExpression( '' );
 		setPercent( '' );
+		setDirection( 'increase' );
 		setPreview( null );
 		setError( '' );
 		setName( '' );
@@ -942,12 +1175,22 @@ function BulkEdit( {
 		setShowSchedule( false );
 	}, [ resetKey ] );
 
+	// A cut deeper than 100% would produce a negative price, and nothing further
+	// down the path would stop it. Refusing it here — rather than clamping the
+	// number silently — leaves the typed figure visible next to the reason.
+	const percentTooDeep =
+		'decrease' === direction &&
+		Math.abs( Number( percent ) ) > MAX_DECREASE;
+
 	// Percentage change is expressed as a formula, so it flows through the exact
 	// same action path (and preview/skip semantics) as a typed formula.
 	const percentExpression =
-		percent === '' || Number.isNaN( Number( percent ) )
+		percent === '' || Number.isNaN( Number( percent ) ) || percentTooDeep
 			? ''
-			: `${ fieldVariable( field ) } * ${ percentFactor( percent ) }`;
+			: `${ fieldVariable( field ) } * ${ percentFactor(
+					percent,
+					direction
+			  ) }`;
 
 	const buildActions = () => {
 		if ( mode === 'formula' ) {
@@ -1261,6 +1504,54 @@ function BulkEdit( {
 
 							{ mode === 'percent' && (
 								<div className="catalogops-field">
+									<span
+										className="catalogops-field-label"
+										id="catalogops-direction-label"
+									>
+										{ __( 'Direction', 'catalogops' ) }
+									</span>
+									{ /* Which way the price moves is a choice, not a
+									     character to remember to type: a bare "-10"
+									     and "10" differ by one keystroke, and the
+									     one you get by forgetting it raises prices
+									     across the catalogue. */ }
+									<div
+										className="catalogops-segmented catalogops-segmented--compact"
+										role="group"
+										aria-labelledby="catalogops-direction-label"
+									>
+										<button
+											type="button"
+											className={ `catalogops-segmented__btn${
+												direction === 'increase'
+													? ' is-active'
+													: ''
+											}` }
+											onClick={ () =>
+												setDirection( 'increase' )
+											}
+										>
+											{ __( 'Increase', 'catalogops' ) }
+										</button>
+										<button
+											type="button"
+											className={ `catalogops-segmented__btn${
+												direction === 'decrease'
+													? ' is-active'
+													: ''
+											}` }
+											onClick={ () =>
+												setDirection( 'decrease' )
+											}
+										>
+											{ __( 'Decrease', 'catalogops' ) }
+										</button>
+									</div>
+								</div>
+							) }
+
+							{ mode === 'percent' && (
+								<div className="catalogops-field">
 									<label htmlFor="catalogops-percent">
 										{ __( 'By (%)', 'catalogops' ) }
 									</label>
@@ -1268,6 +1559,18 @@ function BulkEdit( {
 										id="catalogops-percent"
 										type="number"
 										step="any"
+										min="0"
+										max={
+											direction === 'decrease'
+												? MAX_DECREASE
+												: undefined
+										}
+										aria-invalid={ percentTooDeep }
+										aria-describedby={
+											percentTooDeep
+												? 'catalogops-percent-error'
+												: undefined
+										}
 										value={ percent }
 										onChange={ ( e ) =>
 											setPercent( e.target.value )
@@ -1397,6 +1700,27 @@ function BulkEdit( {
 							) }
 						</div>
 
+						{ /* Full width and on its own line: inside the field the
+						     sentence sets the control's width and pushes the rest
+						     of the row onto a second line. */ }
+						{ percentTooDeep && (
+							<div className="catalogops-filter-row">
+								<p
+									className="catalogops-field-error"
+									id="catalogops-percent-error"
+								>
+									{ sprintf(
+										/* translators: %d: the largest decrease allowed, 100. */
+										__(
+											'A decrease cannot go past %d%% — beyond that the price would come out negative.',
+											'catalogops'
+										),
+										MAX_DECREASE
+									) }
+								</p>
+							</div>
+						) }
+
 						<div className="catalogops-filter-row">
 							<p className="catalogops-field-hint">
 								{ changeHint(
@@ -1404,7 +1728,13 @@ function BulkEdit( {
 									mode,
 									mode === 'percent'
 										? percentExpression
-										: expression
+										: expression,
+									{
+										direction,
+										// A rejected amount is not described as
+										// though it were about to run.
+										amount: percentTooDeep ? '' : percent,
+									}
 								) }
 							</p>
 						</div>
@@ -3270,19 +3600,12 @@ function Onboarding( { data, onDismiss } ) {
 }
 
 function App() {
-	const [ form, setForm ] = useState( {
-		priceMin: '',
-		priceMax: '',
-		stockStatus: '',
-		sku: '',
-		category: [],
-		tag: [],
-		brand: [],
-		attribute: '',
-		attributeValues: [],
-	} );
+	const [ form, setForm ] = useState( emptyForm );
 	const [ items, setItems ] = useState( [] );
 	const [ total, setTotal ] = useState( 0 );
+	// { scope, total } when this filter found nothing here but something in the
+	// other scope; null the rest of the time (the server only sends it then).
+	const [ otherScope, setOtherScope ] = useState( null );
 	const [ page, setPage ] = useState( 1 );
 	const [ loading, setLoading ] = useState( false );
 	const [ error, setError ] = useState( '' );
@@ -3305,21 +3628,7 @@ function App() {
 	// The filter that was actually applied to the table (frozen on Apply), so
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
-		buildFilter(
-			{
-				priceMin: '',
-				priceMax: '',
-				stockStatus: '',
-				sku: '',
-				category: [],
-				tag: [],
-				brand: [],
-				attribute: '',
-				attributeValues: [],
-			},
-			'product',
-			''
-		)
+		buildFilter( emptyForm(), 'product', '' )
 	);
 
 	// First-run onboarding + the mandatory backup acknowledgement (CONTEXT §9).
@@ -3368,6 +3677,9 @@ function App() {
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
+			// Drop the previous run's suggestion up front: a failed request would
+			// otherwise leave it pointing at a result that is no longer on screen.
+			setOtherScope( null );
 			apiFetch( {
 				path: '/catalogops/v1/products/query',
 				method: 'POST',
@@ -3381,6 +3693,7 @@ function App() {
 					setItems( res.items );
 					setTotal( res.total );
 					setPage( res.page );
+					setOtherScope( res.other_scope || null );
 				} )
 				.catch( ( err ) =>
 					setError(
@@ -3407,21 +3720,12 @@ function App() {
 	// Clear the filter, its results, and (via resetKey) the bulk-edit and
 	// schedule inputs — a clean slate for the next operation.
 	const resetAll = useCallback( () => {
-		const empty = {
-			priceMin: '',
-			priceMax: '',
-			stockStatus: '',
-			sku: '',
-			category: [],
-			tag: [],
-			brand: [],
-			attribute: '',
-			attributeValues: [],
-		};
+		const empty = emptyForm();
 		setForm( empty );
 		setAppliedFilter( buildFilter( empty, scope, brandField ) );
 		setItems( [] );
 		setTotal( 0 );
+		setOtherScope( null );
 		setPage( 1 );
 		setResetKey( ( k ) => k + 1 );
 	}, [ scope, brandField ] );
@@ -3560,6 +3864,13 @@ function App() {
 												category: ids,
 											} )
 										}
+										mode={ form.categoryMode }
+										onModeChange={ ( next ) =>
+											setForm( {
+												...form,
+												categoryMode: next,
+											} )
+										}
 									/>
 								</div>
 
@@ -3574,6 +3885,13 @@ function App() {
 										onChange={ ( ids ) =>
 											setForm( { ...form, brand: ids } )
 										}
+										mode={ form.brandMode }
+										onModeChange={ ( next ) =>
+											setForm( {
+												...form,
+												brandMode: next,
+											} )
+										}
 									/>
 								</div>
 
@@ -3586,6 +3904,13 @@ function App() {
 											setForm( {
 												...form,
 												tag: ids,
+											} )
+										}
+										mode={ form.tagMode }
+										onModeChange={ ( next ) =>
+											setForm( {
+												...form,
+												tagMode: next,
 											} )
 										}
 									/>
@@ -3661,10 +3986,18 @@ function App() {
 									selectedAttribute && (
 										<div className="catalogops-field catalogops-field--multi">
 											<MultiSelect
-												label={ __(
-													'Values (any if empty)',
-													'catalogops'
-												) }
+												label={
+													'not_in' ===
+													form.attributeMode
+														? __(
+																'Values (none if empty)',
+																'catalogops'
+														  )
+														: __(
+																'Values (any if empty)',
+																'catalogops'
+														  )
+												}
 												options={
 													selectedAttribute.terms
 												}
@@ -3673,6 +4006,13 @@ function App() {
 													setForm( {
 														...form,
 														attributeValues: ids,
+													} )
+												}
+												mode={ form.attributeMode }
+												onModeChange={ ( next ) =>
+													setForm( {
+														...form,
+														attributeMode: next,
 													} )
 												}
 											/>
@@ -3778,6 +4118,10 @@ function App() {
 					<div className="notice notice-error">
 						<p>{ error }</p>
 					</div>
+				) }
+
+				{ ! loading && otherScope && (
+					<ScopeHint other={ otherScope } onSwitch={ setScope } />
 				) }
 
 				<table

@@ -54,6 +54,23 @@ final class Write_Rules {
 	public const SALE_PRICE_PROTECTED = 'sale_price_protected';
 
 	/**
+	 * The fields that hold money and therefore cannot go below zero.
+	 *
+	 * This is our rule, not WooCommerce's — and it is here because WooCommerce
+	 * does not have one. `set_regular_price()` stores whatever it is handed, so a
+	 * formula that turns negative for some rows (`regular_price - 10` on anything
+	 * cheaper than ten) would write negative prices and nothing further down would
+	 * object. A negative price is never what someone meant.
+	 *
+	 * Only the two core price fields. Stock is deliberately absent: WooCommerce
+	 * uses negative quantities for backorders, so a negative there is meaningful.
+	 * A `meta:` field carries no semantics we can read, so it is left alone.
+	 *
+	 * @var list<string>
+	 */
+	private const MONEY_FIELDS = array( 'regular_price', 'sale_price' );
+
+	/**
 	 * The postmeta key each readable core field is stored under. A `meta:` field
 	 * lives under its bare key; anything else imposes no constraint (its presence
 	 * cannot be tested here), erring toward including.
@@ -66,6 +83,26 @@ final class Write_Rules {
 		'stock_quantity' => '_stock',
 		'weight'         => '_weight',
 	);
+
+	/**
+	 * Whether this field would be refused the value given — today, a negative on a
+	 * price. Asked in two places, which is the point of it living here: the
+	 * service refuses an action whose value is negative whatever object it lands
+	 * on, and the plan drops the per-object results that come out negative.
+	 *
+	 * A non-numeric value is nobody's business here; the field's own provider and
+	 * the formula's null handling deal with those.
+	 *
+	 * @param string $field The field key being written.
+	 * @param mixed  $value The value about to be written.
+	 */
+	public function refuses( string $field, mixed $value ): bool {
+		if ( ! in_array( $field, self::MONEY_FIELDS, true ) ) {
+			return false;
+		}
+
+		return is_numeric( $value ) && (float) $value < 0.0;
+	}
 
 	/**
 	 * The applicability constraints a set of actions imposes: the objects that can
