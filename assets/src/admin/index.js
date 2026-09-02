@@ -1026,7 +1026,7 @@ const SKIP_REASONS = {
 		'catalogops'
 	),
 	negative_value: __(
-		'the new price would have come out negative, so their price was left as it is — a formula that subtracts a fixed amount does this to items cheaper than that amount',
+		'the new price would come out negative, so their price is left as it is — subtracting a fixed amount does this to items cheaper than that amount',
 		'catalogops'
 	),
 	unchanged: __( 'the value was already set', 'catalogops' ),

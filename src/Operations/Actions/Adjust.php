@@ -54,6 +54,17 @@ final class Adjust implements Action {
 	}
 
 	/**
+	 * How far the value moves; negative lowers.
+	 *
+	 * Read by {@see \CatalogOps\Operations\Write_Rules} to work out, in SQL, which
+	 * objects a subtraction would take below zero — the one refusal of this action
+	 * that can be counted before the run rather than discovered during it.
+	 */
+	public function amount(): float {
+		return $this->amount;
+	}
+
+	/**
 	 * It reads the field it writes — an object without one cannot be adjusted, so
 	 * naming it here keeps those objects out of the operation entirely rather than
 	 * targeting them and skipping them later (CONTEXT §2).

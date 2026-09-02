@@ -262,13 +262,21 @@ final class Operation_Service {
 	 * @return list<array{id: int, changes: list<array<string, mixed>>}>
 	 */
 	private function sample( Filter $filter, array $actions, array $requirements, string $sku ): array {
-		$target = '' === trim( $sku )
-			? $filter
-			: $filter->with( new Condition( 'sku', Operator::CONTAINS, trim( $sku ) ) );
+		$searching = '' !== trim( $sku );
 
+		$target = $searching
+			? $filter->with( new Condition( 'sku', Operator::CONTAINS, trim( $sku ) ) )
+			: $filter;
+
+		// Browsing shows what will happen: rows drawn from the applicable set, so
+		// every one of them is a row that runs. A search asks a different question
+		// — "and what about that one" — and the useful answer to a product the
+		// change leaves out is the reason, not an empty table. So a search looks
+		// past the applicability rules and lets the derivation explain each row;
+		// it reaches the same verdict those rules do, one object at a time.
 		$rows = array();
 
-		foreach ( $this->engine->resolve( $target, $requirements, self::SAMPLE_SIZE ) as $object_id ) {
+		foreach ( $this->engine->resolve( $target, $searching ? array() : $requirements, self::SAMPLE_SIZE ) as $object_id ) {
 			$product = wc_get_product( $object_id );
 
 			if ( ! $product instanceof WC_Product ) {
