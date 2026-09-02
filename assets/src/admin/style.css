@@ -628,6 +628,13 @@ be more than a few rows however much is chosen.
 	color: var(--co-ink);
 }
 
+/* A notice standing in a column of controls rather than at the top of a page,
+   which is what wp-admin's own margins assume. */
+.catalogops .catalogops-inline-notice {
+	margin: 0;
+	max-width: 52em;
+}
+
 /* A rejected value's reason, under the control that holds it. */
 .catalogops-field-error {
 	margin: 2px 0 0;
@@ -1165,6 +1172,39 @@ specificity and loading later is what makes it red.
 /* The question names what is about to be destroyed, so it is coloured for it. */
 .catalogops-confirm__lead--danger {
 	color: var(--co-red);
+}
+
+/*
+Green from the start, for the same reason the destructive button is red from the
+start: this is the one that runs the change, and the row actions already teach
+that green runs. Its Cancel neighbour stays plain, so the pair reads at a glance.
+
+Scoped under .catalogops for the same reason as the danger button — wp-admin's
+`.wp-core-ui .button` is two classes deep, so a bare class of ours would lose.
+*/
+.catalogops .catalogops-button--go,
+.catalogops .catalogops-button--go:visited {
+	border-color: #15642b;
+	background: var(--co-green);
+	color: #fff;
+	text-shadow: none;
+}
+
+.catalogops .catalogops-button--go:hover:not( :disabled ),
+.catalogops .catalogops-button--go:focus:not( :disabled ) {
+	border-color: #10531f;
+	background: #15642b;
+	color: #fff;
+}
+
+.catalogops .catalogops-button--go:focus:not( :disabled ) {
+	box-shadow: 0 0 0 1px #fff, 0 0 0 3px var(--co-green);
+}
+
+.catalogops .catalogops-button--go:disabled {
+	border-color: var(--co-border-strong);
+	background: var(--co-border-strong);
+	color: #fff;
 }
 
 .catalogops-schedule-preview {

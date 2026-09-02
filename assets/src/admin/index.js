@@ -1186,6 +1186,10 @@ function BulkEdit( {
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
+	// Which action the error belongs to, so the answer can be shown beside the
+	// button that asked for it. At the foot of the panel a message is easy to
+	// miss entirely — the button is where the user is looking.
+	const [ errorFrom, setErrorFrom ] = useState( '' );
 	// Which request is in flight — 'preview', 'apply', 'schedule', or '' for none.
 	// Not a boolean: every control has to be disabled while any of them runs, but
 	// only the one that was pressed should say it is working. One shared flag put
@@ -1282,6 +1286,18 @@ function BulkEdit( {
 	const invalidate = () => {
 		setPreview( null );
 		setError( '' );
+		setErrorFrom( '' );
+	};
+
+	/**
+	 * Record a failure against the action that caused it.
+	 *
+	 * @param {string} action 'preview', 'apply' or 'schedule'.
+	 * @return {Function} A catch handler.
+	 */
+	const failed = ( action ) => ( err ) => {
+		setError( err.message || __( 'Request failed.', 'catalogops' ) );
+		setErrorFrom( action );
 	};
 
 	// Switching to a numeric-only mode off a non-numeric field (stock_status)
@@ -1315,7 +1331,7 @@ function BulkEdit( {
 			data: { filter, actions: buildActions() },
 		} )
 			.then( setPreview )
-			.catch( ( err ) => setError( err.message ) )
+			.catch( failed( 'preview' ) )
 			.finally( () => setBusyWith( '' ) );
 	};
 
@@ -1336,7 +1352,7 @@ function BulkEdit( {
 			data: { filter, actions: buildActions() },
 		} )
 			.then( setOperation )
-			.catch( ( err ) => setError( err.message ) )
+			.catch( failed( 'apply' ) )
 			.finally( () => setBusyWith( '' ) );
 	};
 
@@ -1382,7 +1398,7 @@ function BulkEdit( {
 					onScheduleCreated();
 				}
 			} )
-			.catch( ( err ) => setError( err.message ) )
+			.catch( failed( 'schedule' ) )
 			.finally( () => setBusyWith( '' ) );
 	};
 
@@ -1428,6 +1444,97 @@ function BulkEdit( {
 					value
 			  )
 			: '';
+
+	/**
+	 * The error belonging to one action, rendered where that action lives. At the
+	 * foot of the panel a message is easy to miss; beside the button that was
+	 * pressed it is where the user is already looking.
+	 *
+	 * @param {string} action 'preview', 'apply' or 'schedule'.
+	 * @return {Object|null} The notice, or nothing.
+	 */
+	const noticeFor = ( action ) =>
+		error && errorFrom === action ? (
+			<div className="notice notice-error catalogops-inline-notice">
+				<p>{ error }</p>
+			</div>
+		) : null;
+
+	// The preview's answer, rendered under the button that asked for it. It is
+	// dropped while an operation is on screen: the run supersedes the dry run.
+	const previewPanel = preview && ! operation && (
+		<div className="catalogops-preview">
+			{ preview.matched === 0 && (
+				<div className="notice notice-info">
+					<p>
+						{ __( 'No products match this filter.', 'catalogops' ) }
+					</p>
+				</div>
+			) }
+			{ noneWillChange && (
+				<div className="notice notice-warning">
+					<p>
+						{ sprintf(
+							/* translators: %d: number of matched products. */
+							__(
+								'Preview: none of the %d matching products will change. Nothing will be written when you Apply.',
+								'catalogops'
+							),
+							preview.matched
+						) }
+					</p>
+					<ReasonList items={ omittedBy } />
+					{ saleCeiling && <p>{ saleCeiling }</p> }
+					{ filter.scope === 'product' &&
+						omittedFor( 'empty_input' ) > 0 && (
+							<p>
+								{ __(
+									'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those.',
+									'catalogops'
+								) }
+							</p>
+						) }
+				</div>
+			) }
+			{ preview.matched > 0 && preview.applicable > 0 && (
+				<div className="notice notice-success">
+					<p>
+						{ sprintf(
+							/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
+							__(
+								'Preview: %1$d matched · %2$d will change · %3$d will not.',
+								'catalogops'
+							),
+							preview.matched,
+							preview.applicable,
+							preview.omitted
+						) }
+					</p>
+					{ omittedBy.length > 0 && (
+						<>
+							<ReasonList items={ omittedBy } />
+							{ saleCeiling && <p>{ saleCeiling }</p> }
+							<p className="catalogops-muted">
+								{ sprintf(
+									/* translators: %d: number of products that will be updated. */
+									__(
+										'Only the %d that will change go into the operation, so its progress, history, and undo all match this number.',
+										'catalogops'
+									),
+									preview.applicable
+								) }
+							</p>
+						</>
+					) }
+				</div>
+			) }
+			{ previewWarnings.map( ( warning ) => (
+				<div className="notice notice-warning" key={ warning.code }>
+					<p>{ warningText( warning.code, warning.count ) }</p>
+				</div>
+			) ) }
+		</div>
+	);
 
 	return (
 		<div className="catalogops-bulk-edit">
@@ -1869,6 +1976,9 @@ function BulkEdit( {
 								</span>
 							) }
 						</div>
+
+						{ noticeFor( 'preview' ) }
+						{ previewPanel }
 					</div>
 				</div>
 			</div>
@@ -1973,6 +2083,7 @@ function BulkEdit( {
 										</span>
 									) }
 								</div>
+								{ noticeFor( 'apply' ) }
 							</>
 						) }
 
@@ -2132,6 +2243,7 @@ function BulkEdit( {
 										</span>
 									) }
 								</div>
+								{ noticeFor( 'schedule' ) }
 								{ scheduleMsg && (
 									<p className="catalogops-saved">
 										{ scheduleMsg }
@@ -2184,8 +2296,11 @@ function BulkEdit( {
 						</p>
 					) }
 					<div className="catalogops-confirm__actions">
+						{ /* Green because this is the one that runs — the same
+						     vocabulary the row actions already use, and the
+						     counterpart of the red the delete confirmation wears. */ }
 						<button
-							className="button button-primary"
+							className="button catalogops-button--go"
 							onClick={ confirmApply }
 							disabled={
 								busy || ( ! backupAck && ! backupChecked )
@@ -2201,94 +2316,6 @@ function BulkEdit( {
 							{ __( 'Cancel', 'catalogops' ) }
 						</button>
 					</div>
-				</div>
-			) }
-
-			{ error && (
-				<div className="notice notice-error">
-					<p>{ error }</p>
-				</div>
-			) }
-
-			{ preview && ! operation && (
-				<div className="catalogops-preview">
-					{ preview.matched === 0 && (
-						<div className="notice notice-info">
-							<p>
-								{ __(
-									'No products match this filter.',
-									'catalogops'
-								) }
-							</p>
-						</div>
-					) }
-					{ noneWillChange && (
-						<div className="notice notice-warning">
-							<p>
-								{ sprintf(
-									/* translators: %d: number of matched products. */
-									__(
-										'Preview: none of the %d matching products will change. Nothing will be written when you Apply.',
-										'catalogops'
-									),
-									preview.matched
-								) }
-							</p>
-							<ReasonList items={ omittedBy } />
-							{ saleCeiling && <p>{ saleCeiling }</p> }
-							{ filter.scope === 'product' &&
-								omittedFor( 'empty_input' ) > 0 && (
-									<p>
-										{ __(
-											'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those.',
-											'catalogops'
-										) }
-									</p>
-								) }
-						</div>
-					) }
-					{ preview.matched > 0 && preview.applicable > 0 && (
-						<div className="notice notice-success">
-							<p>
-								{ sprintf(
-									/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
-									__(
-										'Preview: %1$d matched · %2$d will change · %3$d will not.',
-										'catalogops'
-									),
-									preview.matched,
-									preview.applicable,
-									preview.omitted
-								) }
-							</p>
-							{ omittedBy.length > 0 && (
-								<>
-									<ReasonList items={ omittedBy } />
-									{ saleCeiling && <p>{ saleCeiling }</p> }
-									<p className="catalogops-muted">
-										{ sprintf(
-											/* translators: %d: number of products that will be updated. */
-											__(
-												'Only the %d that will change go into the operation, so its progress, history, and undo all match this number.',
-												'catalogops'
-											),
-											preview.applicable
-										) }
-									</p>
-								</>
-							) }
-						</div>
-					) }
-					{ previewWarnings.map( ( warning ) => (
-						<div
-							className="notice notice-warning"
-							key={ warning.code }
-						>
-							<p>
-								{ warningText( warning.code, warning.count ) }
-							</p>
-						</div>
-					) ) }
 				</div>
 			) }
 
