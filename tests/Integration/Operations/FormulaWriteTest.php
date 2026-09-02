@@ -23,6 +23,7 @@ use CatalogOps\Operations\Fields\Core_Fields;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Operations\Fields\Meta_Fields;
 use CatalogOps\Operations\Lock;
+use CatalogOps\Operations\Operation_Blocked;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
@@ -183,6 +184,42 @@ final class FormulaWriteTest extends Operations_Database_Case {
 		$this->drive( $op_id );
 
 		$this->assertSame( '45', wc_get_product( $product )->get_regular_price() );
+	}
+
+	public function test_a_refused_queue_leaves_no_draft_in_the_history(): void {
+		// create() records a draft and queue() is what makes it real. Every way
+		// queue() can refuse — the free plan's object cap, another operation
+		// holding the write-lock — used to leave that draft behind, so a user told
+		// their operation had been refused also got a permanent "draft" line in the
+		// history for something that never ran. The lock is the cheap way in; the
+		// cap takes the same exit.
+		$this->make_product( 100, '10' );
+
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) );
+		$actions = array( new Set_Value( 'regular_price', '5.00' ) );
+
+		$holder = $this->service->create( $filter, $actions, Operation_Mode::SAFE, Operation_Source::UI, 1 );
+		$this->service->queue( $holder );
+
+		$before = count( $this->operations->recent( 100 ) );
+
+		$refused = $this->service->create( $filter, $actions, Operation_Mode::SAFE, Operation_Source::UI, 1 );
+
+		// The draft exists between the two calls; that is the window being closed.
+		$this->assertSame( $before + 1, count( $this->operations->recent( 100 ) ) );
+
+		try {
+			$this->service->queue( $refused );
+			$this->fail( 'The write-lock should refuse a second operation.' );
+		} catch ( Operation_Blocked $e ) {
+			$this->assertStringContainsString( 'already writing', $e->getMessage() );
+		}
+
+		$this->assertNull( $this->operations->find( $refused ) );
+		$this->assertSame( $before, count( $this->operations->recent( 100 ) ) );
+
+		// And the operation that does hold the lock is untouched.
+		$this->assertNotNull( $this->operations->find( $holder ) );
 	}
 
 	public function test_an_amount_adjustment_runs_and_the_free_tier_may_use_it(): void {

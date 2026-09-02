@@ -129,9 +129,11 @@ final class LicenseGatingTest extends Operations_Database_Case {
 			$this->assertStringContainsString( '200', $e->getMessage() );
 		}
 
-		// The cap fires before seeding, so the operation stays a draft with no
-		// staged rows, and the write-lock is released rather than leaked.
-		$this->assertSame( Operation_Status::DRAFT, $this->operations->find( $op_id )->status );
+		// The cap fires before seeding, so nothing was staged and the write-lock is
+		// released rather than leaked. The draft goes with it: an operation that
+		// was refused never ran, and leaving its row behind put a permanent
+		// "draft" line in the history for something the user was told was refused.
+		$this->assertNull( $this->operations->find( $op_id ) );
 		$this->assertSame( 0, array_sum( $this->changes->counts( $op_id ) ) );
 		$this->assertFalse( (bool) get_option( 'catalogops_active_operation' ) );
 	}

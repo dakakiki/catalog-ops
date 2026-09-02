@@ -16,6 +16,7 @@ use CatalogOps\Query\Filter;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
 use InvalidArgumentException;
+use Throwable;
 use WC_Product;
 
 /**
@@ -444,6 +445,8 @@ final class Operation_Service {
 	 *
 	 * @throws InvalidArgumentException When the operation is missing or not a draft.
 	 * @throws Operation_Blocked        When another operation holds the write-lock.
+	 * @throws Throwable                Whatever freezing raised — a free-tier cap
+	 *                                  breach, say — after the draft is discarded.
 	 */
 	public function queue( int $op_id ): void {
 		$operation = $this->operations->find( $op_id );
@@ -457,6 +460,10 @@ final class Operation_Service {
 		}
 
 		if ( ! $this->lock->acquire( $op_id ) ) {
+			// Refused before anything was frozen, so there is no operation here to
+			// keep — only the draft `create()` left behind a moment ago.
+			$this->discard_draft( $op_id );
+
 			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 		}
 
@@ -465,6 +472,13 @@ final class Operation_Service {
 		// path (nothing to do) and any thrown failure, such as a free-tier
 		// object-cap breach in freeze_edit() — so the catalog is never left
 		// wedged against future operations.
+		//
+		// A failure also takes the draft with it. `create()` records the draft and
+		// `queue()` is what makes it real; when queueing throws, that row describes
+		// an operation that never ran and never will, and leaving it behind puts a
+		// permanent "draft" line in the history for something the user was told had
+		// been refused. Only a row still in DRAFT is removed — anything that got as
+		// far as being frozen is a real operation and stays.
 		$handed_off = false;
 
 		try {
@@ -492,11 +506,37 @@ final class Operation_Service {
 			$this->scheduler->kick();
 
 			$handed_off = true;
+		} catch ( Throwable $e ) {
+			$this->discard_draft( $op_id );
+
+			throw $e;
 		} finally {
 			if ( ! $handed_off ) {
 				$this->lock->release( $op_id );
 			}
 		}
+	}
+
+	/**
+	 * Remove an operation that is still only a draft.
+	 *
+	 * `create()` records the draft and `queue()` is what makes it real, so a
+	 * refusal in between leaves a row describing an operation that never ran and
+	 * never will — and a permanent "draft" line in the history for something the
+	 * user was told had been refused. Anything past DRAFT was frozen and is a real
+	 * operation, so it is left exactly where it is.
+	 *
+	 * @param int $op_id Operation id.
+	 */
+	private function discard_draft( int $op_id ): void {
+		$operation = $this->operations->find( $op_id );
+
+		if ( null === $operation || Operation_Status::DRAFT !== $operation->status ) {
+			return;
+		}
+
+		$this->changes->delete_for_operation( $op_id );
+		$this->operations->delete( $op_id );
 	}
 
 	/**
