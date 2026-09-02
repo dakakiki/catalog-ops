@@ -56,6 +56,53 @@ final class QueryControllerTest extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'stock_status', $item );
 	}
 
+	public function test_rows_carry_the_brand_and_tags_the_filter_matches_on(): void {
+		// Both are filterable, so a table without them asks the user to filter on
+		// something the results will not show.
+		$id  = $this->make_product( 40 );
+		$tag = wp_insert_term( 'QC Clearance', 'product_tag' );
+
+		wp_set_object_terms( $id, array( (int) $tag['term_id'] ), 'product_tag' );
+		update_post_meta( $id, '_catalogops_brand', 'Acme' );
+
+		$data = $this->dispatch( array() );
+
+		$this->assertSame( 'Acme', $data['items'][0]['brand'] );
+		$this->assertSame( array( 'QC Clearance' ), $data['items'][0]['tags'] );
+	}
+
+	public function test_a_variation_shows_its_parents_tags(): void {
+		// A variation carries no terms of its own; it inherits the parent's, which
+		// is also how the filter matches them.
+		list( $parent, $variations ) = $this->make_variable_product();
+		$tag = wp_insert_term( 'QC Seasonal', 'product_tag' );
+
+		wp_set_object_terms( $parent, array( (int) $tag['term_id'] ), 'product_tag' );
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params( array( 'scope' => 'variation', 'filter' => array() ) );
+
+		$response = rest_do_request( $request );
+		$this->assertSame( 200, $response->get_status() );
+
+		$rows = $response->get_data()['items'];
+		$this->assertNotEmpty( $rows );
+		$this->assertContains( $variations['Large'], array_column( $rows, 'id' ) );
+
+		foreach ( $rows as $row ) {
+			$this->assertSame( array( 'QC Seasonal' ), $row['tags'] );
+		}
+	}
+
+	public function test_a_product_without_a_brand_or_tags_says_so_plainly(): void {
+		$this->make_product( 40 );
+
+		$item = $this->dispatch( array() )['items'][0];
+
+		$this->assertNull( $item['brand'] );
+		$this->assertSame( array(), $item['tags'] );
+	}
+
 	public function test_empty_filter_counts_the_whole_catalog(): void {
 		$this->make_product( 10 );
 		$this->make_product( 20 );

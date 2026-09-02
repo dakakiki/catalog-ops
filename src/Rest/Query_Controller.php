@@ -187,12 +187,21 @@ final class Query_Controller {
 
 		$is_variation = $scope->is_variation();
 		$name_select  = $is_variation ? 'parent.post_title AS name, p.post_parent AS parent_id' : 'p.post_title AS name, 0 AS parent_id';
-		$parent_join  = $is_variation ? "LEFT JOIN {$posts} parent ON parent.ID = p.post_parent" : '';
+
+		// A variation's own SKU is usually blank — shops give one to the product,
+		// not to each size — and SKU leads the table, so it borrows the parent's
+		// rather than leaving the identifying column empty on every row. This is
+		// what the audit view already does ({@see Operations_Controller::identify()}).
+		$sku_select  = $is_variation ? "COALESCE( NULLIF( l.sku, '' ), pl.sku, '' ) AS sku" : 'l.sku';
+		$parent_join = $is_variation
+			? "LEFT JOIN {$posts} parent ON parent.ID = p.post_parent
+				LEFT JOIN {$lookup} pl ON pl.product_id = p.post_parent"
+			: '';
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
-				"SELECT p.ID, {$name_select}, l.sku, l.min_price, l.max_price, l.stock_status, l.stock_quantity
+				"SELECT p.ID, {$name_select}, {$sku_select}, l.min_price, l.max_price, l.stock_status, l.stock_quantity
 				FROM {$lookup} l
 				INNER JOIN {$posts} p ON p.ID = l.product_id
 				{$parent_join}
@@ -209,7 +218,18 @@ final class Query_Controller {
 		}
 
 		$attributes = $is_variation ? $this->variation_attributes( $ids ) : array();
-		$extra      = $this->sale_and_cost( $ids );
+		$extra      = $this->meta_columns( $ids );
+
+		// Terms hang off the parent product, which is also how the filter matches
+		// them, so under the variation scope the tags to show are the parent's.
+		$tag_owners = array();
+		foreach ( $ids as $id ) {
+			if ( isset( $by_id[ $id ] ) ) {
+				$tag_owners[ $id ] = $is_variation ? (int) $by_id[ $id ]['parent_id'] : $id;
+			}
+		}
+
+		$tags = $this->tags( $tag_owners );
 
 		$items = array();
 		foreach ( $ids as $id ) {
@@ -228,6 +248,8 @@ final class Query_Controller {
 				'name'           => $name,
 				'parent_id'      => (int) $row['parent_id'],
 				'sku'            => (string) $row['sku'],
+				'brand'          => $extra[ $id ]['brand'] ?? null,
+				'tags'           => $tags[ $id ] ?? array(),
 				'price'          => $row['min_price'],
 				'max_price'      => $row['max_price'],
 				'sale_price'     => $extra[ $id ]['sale_price'] ?? null,
@@ -241,6 +263,58 @@ final class Query_Controller {
 	}
 
 	/**
+	 * The product tags for a page of objects, in one pass.
+	 *
+	 * Joining `term_taxonomy` here is safe, unlike inside the filter's membership
+	 * subquery where it is the thing that mis-plans (see
+	 * {@see \CatalogOps\Query\Query_Engine::taxonomy_clause()}): this reads at most
+	 * a page of ids straight off the primary index, with no filter to re-plan
+	 * around.
+	 *
+	 * @param array<int, int> $owners Row id => the object whose terms to read.
+	 * @return array<int, list<string>> Row id => tag names.
+	 */
+	private function tags( array $owners ): array {
+		$unique = array_values( array_unique( array_filter( $owners ) ) );
+
+		if ( array() === $unique ) {
+			return array();
+		}
+
+		$relationships = $this->wpdb->term_relationships;
+		$taxonomy      = $this->wpdb->term_taxonomy;
+		$terms         = $this->wpdb->terms;
+		$placeholders  = implode( ', ', array_fill( 0, count( $unique ), '%d' ) );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT tr.object_id, t.name
+				FROM {$relationships} tr
+				INNER JOIN {$taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'product_tag'
+				INNER JOIN {$terms} t ON t.term_id = tt.term_id
+				WHERE tr.object_id IN ( {$placeholders} )
+				ORDER BY t.name ASC",
+				...$unique
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$by_owner = array();
+		foreach ( $rows as $row ) {
+			$by_owner[ (int) $row['object_id'] ][] = (string) $row['name'];
+		}
+
+		$by_row = array();
+		foreach ( $owners as $id => $owner ) {
+			$by_row[ $id ] = $by_owner[ $owner ] ?? array();
+		}
+
+		return $by_row;
+	}
+
+	/**
 	 * Read the sale price and cost for a page of ids in one pass, so the table can
 	 * show whether those fields carry data (and thus whether a formula reading
 	 * `sale_price` or `cost` would have something to work with). Sale price lives in
@@ -248,25 +322,31 @@ final class Query_Controller {
 	 * variable reads (default `_catalogops_cost`). Empty strings are normalized to
 	 * null so the UI can render a clear blank. No product objects are loaded (§9).
 	 *
+	 * Brand rides along in the same pass: it is filterable, so leaving it out of
+	 * the table meant filtering by something the results would not show.
+	 *
 	 * @param int[] $ids Ids for this page.
-	 * @return array<int, array{sale_price: ?string, cost: ?string}>
+	 * @return array<int, array{sale_price: ?string, cost: ?string, brand: ?string}>
 	 */
-	private function sale_and_cost( array $ids ): array {
+	private function meta_columns( array $ids ): array {
 		$cost_key = (string) apply_filters( 'catalogops_cost_meta_key', Variables::DEFAULT_COST_META_KEY );
 		if ( '' === $cost_key ) {
 			$cost_key = Variables::DEFAULT_COST_META_KEY;
 		}
 
+		/** This filter is documented in src/Rest/Fields_Controller.php */
+		$brand_key = (string) apply_filters( 'catalogops_brand_meta_key', '_catalogops_brand' );
+
 		$postmeta     = $this->wpdb->postmeta;
 		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
-		$args         = array( ...$ids, '_sale_price', $cost_key );
+		$args         = array( ...$ids, '_sale_price', $cost_key, $brand_key );
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
 				"SELECT post_id, meta_key, meta_value
 				FROM {$postmeta}
-				WHERE post_id IN ( {$placeholders} ) AND meta_key IN ( %s, %s )",
+				WHERE post_id IN ( {$placeholders} ) AND meta_key IN ( %s, %s, %s )",
 				...$args
 			),
 			ARRAY_A
@@ -282,6 +362,7 @@ final class Query_Controller {
 				$out[ $id ] = array(
 					'sale_price' => null,
 					'cost'       => null,
+					'brand'      => null,
 				);
 			}
 
@@ -289,6 +370,8 @@ final class Query_Controller {
 				$out[ $id ]['sale_price'] = $value;
 			} elseif ( $cost_key === $row['meta_key'] ) {
 				$out[ $id ]['cost'] = $value;
+			} elseif ( $brand_key === $row['meta_key'] ) {
+				$out[ $id ]['brand'] = $value;
 			}
 		}
 

@@ -4700,9 +4700,15 @@ function App() {
 				>
 					<thead>
 						<tr>
-							<th>{ __( 'ID', 'catalogops' ) }</th>
-							<th>{ __( 'Name', 'catalogops' ) }</th>
+							{ /* SKU leads, as it does in the preview and the audit
+							     log: it is how a product is named out loud. The id
+							     is addressing, not information. Brand and tags earn
+							     their columns by being filterable — filtering on
+							     something the results do not show is a guess. */ }
 							<th>{ __( 'SKU', 'catalogops' ) }</th>
+							<th>{ __( 'Name', 'catalogops' ) }</th>
+							<th>{ __( 'Brand', 'catalogops' ) }</th>
+							<th>{ __( 'Tags', 'catalogops' ) }</th>
 							<th className="catalogops-num">
 								{ __( 'Cost', 'catalogops' ) }
 							</th>
@@ -4721,7 +4727,7 @@ function App() {
 					<tbody>
 						{ items.length === 0 && ! loading ? (
 							<tr>
-								<td colSpan="8">
+								<td colSpan="9">
 									{ __(
 										'No items match this filter.',
 										'catalogops'
@@ -4731,9 +4737,24 @@ function App() {
 						) : (
 							items.map( ( item ) => (
 								<tr key={ item.id }>
-									<td>{ item.id }</td>
-									<td>{ item.name }</td>
 									<td>{ item.sku }</td>
+									<td>{ item.name }</td>
+									<td>
+										{ item.brand || (
+											<span className="catalogops-muted">
+												—
+											</span>
+										) }
+									</td>
+									<td>
+										{ item.tags && item.tags.length > 0 ? (
+											item.tags.join( ', ' )
+										) : (
+											<span className="catalogops-muted">
+												—
+											</span>
+										) }
+									</td>
 									<td className="catalogops-num">
 										{ item.cost === null ||
 										item.cost === undefined ? (
