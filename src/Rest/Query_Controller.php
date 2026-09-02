@@ -11,6 +11,8 @@ use CatalogOps\Operations\Formula\Variables;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Query_Scope;
+use InvalidArgumentException;
+use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
@@ -97,8 +99,9 @@ final class Query_Controller {
 	 * Resolve a filter and return one page of matching products.
 	 *
 	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
 	 */
-	public function query( WP_REST_Request $request ): WP_REST_Response {
+	public function query( WP_REST_Request $request ) {
 		$filter_data = (array) $request->get_param( 'filter' );
 
 		// A top-level scope param (what the UI's Products/Variations toggle sends)
@@ -108,13 +111,30 @@ final class Query_Controller {
 			$filter_data['scope'] = $scope;
 		}
 
-		$filter   = Filter::from_array( $filter_data );
 		$page     = max( 1, (int) $request->get_param( 'page' ) );
 		$per_page = min( 200, max( 1, (int) $request->get_param( 'per_page' ) ) );
 
-		$ids      = $this->engine->resolve( $filter );
-		$total    = count( $ids );
-		$page_ids = array_slice( $ids, ( $page - 1 ) * $per_page, $per_page );
+		// This is the table someone is looking at while they build a filter, so it is
+		// where a refusal lands first and hardest. Both engine calls share the try on
+		// purpose: other_scope() re-asks the same filter, and it only asks when the
+		// first call found nothing — exactly the state a filter naming a field that
+		// has gone away ends up in. Guarding only the first would turn the 400 into a
+		// 500 on the one path that reaches the second.
+		try {
+			$filter   = Filter::from_array( $filter_data );
+			$ids      = $this->engine->resolve( $filter );
+			$total    = count( $ids );
+			$page_ids = array_slice( $ids, ( $page - 1 ) * $per_page, $per_page );
+			$other    = $this->other_scope( $filter, $total );
+		} catch ( InvalidArgumentException $e ) {
+			// A filter the engine will not run is a bad request, not a server fault:
+			// the table shows the message and the user fixes the condition. Every
+			// other filter endpoint already maps this to 400; this one had no error
+			// machinery of its own, so a refusal here surfaced as a fatal instead.
+			// Filter_Field_Unavailable extends InvalidArgumentException, so this one
+			// arm covers the refusal, a bad operator token, and an empty field key.
+			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
+		}
 
 		return new WP_REST_Response(
 			array(
@@ -123,7 +143,7 @@ final class Query_Controller {
 				'per_page'    => $per_page,
 				'scope'       => $filter->scope()->value,
 				'items'       => $this->rows_for( $page_ids, $filter->scope() ),
-				'other_scope' => $this->other_scope( $filter, $total ),
+				'other_scope' => $other,
 			)
 		);
 	}
@@ -411,5 +431,16 @@ final class Query_Controller {
 		}
 
 		return $summary;
+	}
+
+	/**
+	 * Build a WP_Error carrying an HTTP status.
+	 *
+	 * @param string $code    Machine-readable error code.
+	 * @param string $message Human-readable message.
+	 * @param int    $status  HTTP status code.
+	 */
+	private function error( string $code, string $message, int $status ): WP_Error {
+		return new WP_Error( $code, $message, array( 'status' => $status ) );
 	}
 }

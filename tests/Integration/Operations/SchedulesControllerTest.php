@@ -69,6 +69,45 @@ final class SchedulesControllerTest extends Operations_Database_Case {
 		$this->assertNotEmpty( $this->schedules->all() );
 	}
 
+	/**
+	 * Pins that a filter naming a field the engine cannot answer is refused at the
+	 * save boundary — 400 `catalogops_invalid_request`, and no row written.
+	 *
+	 * A schedule fires unattended, so the moment to tell someone their filter names
+	 * a field nothing can answer is while they are looking at the form, not at
+	 * 03:00. `Schedules::create()` writes the row itself rather than going through
+	 * `Operation_Service`, so this REST boundary is the only place that can catch it
+	 * before it is stored.
+	 *
+	 * On 0.7.1 the controller stored the schedule and returned 201: the unknown
+	 * field was dropped later, at execution, leaving one AND condition fewer and a
+	 * wider set than was asked for — applied overnight with nobody watching.
+	 */
+	public function test_a_schedule_naming_an_unanswerable_field_is_refused_at_save(): void {
+		$request = $this->create_request();
+		$request->set_param(
+			'filter',
+			array(
+				'conditions' => array(
+					array(
+						'field'    => 'shipping_class',
+						'operator' => 'in',
+						'value'    => array( 12 ),
+					),
+				),
+			)
+		);
+
+		$response = $this->controller_for( License::unlimited() )->create( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'catalogops_invalid_request', $response->get_error_code() );
+		$this->assertSame( 400, $response->get_error_data()['status'] );
+
+		// The refusal lands before any write: nothing was persisted.
+		$this->assertSame( array(), $this->schedules->all() );
+	}
+
 	public function test_index_pages_the_list_and_reports_the_whole_count(): void {
 		$ids = array();
 		for ( $i = 0; $i < 12; $i++ ) {

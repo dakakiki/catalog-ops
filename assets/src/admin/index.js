@@ -3795,6 +3795,15 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 					>
 						{ schedule.status }
 					</span>
+					{ /* A schedule that stopped itself has to say why, or the only
+					     control on offer — Resume — just stops it again on the next
+					     tick. The text is the server's own message, rendered as it
+					     arrives, like every other error in this app. */ }
+					{ schedule.paused_reason && (
+						<p className="catalogops-muted">
+							{ schedule.paused_reason }
+						</p>
+					) }
 				</td>
 				<td>
 					{ done

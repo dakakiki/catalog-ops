@@ -11,6 +11,7 @@ namespace CatalogOps\Tests\Integration\Query;
 
 use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Filter_Field_Unavailable;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
 use WC_Product_Attribute;
@@ -435,6 +436,173 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertSame( array( $match ), $ids );
 		$this->assertNotContains( $wrong_cat, $ids );
 		$this->assertNotContains( $too_cheap, $ids );
+	}
+
+	/**
+	 * Pins that a field the engine cannot answer is refused, not dropped.
+	 *
+	 * The filter reads "in category A *and* on clearance", and `acf:clearance` is
+	 * the shape a third-party field key takes — a plugin's own prefix the engine
+	 * has never claimed. In 0.7.1 `clause_for()` fell through to
+	 * `return array( '', array() )`, `build_where()` skipped the empty fragment,
+	 * and the filter ran as "in category A" alone: both products below came back,
+	 * a strictly *wider* set than was asked for. Preview and run resolved the same
+	 * widened filter and agreed, so nothing downstream could notice — which is why
+	 * widening is the one direction that may never happen quietly.
+	 */
+	public function test_an_unknown_field_is_refused_rather_than_silently_widening(): void {
+		// The two products 0.7.1 handed back for a filter that asked for neither.
+		$this->make_product( array( 'category' => $this->cat_a ) );
+		$this->make_product( array( 'category' => $this->cat_a ) );
+
+		$filter = new Filter(
+			array(
+				new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+				new Condition( 'acf:clearance', Operator::EQUALS, 1 ),
+			)
+		);
+
+		try {
+			$this->engine->resolve( $filter );
+			$this->fail( 'Expected the engine to refuse a filter naming an unknown field.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			// The message names the offending key so the user can repair the filter.
+			$this->assertStringContainsString( 'acf:clearance', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that the refusal covers `count()` as well as `resolve()`.
+	 *
+	 * The two public entry points have to agree: `count()` is what the preview
+	 * asks, `resolve()` is what the freezing path asks. A fix on only one of them
+	 * would let the preview refuse while the write went ahead against the wider
+	 * set — or the reverse, a preview promising a count the run then refuses.
+	 * 0.7.1 answered 2 here: every product in the category, clearance ignored.
+	 */
+	public function test_count_refuses_an_unknown_field_too(): void {
+		$this->make_product( array( 'category' => $this->cat_a ) );
+		$this->make_product( array( 'category' => $this->cat_a ) );
+
+		$filter = new Filter(
+			array(
+				new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+				new Condition( 'acf:clearance', Operator::EQUALS, 1 ),
+			)
+		);
+
+		try {
+			$this->engine->count( $filter );
+			$this->fail( 'Expected count() to refuse a filter naming an unknown field.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'acf:clearance', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that a known field asked an impossible comparison is refused.
+	 *
+	 * The field key is fine in both halves; it is the operator the column cannot
+	 * make — "price contains 5" on a numeric column, "sku greater than 5" on a
+	 * text one. 0.7.1 dropped each condition whole, so a one-condition filter
+	 * became no filter and matched the entire published catalogue.
+	 *
+	 * Two throws, so two assertions: PHPUnit stops at the first expected
+	 * exception, and the second half would never run under one `expectException`.
+	 */
+	public function test_a_comparison_the_column_cannot_make_is_refused(): void {
+		// On 0.7.1 this product answered both filters below.
+		$this->make_product(
+			array(
+				'price' => 50,
+				'sku'   => 'COPS-REFUSE-1',
+			)
+		);
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'price', Operator::CONTAINS, '5' ) ) )
+			);
+			$this->fail( 'Expected a "contains" comparison on price to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'price', $e->getMessage() );
+		}
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'sku', Operator::GREATER_THAN, 5 ) ) )
+			);
+			$this->fail( 'Expected a "greater than" comparison on sku to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'sku', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that a half-built "between" is refused rather than ignored.
+	 *
+	 * A range with only its low end is a filter the user is still writing, and it
+	 * cannot be run as asked. 0.7.1 returned an empty fragment for it, which under
+	 * a single-condition filter is the widest possible answer: every published
+	 * product, including the one below that is nowhere near the range.
+	 */
+	public function test_a_between_filter_with_one_end_is_refused(): void {
+		$this->make_product( array( 'price' => 500 ) );
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'price', Operator::BETWEEN, array( 10 ) ) ) )
+			);
+			$this->fail( 'Expected a one-ended "between" filter to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'between', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that a prefix with no identifier after it is refused.
+	 *
+	 * `meta:` names no key. It is not a typo anyone types by hand: it is what a
+	 * site whose `catalogops_brand_meta_key` filter returns an empty string emits
+	 * from `/fields/brands`, so the brand dropdown builds a condition on nothing.
+	 * In 0.7.1 `meta_clause()` was still reached with an empty key and returned an
+	 * empty fragment, so "brand is Acme" quietly meant "every product".
+	 */
+	public function test_a_meta_prefix_with_no_key_is_refused(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'meta:', Operator::IN, array( 'Acme' ) ) ) )
+			);
+			$this->fail( 'Expected a "meta:" key with nothing after the colon to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'meta:', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * The same half-built range over a meta key, which widens by a different route.
+	 *
+	 * A meta condition keeps its subquery whatever the value test comes to, so an
+	 * empty test did not drop the condition — it decayed it into "has a `_cost` at
+	 * all". Both products below carry one, so 0.7.1 answered a one-ended range with
+	 * every costed product, and the price path and the meta path disagreed about
+	 * the identical mistake.
+	 */
+	public function test_a_one_ended_between_on_a_meta_key_is_refused_too(): void {
+		$this->make_product( array( 'meta' => array( '_cost' => '12.00' ) ) );
+		$this->make_product( array( 'meta' => array( '_cost' => '900.00' ) ) );
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'meta:_cost', Operator::BETWEEN, array( 10 ) ) ) )
+			);
+			$this->fail( 'Expected a one-ended "between" on a meta key to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'between', $e->getMessage() );
+		}
 	}
 
 	/**

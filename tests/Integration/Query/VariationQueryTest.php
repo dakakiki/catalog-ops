@@ -164,6 +164,52 @@ final class VariationQueryTest extends WP_UnitTestCase {
 		$this->assertSame( array(), $none );
 	}
 
+	/**
+	 * Pins the one empty-set answer this release changes: under the variation
+	 * scope, an attribute filter whose named terms have all been deleted matches
+	 * nothing, and its negation matches every variation.
+	 *
+	 * Those are the answers the product scope has always given — taxonomy_clause()
+	 * resolves a vanished term to `1 = 0` / `1 = 1` — and the variation clause now
+	 * agrees. On 0.7.1 it returned an empty fragment instead, which build_where()
+	 * skips, so the condition vanished and BOTH directions returned every
+	 * variation: "size is Large" and "size is not Large" answered identically.
+	 *
+	 * Note this is not the unknown-field refusal. `attribute:pa_size` is a
+	 * well-shaped key; that its term is gone is a question with a real answer, not
+	 * an unanswerable one.
+	 */
+	public function test_a_variation_attribute_whose_terms_are_gone_matches_nothing(): void {
+		list( , $variations ) = $this->make_variable_product(
+			array( 'Small' => 10, 'Medium' => 50, 'Large' => 90 )
+		);
+
+		// Delete the size the Large variation was built for. The variation keeps its
+		// attribute_pa_size meta; only the term it named is gone.
+		$deleted = $this->large;
+		wp_delete_term( $deleted, $this->size_tax );
+
+		$none = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::IN, array( $deleted ) ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertSame( array(), $none, 'a deleted attribute term can be carried by nothing' );
+
+		$all = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::NOT_IN, array( $deleted ) ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertEqualsCanonicalizing( array_values( $variations ), $all, 'and every variation lacks it' );
+	}
+
 	public function test_variation_meta_filters_on_the_variations_own_meta(): void {
 		list( , $variations ) = $this->make_variable_product( array( 'Small' => 10, 'Medium' => 50 ) );
 

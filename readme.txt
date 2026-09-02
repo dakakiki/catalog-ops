@@ -4,7 +4,7 @@ Tags: woocommerce, bulk edit, products, variations, undo
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.7.1
+Stable tag: 0.7.2
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,14 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 3. Operation history with one-click undo.
 
 == Changelog ==
+
+= 0.7.2 =
+* Fixed: a filter condition naming a field CatalogOps does not recognize is now refused, naming the field, instead of being ignored. An ignored condition removed a constraint, so "category X and brand Y" quietly became "category X" — a larger set of products, previewed and applied identically, so nothing downstream noticed. The same now applies to a comparison a field cannot make (a price "contains", a SKU "greater than") and to a "between" filter missing one end.
+* Fixed: a variation attribute filter whose terms have been deleted now matches nothing, as the same filter over products already did. It used to match every variation.
+* Fixed: a schedule that cannot be built no longer stops every other schedule on the site. It pauses itself, records why, and the rest of the tick continues. Previously the failure repeated on every tick and every later schedule was skipped indefinitely — reachable without any bad filter, for example when a licence lapses on a schedule that uses a formula.
+* Fixed: "Run now" on a schedule whose template is no longer valid answers cleanly instead of a critical error.
+* Fixed: an unrecognized filter operator answers with an error naming it, instead of a critical error.
+* Added: `catalogops_schedule_paused` action, fired with the schedule id and the error when the supervisor pauses a schedule itself.
 
 = 0.7.1 =
 * The results table leads with the SKU and shows brand and tags — both filterable, and until now invisible in the results.

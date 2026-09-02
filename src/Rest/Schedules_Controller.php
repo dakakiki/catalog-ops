@@ -16,6 +16,7 @@ use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedule_Status;
 use CatalogOps\Operations\Schedules;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Filter_Fields;
 use DateTimeZone;
 use InvalidArgumentException;
 use WP_Error;
@@ -192,6 +193,12 @@ final class Schedules_Controller {
 		try {
 			$filter  = Filter::from_array( (array) $request->get_param( 'filter' ) );
 			$actions = Action_Factory::list_from_array( (array) $request->get_param( 'actions' ) );
+
+			// A schedule runs with nobody watching, so a filter it can never answer is
+			// refused now rather than at 03:00. Schedules::create() writes the row
+			// itself rather than going through Operation_Service, so this is the only
+			// boundary that can catch it before it is stored.
+			Filter_Fields::assert_answerable( $filter );
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		}
@@ -355,6 +362,9 @@ final class Schedules_Controller {
 			'last_op_id'     => $schedule->last_op_id,
 			'notify_email'   => $schedule->notify_email,
 			'mode'           => $schedule->mode->value,
+			// Why the supervisor stopped it, when it stopped itself. The status alone
+			// leaves the user with one control and no idea whether it will help.
+			'paused_reason'  => $schedule->paused_reason,
 			'filter'         => $schedule->filter_data,
 			'actions'        => $schedule->actions_data,
 			'created_at'     => $schedule->created_at,

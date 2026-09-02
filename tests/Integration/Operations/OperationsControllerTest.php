@@ -143,6 +143,62 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertSame( 400, $response->get_status() );
 	}
 
+	/**
+	 * Pins the boundary assert in Operation_Service::create(): a filter naming a
+	 * field the engine cannot answer is refused with a 400, and — this is the point
+	 * of the second assertion — refused before any row is written, which is only
+	 * true while the assert sits ahead of Operations::create() rather than after it.
+	 *
+	 * 0.7.1 dropped the unrecognised condition instead. build_where() skipped the
+	 * empty fragment, so the filter ran one condition lighter and matched strictly
+	 * more objects than were asked for: the operation was created and queued
+	 * against the whole catalogue and answered 201, leaving a row in the history
+	 * for an edit nobody had described.
+	 *
+	 * The same invariant FormulaWriteTest holds one step later — a refused
+	 * operation leaves no draft behind — carried back to the earlier refusal.
+	 */
+	public function test_create_refuses_an_unanswerable_filter_before_recording_a_draft(): void {
+		// A product the widened filter would have swept up and repriced.
+		$this->make_product( 30 );
+
+		$response = $this->post(
+			'/catalogops/v1/operations',
+			array(
+				'filter'  => array( 'conditions' => array( array( 'field' => 'brand', 'operator' => '=', 'value' => 'Acme' ) ) ),
+				'actions' => array( array( 'type' => 'set', 'field' => 'regular_price', 'value' => '5.00' ) ),
+			)
+		);
+
+		$this->assertSame( 400, $response->get_status() );
+
+		// Nothing recorded at all — not a draft that is discarded afterwards, but a
+		// refusal that happens before the history is ever touched.
+		$this->assertCount( 0, $this->operations->recent( 100 ) );
+	}
+
+	/**
+	 * Pins the preview endpoint refusing the same unanswerable filter with a 400
+	 * rather than answering a count computed from a widened filter.
+	 *
+	 * 0.7.1 answered 200 with `matched` describing every product in the shop, and
+	 * because the run resolved the identically widened filter, preview and run
+	 * agreed perfectly — so nothing downstream could notice the difference.
+	 */
+	public function test_preview_refuses_an_unanswerable_filter(): void {
+		$this->make_product( 30 );
+
+		$response = $this->post(
+			'/catalogops/v1/operations/preview',
+			array(
+				'filter'  => array( 'conditions' => array( array( 'field' => 'brand', 'operator' => '=', 'value' => 'Acme' ) ) ),
+				'actions' => array( array( 'type' => 'set', 'field' => 'regular_price', 'value' => '9.99' ) ),
+			)
+		);
+
+		$this->assertSame( 400, $response->get_status() );
+	}
+
 	public function test_create_rejects_empty_actions_with_400(): void {
 		$response = $this->post(
 			'/catalogops/v1/operations',

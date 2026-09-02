@@ -13,6 +13,8 @@ use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Filter_Field_Unavailable;
+use CatalogOps\Query\Filter_Fields;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
 use InvalidArgumentException;
@@ -158,7 +160,8 @@ final class Operation_Service {
 	 * @param int                                     $user_id Owner user id.
 	 * @return int The new operation id.
 	 *
-	 * @throws InvalidArgumentException When an action targets a field no provider handles.
+	 * @throws InvalidArgumentException  When an action targets a field no provider handles.
+	 * @throws Filter_Field_Unavailable  When the filter names a field the engine cannot answer.
 	 */
 	public function create(
 		Filter $filter,
@@ -167,6 +170,12 @@ final class Operation_Service {
 		Operation_Source $source,
 		int $user_id
 	): int {
+		// The filter first: it decides *what* is written, so a filter that cannot be
+		// answered exactly must not get as far as a draft row. The engine refuses the
+		// same condition again when it resolves, but by then a row exists and — on a
+		// schedule — a tick has been spent.
+		Filter_Fields::assert_answerable( $filter );
+
 		$this->assert_fields_supported( $actions );
 		$this->assert_formulas_allowed( $actions );
 		$this->assert_values_writable( $actions );

@@ -49,11 +49,27 @@ final class Condition {
 	 * Rebuild a condition from its array form.
 	 *
 	 * @param array{field: string, operator: string, value?: mixed} $data Serialized condition.
+	 *
+	 * @throws InvalidArgumentException When the operator token is not one the engine knows.
 	 */
 	public static function from_array( array $data ): self {
+		$token    = (string) ( $data['operator'] ?? '' );
+		$operator = Operator::tryFrom( $token );
+
+		if ( null === $operator ) {
+			// tryFrom, not from: the native from() raises \ValueError, which extends
+			// \Error rather than \Exception, so every catch ( InvalidArgumentException )
+			// at the REST boundary missed it and a mistyped token became a fatal 500
+			// instead of a 400 naming the problem.
+			throw new InvalidArgumentException(
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- UI-facing message, sanitized at the REST boundary.
+				sprintf( 'Unknown filter operator "%s".', $token )
+			);
+		}
+
 		return new self(
 			(string) ( $data['field'] ?? '' ),
-			Operator::from( (string) ( $data['operator'] ?? '' ) ),
+			$operator,
 			$data['value'] ?? null,
 		);
 	}

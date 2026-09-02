@@ -12,7 +12,9 @@ use wpdb;
 
 /**
  * CRUD over the saved_filters table. Filters are stored as filter_json (the
- * same shape {@see Filter::to_array()} produces) and rehydrated on read.
+ * same shape {@see Filter::to_array()} produces) and handed back as that decoded
+ * array, which {@see Saved_Filter::filter()} rebuilds on demand — reading a list
+ * of saved filters must not be able to fail on one unreadable row.
  */
 final class Saved_Filters {
 
@@ -146,17 +148,20 @@ final class Saved_Filters {
 	/**
 	 * Build a Saved_Filter from a raw row.
 	 *
+	 * Deliberately does not rebuild the Filter: see {@see Saved_Filter::filter()}.
+	 * This method is mapped over every row by {@see for_user()}, so anything it can
+	 * throw on is a failure of the whole list rather than of one filter.
+	 *
 	 * @param array<string, mixed> $row Associative row.
 	 */
 	private function hydrate( array $row ): Saved_Filter {
-		$data   = json_decode( (string) $row['filter_json'], true );
-		$filter = is_array( $data ) ? Filter::from_array( $data ) : new Filter();
+		$data = json_decode( (string) $row['filter_json'], true );
 
 		return new Saved_Filter(
 			(int) $row['id'],
 			(int) $row['user_id'],
 			(string) $row['name'],
-			$filter,
+			is_array( $data ) ? $data : array(),
 			(string) $row['created_at'],
 			(string) $row['updated_at'],
 		);

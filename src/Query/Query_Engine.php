@@ -226,8 +226,18 @@ final class Query_Engine {
 	 *                               forbids joins (an OR relation), in which case
 	 *                               the clause must stay in the WHERE.
 	 * @return array{0: string, 1: list<mixed>, 2?: string, 3?: list<mixed>}
+	 *
+	 * @throws Filter_Field_Unavailable When the condition cannot be turned into SQL.
 	 */
 	private function clause_for( Condition $condition, Query_Scope $scope, ?int $join_slot = null ): array {
+		// Every path into the engine — the results table, the previewed count, each
+		// incremental requirement count, the warning counts, the sample, the
+		// other-scope hint, and the one freezing resolve — arrives here, which makes
+		// this the seam where a question the engine cannot answer has to be refused.
+		// Dropping it removed a constraint, and under AND that hands back a *larger*
+		// set than was asked for, previewed and applied identically.
+		Filter_Fields::assert_field( $condition->field );
+
 		$field = $condition->field;
 
 		if ( 'price' === $field ) {
@@ -270,8 +280,34 @@ final class Query_Engine {
 			return $this->meta_clause( substr( $field, strlen( 'meta:' ) ), $condition );
 		}
 
-		// Unknown field: ignore rather than produce broken SQL.
-		return array( '', array() );
+		// Unreachable while assert_field() stands guard above. Kept as a throw and
+		// not a fall-through so a ninth field added here without a matching entry in
+		// Filter_Fields fails loudly instead of quietly matching everything.
+		return $this->refuse( $condition, 'no clause builder claims that field.' );
+	}
+
+	/**
+	 * Refuse a condition the engine cannot turn into SQL.
+	 *
+	 * Every one of these call sites used to `return array( '', array() )` — the
+	 * shape {@see build_where()} skips, and therefore the shape that widens under
+	 * AND. They are throws now so a field or an operator added without a matching
+	 * branch fails loudly rather than silently matching everything.
+	 *
+	 * Declared `never` rather than the tuple its callers return: the call sites read
+	 * as `return $this->refuse( … )` so each branch of a clause builder still ends in
+	 * a return, but the type says plainly that nothing comes back.
+	 *
+	 * @param Condition $condition The condition that cannot be expressed.
+	 * @param string    $reason    What about it cannot be expressed, one sentence.
+	 *
+	 * @throws Filter_Field_Unavailable Always.
+	 */
+	private function refuse( Condition $condition, string $reason ): never {
+		throw new Filter_Field_Unavailable(
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- UI-facing message, sanitized at the REST boundary.
+			sprintf( 'The filter condition on "%1$s" cannot be run: %2$s', $condition->field, $reason )
+		);
 	}
 
 	/**
@@ -301,7 +337,7 @@ final class Query_Engine {
 		if ( Operator::BETWEEN === $operator ) {
 			$range = array_values( (array) $condition->value );
 			if ( count( $range ) < 2 ) {
-				return array( '', array() );
+				return $this->refuse( $condition, 'a "between" filter needs both a low and a high value.' );
 			}
 
 			return array( "{$column} BETWEEN {$format} AND {$format}", array( $range[0], $range[1] ) );
@@ -319,7 +355,10 @@ final class Query_Engine {
 			return array( "{$column} {$keyword} ( {$placeholders} )", $values );
 		}
 
-		return array( '', array() );
+		return $this->refuse(
+			$condition,
+			sprintf( 'no "%s" comparison is available on a numeric field.', $operator->value )
+		);
 	}
 
 	/**
@@ -355,7 +394,10 @@ final class Query_Engine {
 			return array( "{$column} {$keyword} ( {$placeholders} )", $values );
 		}
 
-		return array( '', array() );
+		return $this->refuse(
+			$condition,
+			sprintf( 'no "%s" comparison is available on a text field.', $operator->value )
+		);
 	}
 
 	/**
@@ -405,7 +447,9 @@ final class Query_Engine {
 	 */
 	private function taxonomy_clause( string $taxonomy, Condition $condition, Query_Scope $scope, ?int $join_slot = null ): array {
 		if ( '' === $taxonomy ) {
-			return array( '', array() );
+			// Unreachable: `attribute:` with nothing after the colon names no
+			// taxonomy, and Filter_Fields refuses the key before dispatch.
+			return $this->refuse( $condition, 'it names no attribute taxonomy.' );
 		}
 
 		$operator = $condition->operator;
@@ -510,7 +554,9 @@ final class Query_Engine {
 	 */
 	private function variation_attribute_clause( string $taxonomy, Condition $condition ): array {
 		if ( '' === $taxonomy ) {
-			return array( '', array() );
+			// Unreachable: `attribute:` with nothing after the colon names no
+			// taxonomy, and Filter_Fields refuses the key before dispatch.
+			return $this->refuse( $condition, 'it names no attribute taxonomy.' );
 		}
 
 		$postmeta = $this->wpdb->postmeta;
@@ -551,7 +597,11 @@ final class Query_Engine {
 		$slugs = $this->term_slugs( $term_ids );
 
 		if ( array() === $slugs ) {
-			return array( '', array() );
+			// Nothing can carry a term that no longer exists. "Has one of these"
+			// matches nothing; "has none of these" matches everything. This is the
+			// answer the product scope has always given ({@see taxonomy_clause()});
+			// dropping the clause here made the same filter match every variation.
+			return array( Operator::NOT_IN === $operator ? '1 = 1' : '1 = 0', array() );
 		}
 
 		$placeholders = implode( ', ', array_fill( 0, count( $slugs ), '%s' ) );
@@ -630,7 +680,8 @@ final class Query_Engine {
 	 */
 	private function meta_clause( string $meta_key, Condition $condition ): array {
 		if ( '' === $meta_key ) {
-			return array( '', array() );
+			// Unreachable: `meta:` on its own names no key.
+			return $this->refuse( $condition, 'it names no meta key.' );
 		}
 
 		$postmeta = $this->wpdb->postmeta;
@@ -652,7 +703,7 @@ final class Query_Engine {
 			return array( '', array() );
 		}
 
-		list( $value_test, $value_args ) = $this->meta_value_test( $positive ?? $operator, $condition->value );
+		list( $value_test, $value_args ) = $this->meta_value_test( $positive ?? $operator, $condition );
 
 		$keyword = null !== $positive ? 'NOT IN' : 'IN';
 
@@ -671,11 +722,22 @@ final class Query_Engine {
 	 * test in a NOT EXISTS — see {@see meta_clause()} for why it may not be pushed
 	 * in here alongside the value.
 	 *
-	 * @param Operator $operator The operator, already mapped to its positive form.
-	 * @param mixed    $value    The operand.
+	 * An unanswerable comparison has to refuse here rather than return an empty
+	 * test, and for a reason peculiar to this method: the caller keeps its subquery
+	 * either way, so an empty test does not drop the condition — it decays it into
+	 * "has this meta key at all", which is *wider* than what was asked. A one-ended
+	 * `meta:_cost between 10` matching every costed product is the same silent
+	 * widening as an ignored condition, arriving by a different route.
+	 *
+	 * @param Operator  $operator  The operator, already mapped to its positive form.
+	 * @param Condition $condition The condition, for its operand and for refusal.
 	 * @return array{0: string, 1: list<mixed>} SQL fragment (with leading " AND ") and its args.
+	 *
+	 * @throws Filter_Field_Unavailable When the comparison cannot be expressed.
 	 */
-	private function meta_value_test( Operator $operator, mixed $value ): array {
+	private function meta_value_test( Operator $operator, Condition $condition ): array {
+		$value = $condition->value;
+
 		$numeric = array(
 			Operator::GREATER_THAN->name     => '>',
 			Operator::GREATER_OR_EQUAL->name => '>=',
@@ -702,7 +764,7 @@ final class Query_Engine {
 		if ( Operator::BETWEEN === $operator ) {
 			$range = array_values( (array) $value );
 			if ( count( $range ) < 2 ) {
-				return array( '', array() );
+				return $this->refuse( $condition, 'a "between" filter needs both a low and a high value.' );
 			}
 
 			return array( ' AND CAST( pm.meta_value AS DECIMAL(20,4) ) BETWEEN %f AND %f', array( $range[0], $range[1] ) );
@@ -719,6 +781,13 @@ final class Query_Engine {
 			return array( " AND pm.meta_value IN ( {$placeholders} )", $values );
 		}
 
-		return array( '', array() );
+		// Unreachable: every positive operator has a branch above, and the negative
+		// forms are mapped to their twins before the call. Kept as a throw so an
+		// operator added to the enum without a branch here fails loudly instead of
+		// decaying the condition into "has this meta key at all".
+		return $this->refuse(
+			$condition,
+			sprintf( 'no "%s" comparison is available on a meta field.', $condition->operator->value )
+		);
 	}
 }

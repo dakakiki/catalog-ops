@@ -241,6 +241,95 @@ final class QueryControllerTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Pins that a condition naming a field the engine cannot answer comes back as a
+	 * 400 whose message names the field, so the admin app can put an inline notice
+	 * on the condition that needs fixing.
+	 *
+	 * 0.7.1 answered 200 and listed the whole catalogue instead: `clause_for()`
+	 * returned an empty SQL fragment for an unknown field, `build_where()` skipped
+	 * it, and the filter ran with one condition fewer — matching strictly more
+	 * products than were asked for, in preview and in the run alike. The code is
+	 * asserted as well as the status because a 500-shaped failure can present as a
+	 * status in some setups, and this endpoint had no try/catch of its own, so a
+	 * refusal here surfaced as a PHP fatal.
+	 */
+	public function test_a_filter_naming_an_unknown_field_answers_400_not_a_fatal(): void {
+		// Present so a dropped condition would be visible as a 200 listing it.
+		$this->make_product( 10 );
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'filter' => array(
+					'conditions' => array( array( 'field' => 'acf:clearance', 'operator' => '=', 'value' => 'yes' ) ),
+				),
+			)
+		);
+
+		$response = rest_do_request( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'catalogops_invalid_request', $data['code'] );
+		$this->assertStringContainsString( 'acf:clearance', $data['message'] );
+	}
+
+	/**
+	 * Pins that a mistyped operator token is a 400 naming the token.
+	 *
+	 * 0.7.1 built the operator with `Operator::from()`, which raises \ValueError —
+	 * an \Error, not an \Exception — so every `catch ( InvalidArgumentException )`
+	 * at the REST boundary missed it and a typo in the filter JSON was an uncaught
+	 * fatal rather than a message the user could act on.
+	 */
+	public function test_an_unknown_operator_token_answers_400_not_a_fatal(): void {
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'filter' => array(
+					'conditions' => array( array( 'field' => 'price', 'operator' => 'roughly', 'value' => 50 ) ),
+				),
+			)
+		);
+
+		$response = rest_do_request( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'catalogops_invalid_request', $data['code'] );
+		$this->assertStringContainsString( 'roughly', $data['message'] );
+	}
+
+	/**
+	 * A guard for behaviour that must not change: a well-formed filter still gets a
+	 * 200 and still gets the empty-result hint.
+	 *
+	 * `query()` was restructured so that `Filter::from_array()`, `resolve()` and
+	 * `other_scope()` share one try — the hint re-asks the same filter, and it only
+	 * asks when the first call found nothing, which is exactly the state a filter
+	 * naming a vanished field reaches. This pins that the shared try neither
+	 * changed the happy path nor swallowed the second scope's count.
+	 */
+	public function test_the_empty_result_hint_still_works_after_the_guard(): void {
+		$this->make_product( 10 );
+		$this->make_variable_product();
+
+		// dispatch() asserts the 200 itself; the hint has to ride along with it.
+		$data = $this->dispatch(
+			array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 30 ) ) )
+		);
+
+		$this->assertSame( 0, $data['total'] );
+		$this->assertSame(
+			array(
+				'scope' => 'variation',
+				'total' => 1,
+			),
+			$data['other_scope']
+		);
+	}
+
+	/**
 	 * Create a variable product with a Small and a Large variation.
 	 *
 	 * @return array{0: int, 1: array<string, int>}
