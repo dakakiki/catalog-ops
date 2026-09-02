@@ -1,6 +1,6 @@
 {
     "name": "catalogops",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "private": true,
     "description": "CatalogOps admin app.",
     "license": "GPL-2.0-or-later",

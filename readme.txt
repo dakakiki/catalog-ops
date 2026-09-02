@@ -4,7 +4,7 @@ Tags: woocommerce, bulk edit, products, variations, undo
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.6.0
+Stable tag: 0.7.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -78,6 +78,14 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 
 == Changelog ==
 
+= 0.7.0 =
+* **Preview shows the work, not just the count** — a table of old → new values for the products the change would touch, with a SKU search to check any one of them.
+* **Amount** — raise or lower a price by a fixed sum, alongside the percentage. Available on the free plan.
+* **When** — applying now and scheduling are one choice with one button, instead of two controls that never mentioned each other.
+* Filters can exclude: every set filter reads "is" or "is not".
+* Percentage changes land on the cent, and a price is never written negative — the preview counts the products a subtraction would take below zero instead of discovering them mid-run.
+* Operation history and Schedules are paged; the history no longer stops silently at its newest twenty.
+
 = 0.6.0 =
 * Go-to-market groundwork: multisite (network activation, per-site schema, uninstall), a first-run onboarding walkthrough with a mandatory backup reminder, full translation-readiness with a Serbian starter, and a MySQL 8.0 query-verification harness.
 
@@ -97,6 +105,9 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 * Read-only query engine, filter structure, saved filters, product table.
 
 == Upgrade Notice ==
+
+= 0.7.0 =
+Preview now shows old → new values per product, prices can be moved by a fixed amount, and applying versus scheduling is a single choice. No action needed.
 
 = 0.6.0 =
 Adds multisite support, onboarding, translations, and MySQL 8.0 verification. No action needed — the schema upgrades itself on the next admin visit.
