@@ -34,6 +34,11 @@ final class Schedules_Controller {
 	private const REST_NAMESPACE = 'catalogops/v1';
 
 	/**
+	 * Schedules per page, matching the history list beside it.
+	 */
+	private const PER_PAGE = 10;
+
+	/**
 	 * Schedules repository.
 	 *
 	 * @var Schedules
@@ -80,6 +85,7 @@ final class Schedules_Controller {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'index' ),
 					'permission_callback' => array( $this, 'can_manage' ),
+					'args'                => Paging::args( self::PER_PAGE ),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
@@ -147,12 +153,26 @@ final class Schedules_Controller {
 	}
 
 	/**
-	 * List all schedules.
+	 * List schedules, newest first, one page at a time.
+	 *
+	 * @param WP_REST_Request $request The request.
 	 */
-	public function index(): WP_REST_Response {
-		$items = array_map( array( $this, 'to_array' ), $this->schedules->all() );
+	public function index( WP_REST_Request $request ): WP_REST_Response {
+		$slice = Paging::slice( $request, self::PER_PAGE );
 
-		return new WP_REST_Response( array( 'items' => $items ) );
+		$items = array_map(
+			array( $this, 'to_array' ),
+			$this->schedules->all( $slice['per_page'], $slice['offset'] )
+		);
+
+		return new WP_REST_Response(
+			array(
+				'items'    => $items,
+				'total'    => $this->schedules->count_all(),
+				'page'     => $slice['page'],
+				'per_page' => $slice['per_page'],
+			)
+		);
 	}
 
 	/**

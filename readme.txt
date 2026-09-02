@@ -24,7 +24,7 @@ It is built for catalogs where a mistake is expensive — agencies running many 
 * **Preview** the exact old → new value for every match before anything is written.
 * **Variations are first class** — filter and edit variations directly, not as an afterthought.
 * **Formulas** — e.g. `roundto( cost * 1.35, 0.99 )`, with a safe parser (no `eval`). Empty fields are skipped and logged, never set to 0.
-* **Percentage changes** — raise or drop a price by a percentage across the filter.
+* **Amount and percentage changes** — raise or drop a price by a fixed amount or by a percentage across the filter.
 * **Scheduled & recurring operations** with an emailed completion report.
 * **Undo** — an operation reverts through the same pipeline, with drift detection: items changed since the run are skipped (or forced) rather than clobbered.
 * **Audit log & retention** — every change is recorded for a configurable window (7–180 days, default 30).
@@ -38,7 +38,7 @@ It is built for catalogs where a mistake is expensive — agencies running many 
 
 = Free vs Pro =
 
-The free version is a funnel, not a crippled product: up to 200 objects per operation, without undo, formulas, or scheduling. Pro plans (Solo, Studio, Agency, Unlimited) lift the cap and add undo, formulas, scheduling, and — from Studio up — the ACF and WPML field modules. Pro is sold through Freemius.
+The free version is a funnel, not a crippled product: up to 200 objects per operation — setting a value or moving a price by a fixed amount — without undo, percentages, formulas, or scheduling. Pro plans (Solo, Studio, Agency, Unlimited) lift the cap and add undo, formulas, scheduling, and — from Studio up — the ACF and WPML field modules. Pro is sold through Freemius.
 
 == Installation ==
 

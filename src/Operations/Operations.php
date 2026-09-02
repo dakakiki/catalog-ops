@@ -160,21 +160,36 @@ final class Operations {
 	/**
 	 * The most recent operations, newest first.
 	 *
-	 * @param int $limit How many to return.
+	 * @param int $limit  How many to return.
+	 * @param int $offset How many to skip — one page's worth per page turned.
 	 * @return list<Operation>
 	 */
-	public function recent( int $limit = 20 ): array {
-		$table = $this->schema->operations_table();
-		$limit = max( 1, $limit );
+	public function recent( int $limit = 20, int $offset = 0 ): array {
+		$table  = $this->schema->operations_table();
+		$limit  = max( 1, $limit );
+		$offset = max( 0, $offset );
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare( "SELECT * FROM {$table} ORDER BY id DESC LIMIT %d", $limit ),
+			$this->wpdb->prepare( "SELECT * FROM {$table} ORDER BY id DESC LIMIT %d OFFSET %d", $limit, $offset ),
 			ARRAY_A
 		);
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
 		return array_map( array( $this, 'hydrate' ), $rows );
+	}
+
+	/**
+	 * How many operations the history holds. The list used to answer with the
+	 * newest twenty and no hint that there were more; the pager needs the whole
+	 * count to say how far back it goes.
+	 */
+	public function count_all(): int {
+		$table = $this->schema->operations_table();
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		return (int) $this->wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 	}
 
 	/**

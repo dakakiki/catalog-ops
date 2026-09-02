@@ -9,8 +9,10 @@
 namespace CatalogOps\Operations;
 
 use CatalogOps\Operations\Actions\Action;
+use CatalogOps\Operations\Actions\Adjust;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Query\Requirements\Meta_Present;
+use CatalogOps\Query\Requirements\Minimum_Meta;
 use CatalogOps\Query\Requirements\Not;
 use CatalogOps\Query\Requirements\Requirement;
 use CatalogOps\Query\Requirements\Sale_Price_Cleared;
@@ -125,6 +127,25 @@ final class Write_Rules {
 		$regular_price = $this->literal_for( $actions, 'regular_price' );
 
 		foreach ( $actions as $action ) {
+			// A fixed subtraction is the one computed write whose refusal *is*
+			// expressible in SQL: taking 100 off leaves a price below zero exactly
+			// where the price is under 100. Counting it here is what keeps the
+			// preview honest — otherwise it promises every match and the run
+			// quietly delivers fewer.
+			if ( $action instanceof Adjust ) {
+				$floor = $this->negative_floor( $action );
+
+				if ( null !== $floor ) {
+					$requirements[] = new Minimum_Meta(
+						$floor[0],
+						$floor[1],
+						Skip_Reason::NEGATIVE_VALUE->value
+					);
+				}
+
+				continue;
+			}
+
 			$value = $this->literal( $action );
 
 			if ( null === $value ) {
@@ -303,6 +324,27 @@ final class Write_Rules {
 		}
 
 		return null;
+	}
+
+	/**
+	 * The meta key and smallest surviving value for an adjustment that subtracts,
+	 * or null when this one cannot produce a negative.
+	 *
+	 * Only money is guarded — stock goes negative legitimately for backorders — and
+	 * only a subtraction can get there. The floor is the amount itself: a price of
+	 * exactly 100 survives 100 off, landing on zero, which {@see refuses()} allows.
+	 *
+	 * @param Adjust $action The adjustment.
+	 * @return array{0: string, 1: float}|null Meta key and minimum, or null.
+	 */
+	private function negative_floor( Adjust $action ): ?array {
+		if ( $action->amount() >= 0.0 || ! in_array( $action->field(), self::MONEY_FIELDS, true ) ) {
+			return null;
+		}
+
+		$meta_key = self::READ_META_KEYS[ $action->field() ] ?? '';
+
+		return '' === $meta_key ? null : array( $meta_key, abs( $action->amount() ) );
 	}
 
 	/**

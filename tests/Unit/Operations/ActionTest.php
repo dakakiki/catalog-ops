@@ -8,6 +8,7 @@
 namespace CatalogOps\Tests\Unit\Operations;
 
 use CatalogOps\Operations\Actions\Action_Factory;
+use CatalogOps\Operations\Actions\Adjust;
 use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Formula\Formula_Error;
@@ -16,6 +17,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * @covers \CatalogOps\Operations\Actions\Set_Value
+ * @covers \CatalogOps\Operations\Actions\Adjust
  * @covers \CatalogOps\Operations\Actions\Formula
  * @covers \CatalogOps\Operations\Actions\Action_Factory
  */
@@ -36,6 +38,60 @@ final class ActionTest extends TestCase {
 		$this->assertInstanceOf( Set_Value::class, $rebuilt );
 		$this->assertSame( 'meta:_catalogops_brand', $rebuilt->field() );
 		$this->assertSame( 'Acme', $rebuilt->apply( 'anything' ) );
+	}
+
+	public function test_adjust_moves_the_current_value_and_lands_on_the_cent(): void {
+		$up = new Adjust( 'regular_price', 200.0 );
+
+		$this->assertSame( 'regular_price', $up->field() );
+		$this->assertSame( 219.99, $up->apply( '19.99' ) );
+
+		// A decrease is the same action with a negative amount; the sign lives in
+		// one place rather than in a direction flag the action would have to read.
+		$down = new Adjust( 'regular_price', -200.0 );
+		$this->assertSame( 300.0, $down->apply( '500' ) );
+
+		// Money keeps two decimals, the way the percentage does.
+		$this->assertSame( 10.32, ( new Adjust( 'regular_price', 0.333 ) )->apply( '9.99' ) );
+	}
+
+	public function test_adjust_skips_an_object_with_no_number_to_move(): void {
+		$action = new Adjust( 'regular_price', 10.0 );
+
+		// Never treated as zero-plus-ten: an empty price is not a price
+		// (CONTEXT §3), so the object is skipped and logged instead.
+		$this->assertNull( $action->apply( '' ) );
+		$this->assertNull( $action->apply( null ) );
+		$this->assertNull( $action->apply( 'abc' ) );
+	}
+
+	public function test_adjust_declares_the_field_it_reads(): void {
+		// It reads what it writes, which is what keeps objects lacking that field
+		// out of the operation rather than in it and skipped.
+		$this->assertSame(
+			array( 'regular_price' ),
+			( new Adjust( 'regular_price', 5.0 ) )->reads()
+		);
+	}
+
+	public function test_adjust_round_trips_through_the_factory(): void {
+		$action  = new Adjust( 'sale_price', -12.5 );
+		$rebuilt = Action_Factory::from_array( $action->to_array() );
+
+		$this->assertInstanceOf( Adjust::class, $rebuilt );
+		$this->assertSame( 'sale_price', $rebuilt->field() );
+		$this->assertSame( 7.5, $rebuilt->apply( '20' ) );
+	}
+
+	public function test_an_adjustment_without_a_number_is_refused(): void {
+		$this->expectException( InvalidArgumentException::class );
+
+		Action_Factory::from_array(
+			array(
+				'type'  => 'adjust',
+				'field' => 'regular_price',
+			)
+		);
 	}
 
 	public function test_list_round_trips(): void {

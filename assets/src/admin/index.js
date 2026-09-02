@@ -38,6 +38,14 @@ const CAPABILITIES =
 	( window.catalogopsConfig && window.catalogopsConfig.capabilities ) || {};
 
 /**
+ * The shop's currency symbol, for labelling an amount in the unit it is counted
+ * in. Empty when WooCommerce did not answer — the label then says "amount",
+ * which is vaguer but never wrong.
+ */
+const CURRENCY =
+	( window.catalogopsConfig && window.catalogopsConfig.currency ) || '';
+
+/**
  * Whether the current plan permits a capability. Unknown flags default to true
  * (fail open); only an explicit `false` from the server gates the control.
  *
@@ -93,6 +101,28 @@ const EDITABLE_FIELDS = [
 ];
 
 /**
+ * The fields that hold money, and so cannot take a value below zero. Mirrors the
+ * server-side rule in CatalogOps\Operations\Write_Rules, so the control refuses
+ * what the write engine would refuse and the answer arrives before the request
+ * rather than after it.
+ *
+ * Stock quantity is deliberately absent: WooCommerce uses negative quantities for
+ * backorders, so a minus there is meaningful.
+ */
+const MONEY_FIELDS = [ 'regular_price', 'sale_price' ];
+
+/**
+ * The smallest step a price should land on.
+ *
+ * A percentage is arithmetic, and arithmetic on money produces thirds of a
+ * penny: 10000.99 cut by 10% is 9000.891, and WooCommerce stores what it is
+ * given. Percent mode therefore rounds to the cent. Anyone wanting a different
+ * landing — prices ending in .99, say — writes it in Formula mode, where
+ * `roundto` is theirs to aim.
+ */
+const MONEY_STEP = '0.01';
+
+/**
  * The fields a formula or percentage change can target — prices only. Percentage
  * and formula edits don't make sense for stock quantity or status, so those are
  * "Set to" only; `stock` is still available as a formula variable to read.
@@ -109,6 +139,17 @@ const NUMERIC_FIELDS = [
 		label: __( 'Sale price', 'catalogops' ),
 	},
 ];
+
+/**
+ * The label for an editable field key, for surfaces that show the field itself
+ * rather than a control for it. Falls back to the key, which is at least stable
+ * and searchable, for a field no built-in provider names.
+ *
+ * @param {string} key A field key (e.g. regular_price).
+ * @return {string} Its label.
+ */
+const fieldLabel = ( key ) =>
+	( EDITABLE_FIELDS.find( ( f ) => f.key === key ) || {} ).label || key;
 
 /**
  * The formula variable a numeric field key reads under.
@@ -170,18 +211,67 @@ const FIELD_NOUNS = {
  * is managed; WooCommerce derives it from the quantity on every save.
  *
  * @param {string} field         The selected field key.
- * @param {string} mode          'set' | 'percent' | 'formula'.
+ * @param {string} mode          'set' | 'amount' | 'percent' | 'formula'.
  * @param {string} expression    The formula being applied, for percent and formula
  *                               modes — the source of the fields it reads.
- * @param {Object} percentChange For percent mode, { direction, amount }: the
- *                               sentence names which way the price moves rather
- *                               than pointing at the control that says so.
+ * @param {Object} percentChange For the percent and amount modes,
+ *                               { direction, amount }: the sentence names which
+ *                               way the price moves rather than pointing at the
+ *                               control that says so.
  * @return {string} The hint sentence.
  */
 function changeHint( field, mode, expression = '', percentChange = null ) {
 	const noun = FIELD_NOUNS[ field ] || field;
 	let sentence;
-	if ( mode === 'percent' ) {
+	if ( mode === 'amount' ) {
+		const down =
+			'decrease' === ( percentChange && percentChange.direction );
+		const typed = percentChange ? percentChange.amount : '';
+		const named = '' !== typed && ! Number.isNaN( Number( typed ) );
+		const shown = CURRENCY
+			? CURRENCY + Math.abs( Number( typed ) )
+			: String( Math.abs( Number( typed ) ) );
+
+		if ( named && down ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: an amount of money, e.g. "€200". */
+				__(
+					'Lowers %1$s by %2$s, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( named ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: an amount of money, e.g. "€200". */
+				__(
+					'Raises %1$s by %2$s, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( down ) {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Lowers %s by the amount above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		} else {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Raises %s by the amount above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		}
+	} else if ( mode === 'percent' ) {
 		const down =
 			'decrease' === ( percentChange && percentChange.direction );
 		const amount = percentChange ? percentChange.amount : '';
@@ -334,6 +424,51 @@ const isTerminal = ( op ) => op && TERMINAL_STATUSES.includes( op.status );
  * readable well before it stops fitting.
  */
 const MAX_CHIPS = 3;
+
+/**
+ * Previous / Next around a page count.
+ *
+ * Renders nothing for a single page: a pager with both buttons disabled is a
+ * control whose only message is that there is nowhere to go.
+ *
+ * @param {Object}   props        Component props.
+ * @param {number}   props.page   Current page, 1-based.
+ * @param {number}   props.pages  How many pages there are.
+ * @param {boolean}  props.busy   Whether a request is in flight.
+ * @param {Function} props.onPage Called with the page to move to.
+ */
+function Pagination( { page, pages, busy = false, onPage } ) {
+	if ( pages <= 1 ) {
+		return null;
+	}
+
+	return (
+		<div className="catalogops-pagination">
+			<button
+				className="button"
+				disabled={ page <= 1 || busy }
+				onClick={ () => onPage( page - 1 ) }
+			>
+				{ __( 'Previous', 'catalogops' ) }
+			</button>
+			<span className="catalogops-page">
+				{ sprintf(
+					/* translators: 1: current page, 2: total pages. */
+					__( 'Page %1$d of %2$d', 'catalogops' ),
+					page,
+					pages
+				) }
+			</span>
+			<button
+				className="button"
+				disabled={ page >= pages || busy }
+				onClick={ () => onPage( page + 1 ) }
+			>
+				{ __( 'Next', 'catalogops' ) }
+			</button>
+		</div>
+	);
+}
 
 /**
  * What to do when a filter finds nothing here but something next door.
@@ -891,7 +1026,7 @@ const SKIP_REASONS = {
 		'catalogops'
 	),
 	negative_value: __(
-		'the new price would have come out negative, so their price was left as it is — a formula that subtracts a fixed amount does this to items cheaper than that amount',
+		'the new price would come out negative, so their price is left as it is — subtracting a fixed amount does this to items cheaper than that amount',
 		'catalogops'
 	),
 	unchanged: __( 'the value was already set', 'catalogops' ),
@@ -911,6 +1046,30 @@ const SKIP_REASONS = {
  */
 function skipReasonLabel( code ) {
 	return SKIP_REASONS[ code ] || __( 'no reason recorded', 'catalogops' );
+}
+
+/**
+ * The same reasons in a few words, for a table cell.
+ *
+ * The full clauses above are written to be read as the tail of "N items — …",
+ * which is right for a summary and far too long for a column. A cell needs the
+ * name of the reason; the summary above it carries the explanation.
+ */
+const SKIP_REASONS_BRIEF = {
+	empty_input: __( 'no value to read', 'catalogops' ),
+	negative_value: __( 'would be negative', 'catalogops' ),
+	sale_not_below_regular: __( 'not below regular', 'catalogops' ),
+	stock_managed: __( 'stock is managed', 'catalogops' ),
+};
+
+/**
+ * A short explanation for a skip-reason code, for use in a table cell.
+ *
+ * @param {string} code The stored reason code.
+ * @return {string} A few words, falling back to the full clause.
+ */
+function skipReasonBrief( code ) {
+	return SKIP_REASONS_BRIEF[ code ] || skipReasonLabel( code );
 }
 
 /**
@@ -1126,11 +1285,29 @@ function BulkEdit( {
 	const [ value, setValue ] = useState( '' );
 	const [ expression, setExpression ] = useState( '' );
 	const [ percent, setPercent ] = useState( '' );
+	// Its own state, not shared with the percentage: 10 percent and 10 in money
+	// are different quantities, and carrying one across the mode switch would
+	// silently propose a change nobody asked for.
+	const [ amount, setAmount ] = useState( '' );
 	const [ direction, setDirection ] = useState( 'increase' );
+	// Narrows the preview's worked-out sample to one product. It never touches the
+	// counts, which describe the whole edit — this answers "and what about that
+	// one", which a sample of ten cannot.
+	const [ previewSku, setPreviewSku ] = useState( '' );
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
-	const [ busy, setBusy ] = useState( false );
+	// Which action the error belongs to, so the answer can be shown beside the
+	// button that asked for it. At the foot of the panel a message is easy to
+	// miss entirely — the button is where the user is looking.
+	const [ errorFrom, setErrorFrom ] = useState( '' );
+	// Which request is in flight — 'preview', 'apply', 'schedule', or '' for none.
+	// Not a boolean: every control has to be disabled while any of them runs, but
+	// only the one that was pressed should say it is working. One shared flag put
+	// the spinner beside Preview and Apply at the same time, so the panel claimed
+	// to be doing two things at once.
+	const [ busyWith, setBusyWith ] = useState( '' );
+	const busy = '' !== busyWith;
 
 	// Percent and Formula modes both compile to a formula action, which the free
 	// tier cannot run (the REST layer returns 402); scheduling is paid too. Gate
@@ -1144,8 +1321,11 @@ function BulkEdit( {
 	const [ confirming, setConfirming ] = useState( false );
 	const [ backupChecked, setBackupChecked ] = useState( false );
 
-	// Scheduling: the same filter + action, deferred and possibly recurring.
-	const [ showSchedule, setShowSchedule ] = useState( false );
+	// When the change should run: straight away, or on a schedule (the same filter
+	// and action, deferred and possibly recurring). One question with two answers,
+	// not a primary action and an optional extra — which is what a collapsed
+	// "Scheduling" section made it look like.
+	const [ when, setWhen ] = useState( 'now' );
 	const [ name, setName ] = useState( '' );
 	const [ recurrence, setRecurrence ] = useState( 'once' );
 	const [ startsAt, setStartsAt ] = useState( '' );
@@ -1165,14 +1345,16 @@ function BulkEdit( {
 		setValue( '' );
 		setExpression( '' );
 		setPercent( '' );
+		setAmount( '' );
 		setDirection( 'increase' );
+		setPreviewSku( '' );
 		setPreview( null );
 		setError( '' );
 		setName( '' );
 		setRecurrence( 'once' );
 		setStartsAt( '' );
 		setNotifyEmail( '' );
-		setShowSchedule( false );
+		setWhen( 'now' );
 	}, [ resetKey ] );
 
 	// A cut deeper than 100% would produce a negative price, and nothing further
@@ -1187,10 +1369,17 @@ function BulkEdit( {
 	const percentExpression =
 		percent === '' || Number.isNaN( Number( percent ) ) || percentTooDeep
 			? ''
-			: `${ fieldVariable( field ) } * ${ percentFactor(
+			: `roundto( ${ fieldVariable( field ) } * ${ percentFactor(
 					percent,
 					direction
-			  ) }`;
+			  ) }, ${ MONEY_STEP } )`;
+
+	// The amount as the server takes it: a signed delta. The sign comes from the
+	// direction alone, as it does for the percentage — a typed minus under
+	// Decrease would otherwise negate the negation.
+	const amountReady = amount !== '' && ! Number.isNaN( Number( amount ) );
+	const signedAmount =
+		( 'decrease' === direction ? -1 : 1 ) * Math.abs( Number( amount ) );
 
 	const buildActions = () => {
 		if ( mode === 'formula' ) {
@@ -1201,20 +1390,67 @@ function BulkEdit( {
 				{ type: 'formula', field, expression: percentExpression },
 			];
 		}
+		if ( mode === 'amount' ) {
+			// Its own action type, not a generated formula: see Actions\Adjust —
+			// the free tier can run this precisely because it is not a formula.
+			return [ { type: 'adjust', field, amount: signedAmount } ];
+		}
 		return [ { type: 'set', field, value } ];
 	};
+
+	// The figure the hint should name. A percentage the panel has already refused
+	// is not described as though it were about to run.
+	const hintAmount = ( () => {
+		if ( mode === 'amount' ) {
+			return amount;
+		}
+
+		return percentTooDeep ? '' : percent;
+	} )();
+
+	// What the hint should read as the source of the fields this change depends
+	// on. Amount has no expression, but it does read the field it writes — naming
+	// it here earns the same "products where that field is empty are left out"
+	// tail the formula modes get, and it is equally true.
+	const hintExpression =
+		( mode === 'percent' && percentExpression ) ||
+		( mode === 'amount' && fieldVariable( field ) ) ||
+		( mode === 'formula' && expression ) ||
+		'';
 
 	// Whether the current inputs form a runnable action.
 	const ready =
 		( mode === 'set' && value !== '' ) ||
 		( mode === 'formula' && expression.trim() !== '' ) ||
+		( mode === 'amount' && amountReady ) ||
 		( mode === 'percent' && percentExpression !== '' );
+
+	// Any edit to the change invalidates the last answer — the preview, and equally
+	// whatever the server refused. Leaving a refusal on screen while the inputs
+	// move on is how "a price cannot be negative" ends up sitting under a
+	// percentage that has nothing to do with it.
+	const invalidate = () => {
+		setPreview( null );
+		setError( '' );
+		setErrorFrom( '' );
+	};
+
+	/**
+	 * Record a failure against the action that caused it.
+	 *
+	 * @param {string} action 'preview', 'apply' or 'schedule'.
+	 * @return {Function} A catch handler.
+	 */
+	const failed = ( action ) => ( err ) => {
+		setError( err.message || __( 'Request failed.', 'catalogops' ) );
+		setErrorFrom( action );
+	};
 
 	// Switching to a numeric-only mode off a non-numeric field (stock_status)
 	// falls back to a sensible numeric field.
 	const changeMode = ( next ) => {
 		setMode( next );
-		setPreview( null );
+		invalidate();
 		if (
 			next !== 'set' &&
 			! NUMERIC_FIELDS.some( ( f ) => f.key === field )
@@ -1228,9 +1464,13 @@ function BulkEdit( {
 	useOperationPoll( operation, setOperation, onDone );
 
 	const runPreview = () => {
-		setBusy( true );
+		setBusyWith( 'preview' );
 		setError( '' );
-		setPreview( null );
+		setErrorFrom( '' );
+		// The previous answer stays on screen while the new one is fetched. The
+		// search that triggers this lives inside the panel, and unmounting it
+		// mid-search would take the field — and the caret — with it. The table is
+		// dimmed instead, the way the filter's results are.
 		// Drop any finished operation's result bar: the render gates the preview
 		// on `! operation`, so a stale bar from a previous run would otherwise
 		// hide the new preview and make Preview look like it did nothing.
@@ -1238,18 +1478,22 @@ function BulkEdit( {
 		apiFetch( {
 			path: '/catalogops/v1/operations/preview',
 			method: 'POST',
-			data: { filter, actions: buildActions() },
+			data: { filter, actions: buildActions(), sku: previewSku.trim() },
 		} )
 			.then( setPreview )
-			.catch( ( err ) => setError( err.message ) )
-			.finally( () => setBusy( false ) );
+			.catch( ( err ) => {
+				// A refused preview has no answer to leave standing.
+				setPreview( null );
+				failed( 'preview' )( err );
+			} )
+			.finally( () => setBusyWith( '' ) );
 	};
 
 	// Actually queue the operation. Reached only after the apply confirmation
 	// (and, the first time, the backup acknowledgement) is satisfied.
 	const doApply = () => {
 		setConfirming( false );
-		setBusy( true );
+		setBusyWith( 'apply' );
 		setError( '' );
 		// The preview is superseded by the running operation, and any previous
 		// operation's bar is replaced by this one — clear both so the panel shows
@@ -1262,8 +1506,8 @@ function BulkEdit( {
 			data: { filter, actions: buildActions() },
 		} )
 			.then( setOperation )
-			.catch( ( err ) => setError( err.message ) )
-			.finally( () => setBusy( false ) );
+			.catch( failed( 'apply' ) )
+			.finally( () => setBusyWith( '' ) );
 	};
 
 	// Confirm the apply. The first time (no backup acknowledgement yet) the
@@ -1287,7 +1531,7 @@ function BulkEdit( {
 	};
 
 	const createSchedule = () => {
-		setBusy( true );
+		setBusyWith( 'schedule' );
 		setError( '' );
 		setScheduleMsg( '' );
 		apiFetch( {
@@ -1308,8 +1552,8 @@ function BulkEdit( {
 					onScheduleCreated();
 				}
 			} )
-			.catch( ( err ) => setError( err.message ) )
-			.finally( () => setBusy( false ) );
+			.catch( failed( 'schedule' ) )
+			.finally( () => setBusyWith( '' ) );
 	};
 
 	const running = operation && ! isTerminal( operation );
@@ -1355,12 +1599,240 @@ function BulkEdit( {
 			  )
 			: '';
 
+	/**
+	 * The error belonging to one action, rendered where that action lives. At the
+	 * foot of the panel a message is easy to miss; beside the button that was
+	 * pressed it is where the user is already looking.
+	 *
+	 * @param {string} action 'preview', 'apply' or 'schedule'.
+	 * @return {Object|null} The notice, or nothing.
+	 */
+	const noticeFor = ( action ) =>
+		error && errorFrom === action ? (
+			<div className="notice notice-error catalogops-inline-notice">
+				<p>{ error }</p>
+			</div>
+		) : null;
+
+	const previewSample = ( preview && preview.sample ) || [];
+	const searching = previewSku.trim() !== '';
+
+	// Ten rows out of thousands is a sample, and saying so is the difference
+	// between an illustration and a false promise of completeness. Unlike the
+	// results table above, these rows have no pager behind them: the search is the
+	// only way to reach a product that is not among the ten, so the caption says
+	// so rather than leaving it to be discovered.
+	const sampleCaption = searching
+		? sprintf(
+				/* translators: %s: the SKU searched for. */
+				__( 'Matching “%s”.', 'catalogops' ),
+				previewSku.trim()
+		  )
+		: sprintf(
+				/* translators: 1: rows shown, 2: total that will change. */
+				__(
+					'A sample: %1$d of the %2$d that will change. Search by SKU to check a particular one.',
+					'catalogops'
+				),
+				previewSample.length,
+				preview ? preview.applicable : 0
+		  );
+
+	// The preview's answer, rendered under the button that asked for it. It is
+	// dropped while an operation is on screen: the run supersedes the dry run.
+	const previewPanel = preview && ! operation && (
+		<div className="catalogops-preview">
+			{ preview.matched === 0 && (
+				<div className="notice notice-info">
+					<p>
+						{ __( 'No products match this filter.', 'catalogops' ) }
+					</p>
+				</div>
+			) }
+			{ noneWillChange && (
+				<div className="notice notice-warning">
+					<p>
+						{ sprintf(
+							/* translators: %d: number of matched products. */
+							__(
+								'Preview: none of the %d matching products will change. Nothing will be written when you Apply.',
+								'catalogops'
+							),
+							preview.matched
+						) }
+					</p>
+					<ReasonList items={ omittedBy } />
+					{ saleCeiling && <p>{ saleCeiling }</p> }
+					{ filter.scope === 'product' &&
+						omittedFor( 'empty_input' ) > 0 && (
+							<p>
+								{ __(
+									'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those.',
+									'catalogops'
+								) }
+							</p>
+						) }
+				</div>
+			) }
+			{ preview.matched > 0 && preview.applicable > 0 && (
+				<div className="notice notice-success">
+					<p>
+						{ sprintf(
+							/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
+							__(
+								'Preview: %1$d matched · %2$d will change · %3$d will not.',
+								'catalogops'
+							),
+							preview.matched,
+							preview.applicable,
+							preview.omitted
+						) }
+					</p>
+					{ omittedBy.length > 0 && (
+						<>
+							<ReasonList items={ omittedBy } />
+							{ saleCeiling && <p>{ saleCeiling }</p> }
+							<p className="catalogops-muted">
+								{ sprintf(
+									/* translators: %d: number of products that will be updated. */
+									__(
+										'Only the %d that will change go into the operation, so its progress, history, and undo all match this number.',
+										'catalogops'
+									),
+									preview.applicable
+								) }
+							</p>
+						</>
+					) }
+				</div>
+			) }
+			{ previewWarnings.map( ( warning ) => (
+				<div className="notice notice-warning" key={ warning.code }>
+					<p>{ warningText( warning.code, warning.count ) }</p>
+				</div>
+			) ) }
+
+			{ /* The counts are the promise; this is the promise shown. A formula
+			     or a percentage is invisible in a number — it only becomes
+			     checkable when someone can watch 10.00 turn into 13.86.
+
+			     The bar above it is the filter's results bar again: what is being
+			     shown on the left, the search that narrows it on the right. */ }
+			{ ( previewSample.length > 0 || searching ) && (
+				<div className="catalogops-results-bar">
+					<p className="catalogops-status">{ sampleCaption }</p>
+					<div className="catalogops-search">
+						<input
+							id="catalogops-preview-sku"
+							type="search"
+							placeholder={ __(
+								'SKU, e.g. COPS-1234',
+								'catalogops'
+							) }
+							aria-label={ __(
+								'Show one SKU in the preview',
+								'catalogops'
+							) }
+							value={ previewSku }
+							onChange={ ( e ) =>
+								setPreviewSku( e.target.value )
+							}
+							onKeyDown={ ( e ) =>
+								e.key === 'Enter' &&
+								ready &&
+								! busy &&
+								runPreview()
+							}
+						/>
+						<button
+							className="button"
+							onClick={ runPreview }
+							disabled={ busy || running || ! ready }
+						>
+							{ __( 'Search', 'catalogops' ) }
+						</button>
+					</div>
+				</div>
+			) }
+
+			{ previewSample.length > 0 && (
+				<>
+					<table
+						className={ `wp-list-table widefat fixed striped${
+							'preview' === busyWith
+								? ' catalogops-loading-dim'
+								: ''
+						}` }
+					>
+						<thead>
+							<tr>
+								<th>{ __( 'SKU', 'catalogops' ) }</th>
+								<th>{ __( 'Name', 'catalogops' ) }</th>
+								<th>{ __( 'Field', 'catalogops' ) }</th>
+								<th className="catalogops-num">
+									{ __( 'Now', 'catalogops' ) }
+								</th>
+								<th className="catalogops-num">
+									{ __( 'After', 'catalogops' ) }
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							{ previewSample.map( ( row ) =>
+								row.changes.map( ( change, index ) => (
+									<tr key={ `${ row.id }-${ change.field }` }>
+										<td>
+											{ index === 0 ? row.sku : '' }
+											{ index === 0 &&
+												! row.sku &&
+												row.id }
+										</td>
+										<td>{ index === 0 ? row.name : '' }</td>
+										<td>{ fieldLabel( change.field ) }</td>
+										<td className="catalogops-num">
+											{ change.old }
+										</td>
+										<td className="catalogops-num">
+											{ null === change.new ? (
+												<span className="catalogops-muted">
+													{ '— ' +
+														skipReasonBrief(
+															change.reason
+														) }
+												</span>
+											) : (
+												<strong>{ change.new }</strong>
+											) }
+										</td>
+									</tr>
+								) )
+							) }
+						</tbody>
+					</table>
+				</>
+			) }
+
+			{ previewSample.length === 0 && searching && (
+				<p className="catalogops-table-caption">
+					{ sprintf(
+						/* translators: %s: the SKU searched for. */
+						__(
+							'Nothing matching “%s” is in this change.',
+							'catalogops'
+						),
+						previewSku.trim()
+					) }
+				</p>
+			) }
+		</div>
+	);
+
 	return (
 		<div className="catalogops-bulk-edit">
 			<h2>{ __( 'Bulk edit', 'catalogops' ) }</h2>
 			<p className="description">
 				{ __(
-					'Change a field for every item in the filter above. Preview shows old → new; nothing is written until you Apply. You can also schedule it to run later or on a recurring basis.',
+					'Change a field for every item in the filter above. Preview shows what it would do; nothing is written until you commit. Then choose when it runs — now, or on a schedule.',
 					'catalogops'
 				) }
 			</p>
@@ -1381,6 +1853,18 @@ function BulkEdit( {
 									onClick={ () => changeMode( 'set' ) }
 								>
 									{ __( 'Set to', 'catalogops' ) }
+								</button>
+								{ /* Between "Set to" and "Percent" because that is
+								     the order of difficulty: a fixed value, then a
+								     fixed step, then a proportion. */ }
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										mode === 'amount' ? ' is-active' : ''
+									}` }
+									onClick={ () => changeMode( 'amount' ) }
+								>
+									{ __( 'Amount', 'catalogops' ) }
 								</button>
 								<button
 									type="button"
@@ -1440,7 +1924,7 @@ function BulkEdit( {
 									onChange={ ( e ) => {
 										setField( e.target.value );
 										setValue( '' );
-										setPreview( null );
+										invalidate();
 									} }
 								>
 									{ fieldOptions.map( ( f ) => (
@@ -1460,9 +1944,10 @@ function BulkEdit( {
 										<select
 											id="catalogops-value"
 											value={ value }
-											onChange={ ( e ) =>
-												setValue( e.target.value )
-											}
+											onChange={ ( e ) => {
+												invalidate();
+												setValue( e.target.value );
+											} }
 										>
 											<option value="">
 												{ __(
@@ -1490,19 +1975,34 @@ function BulkEdit( {
 											</option>
 										</select>
 									) : (
+										// Every other editable field is a number, and
+										// a price is a number that cannot be negative.
+										// The engine refuses one either way; saying so
+										// in the control beats saying it in an error.
 										<input
 											id="catalogops-value"
-											type="text"
-											value={ value }
-											onChange={ ( e ) =>
-												setValue( e.target.value )
+											type="number"
+											step={
+												'stock_quantity' === field
+													? '1'
+													: 'any'
 											}
+											min={
+												MONEY_FIELDS.includes( field )
+													? '0'
+													: undefined
+											}
+											value={ value }
+											onChange={ ( e ) => {
+												invalidate();
+												setValue( e.target.value );
+											} }
 										/>
 									) }
 								</div>
 							) }
 
-							{ mode === 'percent' && (
+							{ ( mode === 'percent' || mode === 'amount' ) && (
 								<div className="catalogops-field">
 									<span
 										className="catalogops-field-label"
@@ -1527,9 +2027,10 @@ function BulkEdit( {
 													? ' is-active'
 													: ''
 											}` }
-											onClick={ () =>
-												setDirection( 'increase' )
-											}
+											onClick={ () => {
+												invalidate();
+												setDirection( 'increase' );
+											} }
 										>
 											{ __( 'Increase', 'catalogops' ) }
 										</button>
@@ -1540,13 +2041,50 @@ function BulkEdit( {
 													? ' is-active'
 													: ''
 											}` }
-											onClick={ () =>
-												setDirection( 'decrease' )
-											}
+											onClick={ () => {
+												invalidate();
+												setDirection( 'decrease' );
+											} }
 										>
 											{ __( 'Decrease', 'catalogops' ) }
 										</button>
 									</div>
+								</div>
+							) }
+
+							{ mode === 'amount' && (
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-amount">
+										{ CURRENCY
+											? sprintf(
+													/* translators: %s: the shop's currency symbol. */
+													__(
+														'By (%s)',
+														'catalogops'
+													),
+													CURRENCY
+											  )
+											: __(
+													'By (amount)',
+													'catalogops'
+											  ) }
+									</label>
+									{ /* No ceiling, unlike the percentage: 200 off is
+									     fine at 500 and nonsense at 50, and which is
+									     which cannot be known without the product.
+									     The write guard catches those one at a time,
+									     and the preview shows them as skipped. */ }
+									<input
+										id="catalogops-amount"
+										type="number"
+										step="any"
+										min="0"
+										value={ amount }
+										onChange={ ( e ) => {
+											invalidate();
+											setAmount( e.target.value );
+										} }
+									/>
 								</div>
 							) }
 
@@ -1572,9 +2110,10 @@ function BulkEdit( {
 												: undefined
 										}
 										value={ percent }
-										onChange={ ( e ) =>
-											setPercent( e.target.value )
-										}
+										onChange={ ( e ) => {
+											invalidate();
+											setPercent( e.target.value );
+										} }
 									/>
 								</div>
 							) }
@@ -1590,9 +2129,10 @@ function BulkEdit( {
 										rows={ 3 }
 										placeholder="roundto( cost * 1.35, 0.99 )"
 										value={ expression }
-										onChange={ ( e ) =>
-											setExpression( e.target.value )
-										}
+										onChange={ ( e ) => {
+											invalidate();
+											setExpression( e.target.value );
+										} }
 									/>
 									<div className="catalogops-formula-guide">
 										<p>
@@ -1723,22 +2263,28 @@ function BulkEdit( {
 
 						<div className="catalogops-filter-row">
 							<p className="catalogops-field-hint">
-								{ changeHint(
-									field,
-									mode,
-									mode === 'percent'
-										? percentExpression
-										: expression,
-									{
-										direction,
-										// A rejected amount is not described as
-										// though it were about to run.
-										amount: percentTooDeep ? '' : percent,
-									}
-								) }
+								{ changeHint( field, mode, hintExpression, {
+									direction,
+									amount: hintAmount,
+								} ) }
 							</p>
 						</div>
 
+						{ mode === 'percent' && percentExpression && (
+							<div className="catalogops-filter-row">
+								<p className="catalogops-field-hint catalogops-formula-help">
+									{ sprintf(
+										/* translators: %s: the generated formula. */
+										__( 'Applies: %s', 'catalogops' ),
+										percentExpression
+									) }
+								</p>
+							</div>
+						) }
+
+						{ /* Preview belongs to the change, not to the commitment:
+						     it asks what this would do, and the answer is the same
+						     whether the change runs now or on a schedule. */ }
 						<div className="catalogops-filter-row">
 							<button
 								className="button"
@@ -1747,16 +2293,7 @@ function BulkEdit( {
 							>
 								{ __( 'Preview', 'catalogops' ) }
 							</button>
-							<button
-								className="button button-primary"
-								onClick={ () => setConfirming( true ) }
-								disabled={
-									busy || running || ! ready || confirming
-								}
-							>
-								{ __( 'Apply', 'catalogops' ) }
-							</button>
-							{ busy && (
+							{ 'preview' === busyWith && (
 								<span
 									className="catalogops-inline-loading"
 									aria-live="polite"
@@ -1769,6 +2306,281 @@ function BulkEdit( {
 								</span>
 							) }
 						</div>
+
+						{ noticeFor( 'preview' ) }
+						{ previewPanel }
+					</div>
+				</div>
+			</div>
+
+			{ /* When to run it. Apply and Schedule answer the same question, so
+			     they are one choice with one commit button — not a primary action
+			     and an optional extra hidden behind a collapsed section that never
+			     mentioned the other. */ }
+			<hr className="catalogops-divider" />
+
+			<div className="catalogops-controls catalogops-schedule-form">
+				<div className="catalogops-control-group">
+					<span
+						className="catalogops-group-label"
+						id="catalogops-when-label"
+					>
+						{ __( 'When', 'catalogops' ) }
+					</span>
+					<div className="catalogops-filter-rows">
+						<div className="catalogops-filter-row">
+							<div
+								className="catalogops-segmented"
+								role="group"
+								aria-labelledby="catalogops-when-label"
+							>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										when === 'now' ? ' is-active' : ''
+									}` }
+									onClick={ () => setWhen( 'now' ) }
+								>
+									{ __( 'Now', 'catalogops' ) }
+								</button>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										when === 'schedule' ? ' is-active' : ''
+									}${ canSchedule ? '' : ' is-locked' }` }
+									onClick={ () => setWhen( 'schedule' ) }
+									disabled={ ! canSchedule }
+									title={
+										canSchedule
+											? undefined
+											: __(
+													'Available on a paid plan',
+													'catalogops'
+											  )
+									}
+								>
+									{ __( 'On a schedule', 'catalogops' ) }
+								</button>
+							</div>
+							{ ! canSchedule && (
+								<UpsellNotice>
+									{ __(
+										'Schedule changes to run later or on a recurring basis with a paid plan.',
+										'catalogops'
+									) }
+								</UpsellNotice>
+							) }
+						</div>
+
+						{ 'now' === when && (
+							<>
+								<div className="catalogops-filter-row">
+									<p className="catalogops-field-hint">
+										{ sprintf(
+											/* translators: %d: the number of days a change stays reversible. */
+											__(
+												'The change is written as soon as you confirm. It works through the catalog in the background, so you can leave this page — and the whole run can be undone from History for %d days.',
+												'catalogops'
+											),
+											retentionDays || 30
+										) }
+									</p>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<button
+										className="button button-primary"
+										onClick={ () => setConfirming( true ) }
+										disabled={
+											busy ||
+											running ||
+											! ready ||
+											confirming
+										}
+									>
+										{ __( 'Apply', 'catalogops' ) }
+									</button>
+									{ 'apply' === busyWith && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Working…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+								{ noticeFor( 'apply' ) }
+							</>
+						) }
+
+						{ 'schedule' === when && canSchedule && (
+							<>
+								{ /* Before the form, not after it: a schedule nothing
+								     drives is a promise the site cannot keep, so this
+								     has to be read before the first one is created. */ }
+								<SchedulerSetup lead />
+
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-sched-name">
+											{ __( 'Name', 'catalogops' ) }
+										</label>
+										<input
+											id="catalogops-sched-name"
+											type="text"
+											value={ name }
+											onChange={ ( e ) =>
+												setName( e.target.value )
+											}
+										/>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field catalogops-field--repeat">
+										<label htmlFor="catalogops-sched-recur">
+											{ __( 'Repeat', 'catalogops' ) }
+										</label>
+										<select
+											id="catalogops-sched-recur"
+											value={ recurrence }
+											onChange={ ( e ) =>
+												setRecurrence( e.target.value )
+											}
+										>
+											{ RECURRENCES.map( ( r ) => (
+												<option
+													key={ r.value }
+													value={ r.value }
+												>
+													{ r.label }
+												</option>
+											) ) }
+										</select>
+										<p className="catalogops-field-hint">
+											{ __(
+												'The filter is re-checked each run, so a repeating schedule keeps applying to new or changed products that match — not just today’s. Use “Once” for a one-time change.',
+												'catalogops'
+											) }
+										</p>
+									</div>
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-sched-start">
+											{ __( 'Start', 'catalogops' ) }
+										</label>
+										<input
+											id="catalogops-sched-start"
+											type="datetime-local"
+											value={ startsAt }
+											onChange={ ( e ) =>
+												setStartsAt( e.target.value )
+											}
+										/>
+										<p className="catalogops-field-hint">
+											{ __(
+												'Leave empty to start at the next run.',
+												'catalogops'
+											) }
+										</p>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-sched-email">
+											{ __(
+												'Send notification to',
+												'catalogops'
+											) }
+										</label>
+										<input
+											id="catalogops-sched-email"
+											type="email"
+											placeholder={ __(
+												'site admin',
+												'catalogops'
+											) }
+											value={ notifyEmail }
+											onChange={ ( e ) =>
+												setNotifyEmail( e.target.value )
+											}
+										/>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row catalogops-schedule-preview">
+									{ preview ? (
+										<>
+											<p>
+												{ sprintf(
+													/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
+													__(
+														'As of now: %1$d matched · %2$d would change · %3$d would not.',
+														'catalogops'
+													),
+													preview.matched,
+													preview.applicable,
+													preview.omitted
+												) }
+											</p>
+											{ omittedBy.length > 0 && (
+												<ReasonList
+													items={ omittedBy }
+												/>
+											) }
+										</>
+									) : (
+										<p>
+											{ __(
+												'Run Preview first to see how many items this would change, and why the rest would not.',
+												'catalogops'
+											) }
+										</p>
+									) }
+									<p className="catalogops-muted">
+										{ __(
+											'A schedule re-checks the catalog every time it runs, so these numbers can differ when it fires — the same rules decide, against the catalog as it is then.',
+											'catalogops'
+										) }
+									</p>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<button
+										className="button button-primary"
+										onClick={ createSchedule }
+										disabled={ busy || ! ready }
+									>
+										{ __(
+											'Create schedule',
+											'catalogops'
+										) }
+									</button>
+									{ 'schedule' === busyWith && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Working…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+								{ noticeFor( 'schedule' ) }
+								{ scheduleMsg && (
+									<p className="catalogops-saved">
+										{ scheduleMsg }
+									</p>
+								) }
+							</>
+						) }
 					</div>
 				</div>
 			</div>
@@ -1814,8 +2626,11 @@ function BulkEdit( {
 						</p>
 					) }
 					<div className="catalogops-confirm__actions">
+						{ /* Green because this is the one that runs — the same
+						     vocabulary the row actions already use, and the
+						     counterpart of the red the delete confirmation wears. */ }
 						<button
-							className="button button-primary"
+							className="button catalogops-button--go"
 							onClick={ confirmApply }
 							disabled={
 								busy || ( ! backupAck && ! backupChecked )
@@ -1831,312 +2646,6 @@ function BulkEdit( {
 							{ __( 'Cancel', 'catalogops' ) }
 						</button>
 					</div>
-				</div>
-			) }
-
-			{ mode === 'percent' && percentExpression && (
-				<p className="description catalogops-formula-help">
-					{ sprintf(
-						/* translators: %s: the generated formula. */
-						__( 'Applies: %s', 'catalogops' ),
-						percentExpression
-					) }
-				</p>
-			) }
-
-			<div className="catalogops-controls catalogops-schedule-form">
-				<div className="catalogops-control-group">
-					<button
-						type="button"
-						className={ `catalogops-collapse-toggle catalogops-group-label${
-							canSchedule ? '' : ' is-locked'
-						}` }
-						onClick={ () => setShowSchedule( ! showSchedule ) }
-						aria-expanded={ canSchedule && showSchedule }
-						disabled={ ! canSchedule }
-						title={
-							canSchedule
-								? undefined
-								: __( 'Available on a paid plan', 'catalogops' )
-						}
-					>
-						{ __( 'Scheduling', 'catalogops' ) }
-						<svg
-							className="catalogops-collapse-toggle__arrow"
-							width="12"
-							height="12"
-							viewBox="0 0 12 12"
-							aria-hidden="true"
-							focusable="false"
-						>
-							<path
-								d={
-									showSchedule
-										? 'M2.5 7.5 6 4 9.5 7.5'
-										: 'M2.5 4.5 6 8 9.5 4.5'
-								}
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="1.6"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							/>
-						</svg>
-					</button>
-					{ ! canSchedule && (
-						<UpsellNotice>
-							{ __(
-								'Schedule changes to run later or on a recurring basis with a paid plan.',
-								'catalogops'
-							) }
-						</UpsellNotice>
-					) }
-					{ canSchedule && showSchedule && (
-						<div className="catalogops-filter-rows">
-							{ /* Before the form, not after it: a schedule nothing
-							     drives is a promise the site cannot keep, so this
-							     has to be read before the first one is created. */ }
-							<SchedulerSetup lead />
-
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-sched-name">
-										{ __( 'Name', 'catalogops' ) }
-									</label>
-									<input
-										id="catalogops-sched-name"
-										type="text"
-										value={ name }
-										onChange={ ( e ) =>
-											setName( e.target.value )
-										}
-									/>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field catalogops-field--repeat">
-									<label htmlFor="catalogops-sched-recur">
-										{ __( 'Repeat', 'catalogops' ) }
-									</label>
-									<select
-										id="catalogops-sched-recur"
-										value={ recurrence }
-										onChange={ ( e ) =>
-											setRecurrence( e.target.value )
-										}
-									>
-										{ RECURRENCES.map( ( r ) => (
-											<option
-												key={ r.value }
-												value={ r.value }
-											>
-												{ r.label }
-											</option>
-										) ) }
-									</select>
-									<p className="catalogops-field-hint">
-										{ __(
-											'The filter is re-checked each run, so a repeating schedule keeps applying to new or changed products that match — not just today’s. Use “Once” for a one-time change.',
-											'catalogops'
-										) }
-									</p>
-								</div>
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-sched-start">
-										{ __( 'Start', 'catalogops' ) }
-									</label>
-									<input
-										id="catalogops-sched-start"
-										type="datetime-local"
-										value={ startsAt }
-										onChange={ ( e ) =>
-											setStartsAt( e.target.value )
-										}
-									/>
-									<p className="catalogops-field-hint">
-										{ __(
-											'Leave empty to start at the next run.',
-											'catalogops'
-										) }
-									</p>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-sched-email">
-										{ __(
-											'Send notification to',
-											'catalogops'
-										) }
-									</label>
-									<input
-										id="catalogops-sched-email"
-										type="email"
-										placeholder={ __(
-											'site admin',
-											'catalogops'
-										) }
-										value={ notifyEmail }
-										onChange={ ( e ) =>
-											setNotifyEmail( e.target.value )
-										}
-									/>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row catalogops-schedule-preview">
-								{ preview ? (
-									<>
-										<p>
-											{ sprintf(
-												/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
-												__(
-													'As of now: %1$d matched · %2$d would change · %3$d would not.',
-													'catalogops'
-												),
-												preview.matched,
-												preview.applicable,
-												preview.omitted
-											) }
-										</p>
-										{ omittedBy.length > 0 && (
-											<ReasonList items={ omittedBy } />
-										) }
-									</>
-								) : (
-									<p>
-										{ __(
-											'Run Preview first to see how many items this would change, and why the rest would not.',
-											'catalogops'
-										) }
-									</p>
-								) }
-								<p className="catalogops-muted">
-									{ __(
-										'A schedule re-checks the catalog every time it runs, so these numbers can differ when it fires — the same rules decide, against the catalog as it is then.',
-										'catalogops'
-									) }
-								</p>
-							</div>
-
-							<div className="catalogops-filter-row">
-								<button
-									className="button button-primary"
-									onClick={ createSchedule }
-									disabled={ busy || ! ready }
-								>
-									{ __( 'Create schedule', 'catalogops' ) }
-								</button>
-								{ busy && (
-									<span
-										className="catalogops-inline-loading"
-										aria-live="polite"
-									>
-										<span
-											className="catalogops-spinner"
-											aria-hidden="true"
-										/>
-										{ __( 'Working…', 'catalogops' ) }
-									</span>
-								) }
-							</div>
-							{ scheduleMsg && (
-								<p className="catalogops-saved">
-									{ scheduleMsg }
-								</p>
-							) }
-						</div>
-					) }
-				</div>
-			</div>
-
-			{ error && (
-				<div className="notice notice-error">
-					<p>{ error }</p>
-				</div>
-			) }
-
-			{ preview && ! operation && (
-				<div className="catalogops-preview">
-					{ preview.matched === 0 && (
-						<div className="notice notice-info">
-							<p>
-								{ __(
-									'No products match this filter.',
-									'catalogops'
-								) }
-							</p>
-						</div>
-					) }
-					{ noneWillChange && (
-						<div className="notice notice-warning">
-							<p>
-								{ sprintf(
-									/* translators: %d: number of matched products. */
-									__(
-										'Preview: none of the %d matching products will change. Nothing will be written when you Apply.',
-										'catalogops'
-									),
-									preview.matched
-								) }
-							</p>
-							<ReasonList items={ omittedBy } />
-							{ saleCeiling && <p>{ saleCeiling }</p> }
-							{ filter.scope === 'product' &&
-								omittedFor( 'empty_input' ) > 0 && (
-									<p>
-										{ __(
-											'Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those.',
-											'catalogops'
-										) }
-									</p>
-								) }
-						</div>
-					) }
-					{ preview.matched > 0 && preview.applicable > 0 && (
-						<div className="notice notice-success">
-							<p>
-								{ sprintf(
-									/* translators: 1: matched products, 2: products that will change, 3: products that will not. */
-									__(
-										'Preview: %1$d matched · %2$d will change · %3$d will not.',
-										'catalogops'
-									),
-									preview.matched,
-									preview.applicable,
-									preview.omitted
-								) }
-							</p>
-							{ omittedBy.length > 0 && (
-								<>
-									<ReasonList items={ omittedBy } />
-									{ saleCeiling && <p>{ saleCeiling }</p> }
-									<p className="catalogops-muted">
-										{ sprintf(
-											/* translators: %d: number of products that will be updated. */
-											__(
-												'Only the %d that will change go into the operation, so its progress, history, and undo all match this number.',
-												'catalogops'
-											),
-											preview.applicable
-										) }
-									</p>
-								</>
-							) }
-						</div>
-					) }
-					{ previewWarnings.map( ( warning ) => (
-						<div
-							className="notice notice-warning"
-							key={ warning.code }
-						>
-							<p>
-								{ warningText( warning.code, warning.count ) }
-							</p>
-						</div>
-					) ) }
 				</div>
 			) }
 
@@ -2335,30 +2844,12 @@ function ChangesTable( { id } ) {
 				</table>
 			</div>
 
-			<div className="catalogops-pagination">
-				<button
-					className="button"
-					disabled={ page <= 1 || loading }
-					onClick={ () => setPage( page - 1 ) }
-				>
-					{ __( 'Previous', 'catalogops' ) }
-				</button>
-				<span className="catalogops-page">
-					{ sprintf(
-						/* translators: 1: current page, 2: total pages. */
-						__( 'Page %1$d of %2$d', 'catalogops' ),
-						page,
-						pages
-					) }
-				</span>
-				<button
-					className="button"
-					disabled={ page >= pages || loading }
-					onClick={ () => setPage( page + 1 ) }
-				>
-					{ __( 'Next', 'catalogops' ) }
-				</button>
-			</div>
+			<Pagination
+				page={ page }
+				pages={ pages }
+				busy={ loading }
+				onPage={ setPage }
+			/>
 		</div>
 	);
 }
@@ -2626,7 +3117,6 @@ function OperationRow( { op, onChanged } ) {
 	return (
 		<>
 			<tr>
-				<td>{ op.id }</td>
 				<td>{ op.source }</td>
 				<td>
 					<span
@@ -2699,7 +3189,7 @@ function OperationRow( { op, onChanged } ) {
 			</tr>
 			{ open && (
 				<tr className="catalogops-detail">
-					<td colSpan="7">
+					<td colSpan="6">
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
 						{ open === 'undo' && (
 							<UndoPanel
@@ -2789,16 +3279,23 @@ function History( { refreshKey, onChanged } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ tick, setTick ] = useState( 0 );
+	// The server decides the page size; the pager only needs to know how many
+	// pages that makes, and never guesses when the list is still empty.
+	const [ page, setPage ] = useState( 1 );
+	const [ total, setTotal ] = useState( 0 );
+	const [ perPage, setPerPage ] = useState( 10 );
 	const timer = useRef( null );
 
 	useEffect( () => {
 		let cancelled = false;
-		apiFetch( { path: '/catalogops/v1/operations' } )
+		apiFetch( { path: `/catalogops/v1/operations?page=${ page }` } )
 			.then( ( res ) => {
 				if ( cancelled ) {
 					return;
 				}
 				setItems( res.items );
+				setTotal( res.total || res.items.length );
+				setPerPage( res.per_page || 10 );
 				// Keep polling while any operation is still moving, so a queued or
 				// running op — e.g. a schedule's "Run now" — visibly progresses to
 				// completion here without a manual refresh.
@@ -2815,7 +3312,7 @@ function History( { refreshKey, onChanged } ) {
 			cancelled = true;
 			clearTimeout( timer.current );
 		};
-	}, [ refreshKey, tick ] );
+	}, [ refreshKey, tick, page ] );
 
 	return (
 		<div className="catalogops-history">
@@ -2836,7 +3333,6 @@ function History( { refreshKey, onChanged } ) {
 			<table className="wp-list-table widefat fixed striped">
 				<thead>
 					<tr>
-						<th>{ __( 'ID', 'catalogops' ) }</th>
 						<th>{ __( 'Source', 'catalogops' ) }</th>
 						<th>{ __( 'Status', 'catalogops' ) }</th>
 						<th>{ __( 'Progress', 'catalogops' ) }</th>
@@ -2850,7 +3346,7 @@ function History( { refreshKey, onChanged } ) {
 				<tbody>
 					{ items.length === 0 ? (
 						<tr className="catalogops-empty">
-							<td colSpan="7">
+							<td colSpan="6">
 								{ __( 'No operations yet.', 'catalogops' ) }
 							</td>
 						</tr>
@@ -2865,6 +3361,12 @@ function History( { refreshKey, onChanged } ) {
 					) }
 				</tbody>
 			</table>
+
+			<Pagination
+				page={ page }
+				pages={ Math.ceil( total / perPage ) }
+				onPage={ setPage }
+			/>
 		</div>
 	);
 }
@@ -2920,22 +3422,23 @@ function RetentionSetting() {
 					data.max
 				) }
 			</p>
-			<input
-				type="number"
-				min={ data.min }
-				max={ data.max }
-				value={ days }
-				onChange={ ( e ) => setDays( e.target.value ) }
-				style={ { width: '6em' } }
-			/>{ ' ' }
-			<button className="button" onClick={ save }>
-				{ __( 'Save', 'catalogops' ) }
-			</button>
-			{ saved && (
-				<span style={ { marginLeft: '8px', color: '#1a7f37' } }>
-					{ __( 'Saved.', 'catalogops' ) }
-				</span>
-			) }
+			<div className="catalogops-retention__row">
+				<input
+					type="number"
+					min={ data.min }
+					max={ data.max }
+					value={ days }
+					onChange={ ( e ) => setDays( e.target.value ) }
+				/>
+				<button className="button" onClick={ save }>
+					{ __( 'Save', 'catalogops' ) }
+				</button>
+				{ saved && (
+					<span className="catalogops-saved">
+						{ __( 'Saved.', 'catalogops' ) }
+					</span>
+				) }
+			</div>
 		</div>
 	);
 }
@@ -3395,12 +3898,19 @@ function Schedules( { refreshKey, onRan } ) {
 	// and disable rather than leaving the user unsure anything happened.
 	const [ busyId, setBusyId ] = useState( null );
 	const [ runMsg, setRunMsg ] = useState( '' );
+	const [ page, setPage ] = useState( 1 );
+	const [ total, setTotal ] = useState( 0 );
+	const [ perPage, setPerPage ] = useState( 10 );
 
 	useEffect( () => {
-		apiFetch( { path: '/catalogops/v1/schedules' } )
-			.then( ( res ) => setItems( res.items ) )
+		apiFetch( { path: `/catalogops/v1/schedules?page=${ page }` } )
+			.then( ( res ) => {
+				setItems( res.items );
+				setTotal( res.total || res.items.length );
+				setPerPage( res.per_page || 10 );
+			} )
 			.catch( ( err ) => setError( err.message ) );
-	}, [ refreshKey, localKey ] );
+	}, [ refreshKey, localKey, page ] );
 
 	const reload = () => setLocalKey( ( k ) => k + 1 );
 
@@ -3451,7 +3961,7 @@ function Schedules( { refreshKey, onRan } ) {
 			<h2>{ __( 'Schedules', 'catalogops' ) }</h2>
 			<p className="description">
 				{ __(
-					'Operations set to run later or on a recurring basis. Create one from the Bulk edit panel above (“Schedule instead…”). A completion report is emailed for each run.',
+					'Operations set to run later or on a recurring basis. Create one in Bulk edit above: set the change, then pick “On a schedule” under When. A completion report is emailed for each run.',
 					'catalogops'
 				) }
 			</p>
@@ -3511,6 +4021,13 @@ function Schedules( { refreshKey, onRan } ) {
 					</div>
 				) }
 			</div>
+
+			<Pagination
+				page={ page }
+				pages={ Math.ceil( total / perPage ) }
+				busy={ busyId !== null }
+				onPage={ setPage }
+			/>
 		</div>
 	);
 }
@@ -3915,32 +4432,12 @@ function App() {
 										}
 									/>
 								</div>
-
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-stock">
-										{ __( 'Stock', 'catalogops' ) }
-									</label>
-									<select
-										id="catalogops-stock"
-										value={ form.stockStatus }
-										onChange={ update( 'stockStatus' ) }
-									>
-										<option value="">
-											{ __( 'Any', 'catalogops' ) }
-										</option>
-										<option value="instock">
-											{ __( 'In stock', 'catalogops' ) }
-										</option>
-										<option value="outofstock">
-											{ __(
-												'Out of stock',
-												'catalogops'
-											) }
-										</option>
-									</select>
-								</div>
 							</div>
 
+							{ /* Stock and price are the two conditions about an
+							     item's own numbers, so they sit together and last —
+							     after the terms that say *which* items, and after
+							     the attribute pair that only exists for variations. */ }
 							<div className="catalogops-filter-row">
 								{ 'variation' === scope &&
 									attributes.length > 0 && (
@@ -4018,6 +4515,30 @@ function App() {
 											/>
 										</div>
 									) }
+
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-stock">
+										{ __( 'Stock', 'catalogops' ) }
+									</label>
+									<select
+										id="catalogops-stock"
+										value={ form.stockStatus }
+										onChange={ update( 'stockStatus' ) }
+									>
+										<option value="">
+											{ __( 'Any', 'catalogops' ) }
+										</option>
+										<option value="instock">
+											{ __( 'In stock', 'catalogops' ) }
+										</option>
+										<option value="outofstock">
+											{ __(
+												'Out of stock',
+												'catalogops'
+											) }
+										</option>
+									</select>
+								</div>
 
 								<div className="catalogops-field catalogops-field--price">
 									<label htmlFor="catalogops-price-min">
@@ -4124,6 +4645,25 @@ function App() {
 					<ScopeHint other={ otherScope } onSwitch={ setScope } />
 				) }
 
+				{ /* On a catalogue of thousands the table shows ten and the pager
+				     says "of 1859", which nobody is going to walk. Naming the
+				     window makes the table honest, and points at the control that
+				     answers a question about one product. */ }
+				{ ! loading && items.length > 0 && total > items.length && (
+					<p className="catalogops-table-caption">
+						{ sprintf(
+							/* translators: 1: first row shown, 2: last row shown, 3: total matches. */
+							__(
+								'Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one.',
+								'catalogops'
+							),
+							( page - 1 ) * PER_PAGE + 1,
+							( page - 1 ) * PER_PAGE + items.length,
+							total
+						) }
+					</p>
+				) }
+
 				<table
 					className={ `wp-list-table widefat fixed striped${
 						loading ? ' catalogops-loading-dim' : ''
@@ -4206,30 +4746,12 @@ function App() {
 					</tbody>
 				</table>
 
-				<div className="catalogops-pagination tablenav">
-					<button
-						className="button"
-						disabled={ page <= 1 || loading }
-						onClick={ () => run( page - 1 ) }
-					>
-						{ __( 'Previous', 'catalogops' ) }
-					</button>
-					<span className="catalogops-page">
-						{ sprintf(
-							/* translators: 1: current page, 2: total pages. */
-							__( 'Page %1$d of %2$d', 'catalogops' ),
-							page,
-							pages
-						) }
-					</span>
-					<button
-						className="button"
-						disabled={ page >= pages || loading }
-						onClick={ () => run( page + 1 ) }
-					>
-						{ __( 'Next', 'catalogops' ) }
-					</button>
-				</div>
+				<Pagination
+					page={ page }
+					pages={ pages }
+					busy={ loading }
+					onPage={ run }
+				/>
 			</div>
 
 			<BulkEdit

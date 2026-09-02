@@ -11,9 +11,12 @@ use CatalogOps\Licensing\License;
 use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Fields\Field_Providers;
+use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
 use InvalidArgumentException;
+use WC_Product;
 
 /**
  * The front of the pipeline (CONTEXT §2): Filter → (Preview) → Snapshot →
@@ -95,6 +98,21 @@ final class Operation_Service {
 	private Write_Rules $rules;
 
 	/**
+	 * Works out what an action would write — the same one the runner uses, so the
+	 * preview's sample cannot show a value the run would not produce.
+	 *
+	 * @var Evaluator
+	 */
+	private Evaluator $evaluator;
+
+	/**
+	 * How many objects the preview shows worked out in full. Ten is a sample, not
+	 * a set: enough to see the shape of the change, few enough to load quickly and
+	 * to read without scrolling. The search covers "but I want to see that one".
+	 */
+	private const SAMPLE_SIZE = 10;
+
+	/**
 	 * Build the service.
 	 *
 	 * @param Query_Engine        $engine     Query engine.
@@ -126,6 +144,7 @@ final class Operation_Service {
 		$this->scheduler  = $scheduler;
 		$this->license    = $license ?? License::unlimited();
 		$this->rules      = $rules ?? new Write_Rules();
+		$this->evaluator  = new Evaluator( $providers, $this->rules );
 	}
 
 	/**
@@ -175,13 +194,22 @@ final class Operation_Service {
 	 * well but damages in passing, such as the sale prices a lower regular price
 	 * wipes. They are counted, never subtracted.
 	 *
+	 * The counts are the promise; the sample shows it. A percentage or a formula is
+	 * invisible in a number — `roundto( cost * 1.35, 0.99 )` only becomes checkable
+	 * when someone can see 10.00 turn into 13.86 — so the preview also works out,
+	 * in full, what would happen to the first few objects it would change. A SKU
+	 * narrows the sample to one product without touching the counts, which describe
+	 * the whole edit either way.
+	 *
 	 * @param Filter                                  $filter  Target filter.
 	 * @param \CatalogOps\Operations\Actions\Action[] $actions Actions to apply.
-	 * @return array{matched: int, applicable: int, omitted: int, omitted_by: list<array{reason: string, count: int}>, warnings: list<array{code: string, count: int}>}
+	 * @param string                                  $sku     Narrow the sample to
+	 *                                                         SKUs containing this.
+	 * @return array{matched: int, applicable: int, omitted: int, omitted_by: list<array{reason: string, count: int}>, warnings: list<array{code: string, count: int}>, sample: list<array{id: int, changes: list<array<string, mixed>>}>}
 	 *
 	 * @throws InvalidArgumentException When an action targets an unsupported field.
 	 */
-	public function preview( Filter $filter, array $actions ): array {
+	public function preview( Filter $filter, array $actions, string $sku = '' ): array {
 		$this->assert_fields_supported( $actions );
 		$this->assert_values_writable( $actions );
 
@@ -214,7 +242,65 @@ final class Operation_Service {
 			'omitted'    => $matched - $applicable,
 			'omitted_by' => $omitted_by,
 			'warnings'   => $this->count_warnings( $filter, $actions, $matched ),
+			'sample'     => $this->sample( $filter, $actions, $applied, $sku ),
 		);
+	}
+
+	/**
+	 * Work out in full what the change would do to the first few objects it would
+	 * change — or to one named product, when a SKU is given.
+	 *
+	 * Drawn from the applicable set, not the matched one: every row shown is a row
+	 * that would actually be written, so the sample cannot promise a change the
+	 * operation would then skip. The derivation is the runner's own
+	 * ({@see Evaluator}), so what is shown here is what would be written.
+	 *
+	 * @param Filter                                       $filter       Target filter.
+	 * @param \CatalogOps\Operations\Actions\Action[]      $actions      Actions to apply.
+	 * @param \CatalogOps\Query\Requirements\Requirement[] $requirements The applicability rules.
+	 * @param string                                       $sku          SKU fragment, or ''.
+	 * @return list<array{id: int, changes: list<array<string, mixed>>}>
+	 */
+	private function sample( Filter $filter, array $actions, array $requirements, string $sku ): array {
+		$searching = '' !== trim( $sku );
+
+		$target = $searching
+			? $filter->with( new Condition( 'sku', Operator::CONTAINS, trim( $sku ) ) )
+			: $filter;
+
+		// Browsing shows what will happen: rows drawn from the applicable set, so
+		// every one of them is a row that runs. A search asks a different question
+		// — "and what about that one" — and the useful answer to a product the
+		// change leaves out is the reason, not an empty table. So a search looks
+		// past the applicability rules and lets the derivation explain each row;
+		// it reaches the same verdict those rules do, one object at a time.
+		$rows = array();
+
+		foreach ( $this->engine->resolve( $target, $searching ? array() : $requirements, self::SAMPLE_SIZE ) as $object_id ) {
+			$product = wc_get_product( $object_id );
+
+			if ( ! $product instanceof WC_Product ) {
+				continue;
+			}
+
+			$changes = array();
+
+			foreach ( $this->evaluator->derive( $product, $actions ) as $derived ) {
+				$changes[] = array(
+					'field'  => $derived->field,
+					'old'    => Values::to_string( $derived->old_value ),
+					'new'    => $derived->writes() ? Values::to_string( $derived->new_value ) : null,
+					'reason' => $derived->writes() ? null : $derived->reason->value,
+				);
+			}
+
+			$rows[] = array(
+				'id'      => (int) $object_id,
+				'changes' => $changes,
+			);
+		}
+
+		return $rows;
 	}
 
 	/**

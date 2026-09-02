@@ -35,6 +35,12 @@ final class Action_Factory {
 		switch ( $type ) {
 			case Set_Value::TYPE:
 				return new Set_Value( $field, $data['value'] ?? null );
+			case Adjust::TYPE:
+				if ( ! is_numeric( $data['amount'] ?? null ) ) {
+					throw new InvalidArgumentException( 'An adjustment needs a numeric amount.' );
+				}
+
+				return new Adjust( $field, (float) $data['amount'] );
 			case Formula::TYPE:
 				return Formula::from_source( $field, (string) ( $data['expression'] ?? '' ) );
 			default:

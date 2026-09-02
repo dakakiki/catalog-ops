@@ -39,6 +39,12 @@ final class Operations_Controller {
 	private const REST_NAMESPACE = 'catalogops/v1';
 
 	/**
+	 * Operations per page in the history list. Ten fills the panel without
+	 * pushing everything below it off the screen.
+	 */
+	private const HISTORY_PER_PAGE = 10;
+
+	/**
 	 * Operation service (pipeline orchestration).
 	 *
 	 * @var Operation_Service
@@ -126,6 +132,7 @@ final class Operations_Controller {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'index' ),
 					'permission_callback' => array( $this, 'can_manage' ),
+					'args'                => Paging::args( self::HISTORY_PER_PAGE ),
 				),
 			)
 		);
@@ -137,7 +144,14 @@ final class Operations_Controller {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'preview' ),
 				'permission_callback' => array( $this, 'can_manage' ),
-				'args'                => $writable,
+				'args'                => $writable + array(
+					// Narrows the worked-out sample to one product. The counts
+					// still describe the whole edit.
+					'sku' => array(
+						'type'    => 'string',
+						'default' => '',
+					),
+				),
 			)
 		);
 
@@ -260,10 +274,30 @@ final class Operations_Controller {
 		}
 
 		try {
-			$preview = $this->service->preview( $filter, $actions );
+			$preview = $this->service->preview( $filter, $actions, (string) $request->get_param( 'sku' ) );
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		}
+
+		// The service answers in ids; the panel shows people a product. Identity is
+		// resolved here, with the same lookup the audit view uses, so a preview row
+		// and the history row it becomes read identically.
+		$identities = $this->identify(
+			array_map( static fn( array $row ): int => $row['id'], $preview['sample'] )
+		);
+
+		$preview['sample'] = array_map(
+			static function ( array $row ) use ( $identities ): array {
+				$identity = $identities[ $row['id'] ] ?? array(
+					'sku'         => '',
+					'name'        => '',
+					'object_type' => 'product',
+				);
+
+				return $row + $identity;
+			},
+			$preview['sample']
+		);
 
 		return new WP_REST_Response( $preview );
 	}
@@ -335,15 +369,30 @@ final class Operations_Controller {
 	}
 
 	/**
-	 * List recent operations.
+	 * List recent operations, newest first, one page at a time.
+	 *
+	 * The list used to answer with the newest twenty and no hint that there were
+	 * more, which is the same as losing them. It now carries the whole count, so
+	 * the history can be walked back as far as retention keeps it.
+	 *
+	 * @param WP_REST_Request $request The request.
 	 */
-	public function index(): WP_REST_Response {
+	public function index( WP_REST_Request $request ): WP_REST_Response {
+		$slice = Paging::slice( $request, self::HISTORY_PER_PAGE );
+
 		$operations = array_map(
 			array( $this, 'to_array' ),
-			$this->operations->recent( 20 )
+			$this->operations->recent( $slice['per_page'], $slice['offset'] )
 		);
 
-		return new WP_REST_Response( array( 'items' => $operations ) );
+		return new WP_REST_Response(
+			array(
+				'items'    => $operations,
+				'total'    => $this->operations->count_all(),
+				'page'     => $slice['page'],
+				'per_page' => $slice['per_page'],
+			)
+		);
 	}
 
 	/**

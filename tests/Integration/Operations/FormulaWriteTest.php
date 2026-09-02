@@ -13,6 +13,8 @@
 
 namespace CatalogOps\Tests\Integration\Operations;
 
+use CatalogOps\Licensing\License;
+use CatalogOps\Operations\Actions\Adjust;
 use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Changes;
@@ -183,6 +185,223 @@ final class FormulaWriteTest extends Operations_Database_Case {
 		$this->assertSame( '45', wc_get_product( $product )->get_regular_price() );
 	}
 
+	public function test_an_amount_adjustment_runs_and_the_free_tier_may_use_it(): void {
+		$dear  = $this->make_product( 500, '10' );
+		$cheap = $this->make_product( 50, '10' );
+
+		// Built on a free licence on purpose. Adjust is its own action rather than
+		// a generated `price - 200` formula precisely so this is expressible: the
+		// gate is on the Formula class, and an expression the UI happened to write
+		// would be indistinguishable in the payload from any other.
+		global $wpdb;
+		$free = new Operation_Service(
+			new Query_Engine( $wpdb ),
+			$this->operations,
+			$this->changes,
+			new Field_Providers( new Core_Fields(), new Meta_Fields() ),
+			new Lock( $this->operations ),
+			$this->scheduler,
+			License::free()
+		);
+
+		$op_id = $free->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Adjust( 'regular_price', -200.0 ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$free->queue( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( '300', wc_get_product( $dear )->get_regular_price() );
+
+		// 50 less 200 is not a price, and that is known before the run: the object
+		// is never targeted, so the operation's count is what it applies rather
+		// than a promise it walks back.
+		$this->assertSame( '50', wc_get_product( $cheap )->get_regular_price() );
+		$this->assertSame( 1, $this->operations->find( $op_id )->target_count );
+		$this->assertSame( 0, $this->changes->counts( $op_id )['skipped'] );
+	}
+
+	public function test_the_preview_counts_the_products_a_subtraction_would_take_negative(): void {
+		// The reported bug: 167 matched, "167 will change · 0 will not", and then
+		// the run quietly changed fewer because the cheap ones went negative. A
+		// fixed subtraction is the one computed write whose refusal has an exact
+		// SQL form, so the preview can and must count it.
+		$this->make_product( 500, '10' );
+		$this->make_product( 300, '10' );
+		$cheap = $this->make_product( 20.24, '10' );
+
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) );
+		$actions = array( new Adjust( 'regular_price', -100.0 ) );
+
+		$preview = $this->service->preview( $filter, $actions );
+
+		$this->assertSame( 3, $preview['matched'] );
+		$this->assertSame( 2, $preview['applicable'] );
+		$this->assertSame( 1, $preview['omitted'] );
+
+		// And it says which rule left the third one out.
+		$this->assertSame(
+			array(
+				array(
+					'reason' => 'negative_value',
+					'count'  => 1,
+				),
+			),
+			$preview['omitted_by']
+		);
+
+		// The promise holds through the run: the omitted product is never even
+		// targeted, so progress, history and undo all agree with the preview.
+		$op_id = $this->service->create(
+			$filter,
+			$actions,
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( 2, $this->operations->find( $op_id )->target_count );
+		$this->assertSame( 2, $this->changes->counts( $op_id )['applied'] );
+		$this->assertSame( 0, $this->changes->counts( $op_id )['skipped'] );
+		$this->assertSame( '20.24', wc_get_product( $cheap )->get_regular_price() );
+	}
+
+	public function test_searching_for_a_left_out_product_explains_why(): void {
+		// The workflow the bug was found by: the count says thirteen will not
+		// change, and the natural next question is "is mine one of them". An empty
+		// table would be true and useless — the row and its reason are the answer.
+		$this->make_product( 500, '10', 'QC-RICH' );
+		$this->make_product( 20.24, '10', 'QC-POOR' );
+
+		$preview = $this->service->preview(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Adjust( 'regular_price', -100.0 ) ),
+			'QC-POOR'
+		);
+
+		// The counts still describe the whole edit.
+		$this->assertSame( 2, $preview['matched'] );
+		$this->assertSame( 1, $preview['applicable'] );
+
+		$this->assertCount( 1, $preview['sample'] );
+		$change = $preview['sample'][0]['changes'][0];
+		$this->assertNull( $change['new'] );
+		$this->assertSame( 'negative_value', $change['reason'] );
+		$this->assertSame( '20.24', $change['old'] );
+	}
+
+	public function test_a_price_exactly_equal_to_the_subtraction_still_changes(): void {
+		// The floor is the amount itself: 100 less 100 lands on zero, which is a
+		// price, so it must not be counted out with the ones that go below.
+		$exact = $this->make_product( 100, '10' );
+
+		$preview = $this->service->preview(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Adjust( 'regular_price', -100.0 ) )
+		);
+
+		$this->assertSame( 1, $preview['applicable'] );
+		$this->assertSame( $exact, $preview['sample'][0]['id'] );
+		$this->assertSame( '0', $preview['sample'][0]['changes'][0]['new'] );
+	}
+
+	public function test_an_increase_needs_no_floor(): void {
+		// Adding never goes negative, so nothing should be subtracted from the
+		// count — a requirement that fires here would quietly hide products.
+		$this->make_product( 5, '10' );
+
+		$preview = $this->service->preview(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Adjust( 'regular_price', 100.0 ) )
+		);
+
+		$this->assertSame( 1, $preview['matched'] );
+		$this->assertSame( 1, $preview['applicable'] );
+		$this->assertSame( array(), $preview['omitted_by'] );
+	}
+
+	public function test_the_previews_sample_is_exactly_what_the_run_writes(): void {
+		// The whole reason the derivation is shared: a sample worked out its own
+		// way could show a figure the run would never produce, and be believed.
+		$ten    = $this->make_product( 100, '10' );
+		$twenty = $this->make_product( 200, '20' );
+
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) );
+		$actions = array( Formula::from_source( 'regular_price', 'roundto( cost * 1.35, 0.99 )' ) );
+
+		$preview = $this->service->preview( $filter, $actions );
+
+		$this->assertCount( 2, $preview['sample'] );
+
+		$promised = array();
+		foreach ( $preview['sample'] as $row ) {
+			$this->assertCount( 1, $row['changes'] );
+			$this->assertSame( 'regular_price', $row['changes'][0]['field'] );
+			$promised[ $row['id'] ] = $row['changes'][0];
+		}
+
+		// Previewing wrote nothing.
+		$this->assertSame( '100', wc_get_product( $ten )->get_regular_price() );
+		$this->assertSame( '100', $promised[ $ten ]['old'] );
+		$this->assertSame( '13.86', $promised[ $ten ]['new'] );
+		$this->assertSame( '26.73', $promised[ $twenty ]['new'] );
+
+		$op_id = $this->service->create(
+			$filter,
+			$actions,
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		foreach ( $promised as $id => $change ) {
+			$this->assertSame( $change['new'], wc_get_product( $id )->get_regular_price() );
+		}
+	}
+
+	public function test_a_sku_narrows_the_sample_and_leaves_the_counts_alone(): void {
+		$alpha = $this->make_product( 100, '10', 'QC-ALPHA' );
+		$this->make_product( 200, '20', 'QC-BETA' );
+
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) );
+		$actions = array( Formula::from_source( 'regular_price', 'cost * 2' ) );
+
+		$preview = $this->service->preview( $filter, $actions, 'ALPHA' );
+
+		// The counts still describe the whole edit — the search narrows what is
+		// shown, not what would run.
+		$this->assertSame( 2, $preview['matched'] );
+		$this->assertSame( 2, $preview['applicable'] );
+
+		$this->assertCount( 1, $preview['sample'] );
+		$this->assertSame( $alpha, $preview['sample'][0]['id'] );
+		$this->assertSame( '20', $preview['sample'][0]['changes'][0]['new'] );
+	}
+
+	public function test_the_sample_reports_a_refusal_rather_than_hiding_it(): void {
+		// A row the run would skip is shown as skipped, with the reason — not
+		// dropped, which would suggest the change simply misses it.
+		$this->make_product( 4, '2' );
+
+		$preview = $this->service->preview(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( Formula::from_source( 'regular_price', 'regular_price - 10' ) )
+		);
+
+		$change = $preview['sample'][0]['changes'][0];
+
+		$this->assertNull( $change['new'] );
+		$this->assertSame( 'negative_value', $change['reason'] );
+		$this->assertSame( '4', $change['old'] );
+	}
+
 	public function test_a_formula_that_goes_negative_leaves_that_price_alone(): void {
 		$dear  = $this->make_product( 50, '10' );
 		$cheap = $this->make_product( 4, '2' );
@@ -347,12 +566,16 @@ final class FormulaWriteTest extends Operations_Database_Case {
 	 * @param string|null $cost  Cost meta value, or null for none.
 	 * @return int Product id.
 	 */
-	private function make_product( float $price, ?string $cost ): int {
+	private function make_product( float $price, ?string $cost, ?string $sku = null ): int {
 		$product = new WC_Product_Simple();
 		$product->set_regular_price( (string) $price );
 		$product->set_manage_stock( true );
 		$product->set_stock_quantity( 5 );
 		$product->set_stock_status( 'instock' );
+
+		if ( null !== $sku ) {
+			$product->set_sku( $sku );
+		}
 
 		if ( null !== $cost ) {
 			$product->update_meta_data( '_catalogops_cost', $cost );

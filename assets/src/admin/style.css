@@ -628,6 +628,27 @@ be more than a few rows however much is chosen.
 	color: var(--co-ink);
 }
 
+/* Preview on the left, its one-SKU search pushed to the right — the same shape
+   as the filter's results bar, so the two searches read as the same control. */
+.catalogops-preview-bar .catalogops-search {
+	margin-left: auto;
+}
+
+/* Says what the table below is: a sample, not the set. */
+.catalogops-table-caption {
+	margin: 12px 0 6px;
+	color: var(--co-muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+/* A notice standing in a column of controls rather than at the top of a page,
+   which is what wp-admin's own margins assume. */
+.catalogops .catalogops-inline-notice {
+	margin: 0;
+	max-width: 52em;
+}
+
 /* A rejected value's reason, under the control that holds it. */
 .catalogops-field-error {
 	margin: 2px 0 0;
@@ -1167,6 +1188,39 @@ specificity and loading later is what makes it red.
 	color: var(--co-red);
 }
 
+/*
+Green from the start, for the same reason the destructive button is red from the
+start: this is the one that runs the change, and the row actions already teach
+that green runs. Its Cancel neighbour stays plain, so the pair reads at a glance.
+
+Scoped under .catalogops for the same reason as the danger button — wp-admin's
+`.wp-core-ui .button` is two classes deep, so a bare class of ours would lose.
+*/
+.catalogops .catalogops-button--go,
+.catalogops .catalogops-button--go:visited {
+	border-color: #15642b;
+	background: var(--co-green);
+	color: #fff;
+	text-shadow: none;
+}
+
+.catalogops .catalogops-button--go:hover:not( :disabled ),
+.catalogops .catalogops-button--go:focus:not( :disabled ) {
+	border-color: #10531f;
+	background: #15642b;
+	color: #fff;
+}
+
+.catalogops .catalogops-button--go:focus:not( :disabled ) {
+	box-shadow: 0 0 0 1px #fff, 0 0 0 3px var(--co-green);
+}
+
+.catalogops .catalogops-button--go:disabled {
+	border-color: var(--co-border-strong);
+	background: var(--co-border-strong);
+	color: #fff;
+}
+
 .catalogops-schedule-preview {
 	display: block;
 }
@@ -1417,8 +1471,51 @@ tr.is-drift td {
 
 /* --- Retention --------------------------------------------------------- */
 
-.catalogops-retention input[type='number'] {
+.catalogops-retention__row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+/* The same 30px band the filter and bulk-edit controls stand in. wp-admin sizes
+   both of these itself — the input through its own number-field rules, the
+   button through `.wp-core-ui .button` — so each override is selected at least
+   as specifically as the rule it is answering. */
+.catalogops .catalogops-retention input[type='number'] {
 	width: 6em;
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	box-sizing: border-box;
+	line-height: normal;
+	/* wp-admin gives its inputs a vertical margin, and a flex row centres the
+	   margin box — so without this the input sits two pixels below the button it
+	   is supposed to line up with. */
+	margin: 0;
+}
+
+/* The same shape the filter row and the search bar already use for their
+   buttons. `min-height` is the member that matters: wp-admin's own rule carries
+   min-height: 40px, which outranks any height set beside it, so a height alone
+   left this one 40px tall next to a 30px input. The flex centring is what keeps
+   the label centred against buttons.css's 38px line-height. */
+.catalogops .catalogops-retention .button {
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	box-sizing: border-box;
+	display: inline-flex;
+	align-items: center;
+	line-height: normal;
+	padding-top: 0;
+	padding-bottom: 0;
+	/* wp-admin hangs a 4px bottom margin off its buttons. A flex row centres the
+	   margin box, so the button and the input beside it end up two pixels out of
+	   line even though both are 30px tall. */
+	margin: 0;
+}
+
+.catalogops-saved {
+	color: var(--co-green);
+	font-size: 13px;
 }
 
 /* --- Formulas & percentage (bulk edit) --------------------------------- */

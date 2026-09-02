@@ -151,6 +151,13 @@ final class Admin_Page {
 					'maxObjectsPerOp' => $this->license->is_premium() ? null : $this->license->max_objects_per_op(),
 				),
 				'cron'         => $this->cron_config(),
+				// The shop's own currency symbol, so an amount field can be
+				// labelled in the unit it is counted in. A generic label would
+				// leave "By (amount)" indistinguishable from the percentage
+				// beside it.
+				'currency'     => function_exists( 'get_woocommerce_currency_symbol' )
+					? html_entity_decode( get_woocommerce_currency_symbol(), ENT_QUOTES, 'UTF-8' )
+					: '',
 			)
 		);
 	}

@@ -46,10 +46,17 @@ final class Query_Engine {
 	 *                                    satisfy — the objects an edit can actually
 	 *                                    change, so ones it would only skip are
 	 *                                    excluded up front.
+	 * @param int           $limit        Stop after this many ids; 0 for all of them.
 	 * @return list<int>
 	 */
-	public function resolve( Filter $filter, array $requirements = array() ): array {
+	public function resolve( Filter $filter, array $requirements = array(), int $limit = 0 ): array {
 		$sql = $this->select( 'l.product_id', $filter, $requirements ) . ' ORDER BY l.product_id ASC';
+
+		if ( $limit > 0 ) {
+			// A caller that only wants a handful — the preview's sample — should not
+			// pay to materialise every id in the catalogue to throw them away.
+			$sql .= $this->wpdb->prepare( ' LIMIT %d', $limit );
+		}
 
 		// $sql is assembled in select() from trusted identifiers with all values
 		// bound via $wpdb->prepare().
