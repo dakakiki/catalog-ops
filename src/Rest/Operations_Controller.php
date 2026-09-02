@@ -144,7 +144,14 @@ final class Operations_Controller {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'preview' ),
 				'permission_callback' => array( $this, 'can_manage' ),
-				'args'                => $writable,
+				'args'                => $writable + array(
+					// Narrows the worked-out sample to one product. The counts
+					// still describe the whole edit.
+					'sku' => array(
+						'type'    => 'string',
+						'default' => '',
+					),
+				),
 			)
 		);
 
@@ -267,10 +274,30 @@ final class Operations_Controller {
 		}
 
 		try {
-			$preview = $this->service->preview( $filter, $actions );
+			$preview = $this->service->preview( $filter, $actions, (string) $request->get_param( 'sku' ) );
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		}
+
+		// The service answers in ids; the panel shows people a product. Identity is
+		// resolved here, with the same lookup the audit view uses, so a preview row
+		// and the history row it becomes read identically.
+		$identities = $this->identify(
+			array_map( static fn( array $row ): int => $row['id'], $preview['sample'] )
+		);
+
+		$preview['sample'] = array_map(
+			static function ( array $row ) use ( $identities ): array {
+				$identity = $identities[ $row['id'] ] ?? array(
+					'sku'         => '',
+					'name'        => '',
+					'object_type' => 'product',
+				);
+
+				return $row + $identity;
+			},
+			$preview['sample']
+		);
 
 		return new WP_REST_Response( $preview );
 	}

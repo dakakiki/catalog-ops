@@ -78,6 +78,35 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertSame( 0, $data['omitted'] );
 	}
 
+	public function test_preview_names_the_products_in_its_sample(): void {
+		// The service answers in ids; a person needs the product. The endpoint
+		// resolves identity with the same lookup the audit view uses, so a preview
+		// row and the history row it becomes read the same.
+		$id = $this->make_product( 30 );
+		$product = wc_get_product( $id );
+		$product->set_sku( 'QC-PREVIEW-1' );
+		$product->set_name( 'Preview Sample Product' );
+		$product->save();
+
+		$response = $this->post(
+			'/catalogops/v1/operations/preview',
+			array(
+				'filter'  => array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 20 ) ) ),
+				'actions' => array( array( 'type' => 'set', 'field' => 'regular_price', 'value' => '9.99' ) ),
+			)
+		);
+
+		$this->assertSame( 200, $response->get_status() );
+		$sample = $response->get_data()['sample'];
+
+		$this->assertCount( 1, $sample );
+		$this->assertSame( $id, $sample[0]['id'] );
+		$this->assertSame( 'QC-PREVIEW-1', $sample[0]['sku'] );
+		$this->assertSame( 'Preview Sample Product', $sample[0]['name'] );
+		$this->assertSame( '30', $sample[0]['changes'][0]['old'] );
+		$this->assertSame( '9.99', $sample[0]['changes'][0]['new'] );
+	}
+
 	public function test_create_queues_and_returns_201_with_progress(): void {
 		$this->make_product( 30 );
 		$this->make_product( 40 );

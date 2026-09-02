@@ -17,16 +17,12 @@ use WC_Product;
  * Deriving at execution time — rather than freezing a computed value at queue
  * time — is what lets a formula (M5) slot in without touching the pipeline.
  *
- * An action whose {@see Action::apply()} returns null (e.g. a formula over an
- * empty field) skips the object rather than writing, and is recorded as skipped —
- * never coerced to zero (CONTEXT §3).
- *
- * A result the field cannot hold is treated the same way. A formula is only
- * negative for *some* objects — `regular_price - 10` is fine at 40 and nonsense
- * at 4 — so this cannot be settled up front for the whole set the way the SQL
- * applicability rules settle a literal. It is settled here, per object, before
- * anything is staged: {@see Write_Rules::refuses()} decides, the object is
- * skipped with a reason, and the rest of the operation carries on.
+ * The derivation itself belongs to {@see Evaluator}, which the preview asks the
+ * same question: a preview that worked values out its own way could show a figure
+ * this plan would never write. What is left here is the bookkeeping — matching
+ * each answer to the change row that claims it, staging what will be written, and
+ * recording the rest as skipped with its reason (never coerced to zero,
+ * CONTEXT §3).
  */
 final class Apply_Plan implements Chunk_Plan {
 
@@ -45,11 +41,11 @@ final class Apply_Plan implements Chunk_Plan {
 	private Field_Providers $providers;
 
 	/**
-	 * The rules saying what a field may be written.
+	 * Works out what each action would write.
 	 *
-	 * @var Write_Rules
+	 * @var Evaluator
 	 */
-	private Write_Rules $rules;
+	private Evaluator $evaluator;
 
 	/**
 	 * Build the plan.
@@ -63,7 +59,7 @@ final class Apply_Plan implements Chunk_Plan {
 	public function __construct( array $actions, Field_Providers $providers, ?Write_Rules $rules = null ) {
 		$this->actions   = array_values( $actions );
 		$this->providers = $providers;
-		$this->rules     = $rules ?? new Write_Rules();
+		$this->evaluator = new Evaluator( $providers, $rules );
 	}
 
 	/**
@@ -82,61 +78,34 @@ final class Apply_Plan implements Chunk_Plan {
 			$row_for[ $row->field_type->value . '|' . $row->field_key ] = $row;
 		}
 
-		// A formula reads fields other than the one it writes; this resolver lets
-		// any action pull a current value off the already-loaded product by field
-		// key, without the plan knowing which fields a given action needs.
-		$resolver = fn( string $field_key ): mixed => $this->read_field( $product, $field_key );
-
-		foreach ( $this->actions as $action ) {
-			$provider = $this->providers->for( $action->field() );
+		foreach ( $this->evaluator->derive( $product, $this->actions ) as $derived ) {
+			$provider = $this->providers->for( $derived->field );
 
 			if ( null === $provider ) {
 				continue;
 			}
 
-			$key = $provider->field_type( $action->field() )->value . '|' . $provider->storage_key( $action->field() );
+			$key = $provider->field_type( $derived->field )->value . '|' . $provider->storage_key( $derived->field );
 
 			if ( ! isset( $row_for[ $key ] ) ) {
 				continue;
 			}
 
-			$row     = $row_for[ $key ];
-			$current = $provider->read( $product, $action->field() );
-			$new     = $action->apply( $current, $resolver );
+			$row = $row_for[ $key ];
 
-			if ( null === $new ) {
-				// A formula over an empty or non-numeric field. The frozen target
-				// list already excludes objects missing a read field, so reaching
-				// here means the input was present but unusable.
-				$outcome->record_skipped( $row, Values::to_string( $current ), Skip_Reason::EMPTY_INPUT );
+			if ( ! $derived->writes() ) {
+				$outcome->record_skipped( $row, Values::to_string( $derived->old_value ), $derived->reason );
 				continue;
 			}
 
-			if ( $this->rules->refuses( $action->field(), $new ) ) {
-				// A price below zero. Not staged, not rounded up to zero, not
-				// written: the object keeps the price it has and says why.
-				$outcome->record_skipped( $row, Values::to_string( $current ), Skip_Reason::NEGATIVE_VALUE );
-				continue;
-			}
-
-			$provider->stage( $product, $action->field(), $new );
-			$outcome->record_applied( $row, Values::to_string( $current ), Values::to_string( $new ) );
+			$provider->stage( $product, $derived->field, $derived->new_value );
+			$outcome->record_applied(
+				$row,
+				Values::to_string( $derived->old_value ),
+				Values::to_string( $derived->new_value )
+			);
 		}
 
 		return $outcome;
-	}
-
-	/**
-	 * Read a single field's current value off a loaded product by its field key,
-	 * or null when no provider owns the key. This is the seam a formula reads its
-	 * inputs through.
-	 *
-	 * @param WC_Product $product   The loaded product.
-	 * @param string     $field_key The field key to read.
-	 */
-	private function read_field( WC_Product $product, string $field_key ): mixed {
-		$provider = $this->providers->for( $field_key );
-
-		return null === $provider ? null : $provider->read( $product, $field_key );
 	}
 }

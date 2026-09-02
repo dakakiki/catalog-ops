@@ -628,6 +628,20 @@ be more than a few rows however much is chosen.
 	color: var(--co-ink);
 }
 
+/* Preview on the left, its one-SKU search pushed to the right — the same shape
+   as the filter's results bar, so the two searches read as the same control. */
+.catalogops-preview-bar .catalogops-search {
+	margin-left: auto;
+}
+
+/* Says what the table below is: a sample, not the set. */
+.catalogops-sample-caption {
+	margin: 12px 0 6px;
+	color: var(--co-muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+
 /* A notice standing in a column of controls rather than at the top of a page,
    which is what wp-admin's own margins assume. */
 .catalogops .catalogops-inline-notice {

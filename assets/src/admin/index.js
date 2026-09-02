@@ -122,6 +122,17 @@ const NUMERIC_FIELDS = [
 ];
 
 /**
+ * The label for an editable field key, for surfaces that show the field itself
+ * rather than a control for it. Falls back to the key, which is at least stable
+ * and searchable, for a field no built-in provider names.
+ *
+ * @param {string} key A field key (e.g. regular_price).
+ * @return {string} Its label.
+ */
+const fieldLabel = ( key ) =>
+	( EDITABLE_FIELDS.find( ( f ) => f.key === key ) || {} ).label || key;
+
+/**
  * The formula variable a numeric field key reads under.
  *
  * @param {string} key A numeric field key (e.g. stock_quantity).
@@ -970,6 +981,30 @@ function skipReasonLabel( code ) {
 }
 
 /**
+ * The same reasons in a few words, for a table cell.
+ *
+ * The full clauses above are written to be read as the tail of "N items — …",
+ * which is right for a summary and far too long for a column. A cell needs the
+ * name of the reason; the summary above it carries the explanation.
+ */
+const SKIP_REASONS_BRIEF = {
+	empty_input: __( 'no value to read', 'catalogops' ),
+	negative_value: __( 'would be negative', 'catalogops' ),
+	sale_not_below_regular: __( 'not below regular', 'catalogops' ),
+	stock_managed: __( 'stock is managed', 'catalogops' ),
+};
+
+/**
+ * A short explanation for a skip-reason code, for use in a table cell.
+ *
+ * @param {string} code The stored reason code.
+ * @return {string} A few words, falling back to the full clause.
+ */
+function skipReasonBrief( code ) {
+	return SKIP_REASONS_BRIEF[ code ] || skipReasonLabel( code );
+}
+
+/**
  * A count-and-reason breakdown. This is the whole point of recording reasons: a
  * bare "432 skipped" tells nobody anything they can act on.
  *
@@ -1183,6 +1218,10 @@ function BulkEdit( {
 	const [ expression, setExpression ] = useState( '' );
 	const [ percent, setPercent ] = useState( '' );
 	const [ direction, setDirection ] = useState( 'increase' );
+	// Narrows the preview's worked-out sample to one product. It never touches the
+	// counts, which describe the whole edit — this answers "and what about that
+	// one", which a sample of ten cannot.
+	const [ previewSku, setPreviewSku ] = useState( '' );
 	const [ preview, setPreview ] = useState( null );
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
@@ -1235,6 +1274,7 @@ function BulkEdit( {
 		setExpression( '' );
 		setPercent( '' );
 		setDirection( 'increase' );
+		setPreviewSku( '' );
 		setPreview( null );
 		setError( '' );
 		setName( '' );
@@ -1320,7 +1360,11 @@ function BulkEdit( {
 	const runPreview = () => {
 		setBusyWith( 'preview' );
 		setError( '' );
-		setPreview( null );
+		setErrorFrom( '' );
+		// The previous answer stays on screen while the new one is fetched. The
+		// search that triggers this lives inside the panel, and unmounting it
+		// mid-search would take the field — and the caret — with it. The table is
+		// dimmed instead, the way the filter's results are.
 		// Drop any finished operation's result bar: the render gates the preview
 		// on `! operation`, so a stale bar from a previous run would otherwise
 		// hide the new preview and make Preview look like it did nothing.
@@ -1328,10 +1372,14 @@ function BulkEdit( {
 		apiFetch( {
 			path: '/catalogops/v1/operations/preview',
 			method: 'POST',
-			data: { filter, actions: buildActions() },
+			data: { filter, actions: buildActions(), sku: previewSku.trim() },
 		} )
 			.then( setPreview )
-			.catch( failed( 'preview' ) )
+			.catch( ( err ) => {
+				// A refused preview has no answer to leave standing.
+				setPreview( null );
+				failed( 'preview' )( err );
+			} )
 			.finally( () => setBusyWith( '' ) );
 	};
 
@@ -1460,6 +1508,24 @@ function BulkEdit( {
 			</div>
 		) : null;
 
+	const previewSample = ( preview && preview.sample ) || [];
+	const searching = previewSku.trim() !== '';
+
+	// Ten rows out of thousands is a sample, and saying so is the difference
+	// between an illustration and a false promise of completeness.
+	const sampleCaption = searching
+		? sprintf(
+				/* translators: %s: the SKU searched for. */
+				__( 'Matching “%s”:', 'catalogops' ),
+				previewSku.trim()
+		  )
+		: sprintf(
+				/* translators: 1: rows shown, 2: total that will change. */
+				__( 'Showing %1$d of %2$d that will change:', 'catalogops' ),
+				previewSample.length,
+				preview ? preview.applicable : 0
+		  );
+
 	// The preview's answer, rendered under the button that asked for it. It is
 	// dropped while an operation is on screen: the run supersedes the dry run.
 	const previewPanel = preview && ! operation && (
@@ -1533,6 +1599,119 @@ function BulkEdit( {
 					<p>{ warningText( warning.code, warning.count ) }</p>
 				</div>
 			) ) }
+
+			{ /* The counts are the promise; this is the promise shown. A formula
+			     or a percentage is invisible in a number — it only becomes
+			     checkable when someone can watch 10.00 turn into 13.86.
+
+			     The bar above it is the filter's results bar again: what is being
+			     shown on the left, the search that narrows it on the right. */ }
+			{ ( previewSample.length > 0 || searching ) && (
+				<div className="catalogops-results-bar">
+					<p className="catalogops-status">{ sampleCaption }</p>
+					<div className="catalogops-search">
+						<input
+							id="catalogops-preview-sku"
+							type="search"
+							placeholder={ __(
+								'SKU, e.g. COPS-1234',
+								'catalogops'
+							) }
+							aria-label={ __(
+								'Show one SKU in the preview',
+								'catalogops'
+							) }
+							value={ previewSku }
+							onChange={ ( e ) =>
+								setPreviewSku( e.target.value )
+							}
+							onKeyDown={ ( e ) =>
+								e.key === 'Enter' &&
+								ready &&
+								! busy &&
+								runPreview()
+							}
+						/>
+						<button
+							className="button"
+							onClick={ runPreview }
+							disabled={ busy || running || ! ready }
+						>
+							{ __( 'Search', 'catalogops' ) }
+						</button>
+					</div>
+				</div>
+			) }
+
+			{ previewSample.length > 0 && (
+				<>
+					<table
+						className={ `wp-list-table widefat fixed striped${
+							'preview' === busyWith
+								? ' catalogops-loading-dim'
+								: ''
+						}` }
+					>
+						<thead>
+							<tr>
+								<th>{ __( 'SKU', 'catalogops' ) }</th>
+								<th>{ __( 'Name', 'catalogops' ) }</th>
+								<th>{ __( 'Field', 'catalogops' ) }</th>
+								<th className="catalogops-num">
+									{ __( 'Now', 'catalogops' ) }
+								</th>
+								<th className="catalogops-num">
+									{ __( 'After', 'catalogops' ) }
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							{ previewSample.map( ( row ) =>
+								row.changes.map( ( change, index ) => (
+									<tr key={ `${ row.id }-${ change.field }` }>
+										<td>
+											{ index === 0 ? row.sku : '' }
+											{ index === 0 &&
+												! row.sku &&
+												row.id }
+										</td>
+										<td>{ index === 0 ? row.name : '' }</td>
+										<td>{ fieldLabel( change.field ) }</td>
+										<td className="catalogops-num">
+											{ change.old }
+										</td>
+										<td className="catalogops-num">
+											{ null === change.new ? (
+												<span className="catalogops-muted">
+													{ '— ' +
+														skipReasonBrief(
+															change.reason
+														) }
+												</span>
+											) : (
+												<strong>{ change.new }</strong>
+											) }
+										</td>
+									</tr>
+								) )
+							) }
+						</tbody>
+					</table>
+				</>
+			) }
+
+			{ previewSample.length === 0 && searching && (
+				<p className="catalogops-sample-caption">
+					{ sprintf(
+						/* translators: %s: the SKU searched for. */
+						__(
+							'Nothing matching “%s” is in this change.',
+							'catalogops'
+						),
+						previewSku.trim()
+					) }
+				</p>
+			) }
 		</div>
 	);
 
