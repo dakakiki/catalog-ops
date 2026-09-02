@@ -38,6 +38,14 @@ const CAPABILITIES =
 	( window.catalogopsConfig && window.catalogopsConfig.capabilities ) || {};
 
 /**
+ * The shop's currency symbol, for labelling an amount in the unit it is counted
+ * in. Empty when WooCommerce did not answer — the label then says "amount",
+ * which is vaguer but never wrong.
+ */
+const CURRENCY =
+	( window.catalogopsConfig && window.catalogopsConfig.currency ) || '';
+
+/**
  * Whether the current plan permits a capability. Unknown flags default to true
  * (fail open); only an explicit `false` from the server gates the control.
  *
@@ -203,18 +211,67 @@ const FIELD_NOUNS = {
  * is managed; WooCommerce derives it from the quantity on every save.
  *
  * @param {string} field         The selected field key.
- * @param {string} mode          'set' | 'percent' | 'formula'.
+ * @param {string} mode          'set' | 'amount' | 'percent' | 'formula'.
  * @param {string} expression    The formula being applied, for percent and formula
  *                               modes — the source of the fields it reads.
- * @param {Object} percentChange For percent mode, { direction, amount }: the
- *                               sentence names which way the price moves rather
- *                               than pointing at the control that says so.
+ * @param {Object} percentChange For the percent and amount modes,
+ *                               { direction, amount }: the sentence names which
+ *                               way the price moves rather than pointing at the
+ *                               control that says so.
  * @return {string} The hint sentence.
  */
 function changeHint( field, mode, expression = '', percentChange = null ) {
 	const noun = FIELD_NOUNS[ field ] || field;
 	let sentence;
-	if ( mode === 'percent' ) {
+	if ( mode === 'amount' ) {
+		const down =
+			'decrease' === ( percentChange && percentChange.direction );
+		const typed = percentChange ? percentChange.amount : '';
+		const named = '' !== typed && ! Number.isNaN( Number( typed ) );
+		const shown = CURRENCY
+			? CURRENCY + Math.abs( Number( typed ) )
+			: String( Math.abs( Number( typed ) ) );
+
+		if ( named && down ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: an amount of money, e.g. "€200". */
+				__(
+					'Lowers %1$s by %2$s, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( named ) {
+			sentence = sprintf(
+				/* translators: 1: the field being changed, e.g. "the regular price". 2: an amount of money, e.g. "€200". */
+				__(
+					'Raises %1$s by %2$s, for every matching product.',
+					'catalogops'
+				),
+				noun,
+				shown
+			);
+		} else if ( down ) {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Lowers %s by the amount above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		} else {
+			sentence = sprintf(
+				/* translators: %s: the field being changed, e.g. "the regular price". */
+				__(
+					'Raises %s by the amount above, for every matching product.',
+					'catalogops'
+				),
+				noun
+			);
+		}
+	} else if ( mode === 'percent' ) {
 		const down =
 			'decrease' === ( percentChange && percentChange.direction );
 		const amount = percentChange ? percentChange.amount : '';
@@ -1228,6 +1285,10 @@ function BulkEdit( {
 	const [ value, setValue ] = useState( '' );
 	const [ expression, setExpression ] = useState( '' );
 	const [ percent, setPercent ] = useState( '' );
+	// Its own state, not shared with the percentage: 10 percent and 10 in money
+	// are different quantities, and carrying one across the mode switch would
+	// silently propose a change nobody asked for.
+	const [ amount, setAmount ] = useState( '' );
 	const [ direction, setDirection ] = useState( 'increase' );
 	// Narrows the preview's worked-out sample to one product. It never touches the
 	// counts, which describe the whole edit — this answers "and what about that
@@ -1284,6 +1345,7 @@ function BulkEdit( {
 		setValue( '' );
 		setExpression( '' );
 		setPercent( '' );
+		setAmount( '' );
 		setDirection( 'increase' );
 		setPreviewSku( '' );
 		setPreview( null );
@@ -1312,6 +1374,13 @@ function BulkEdit( {
 					direction
 			  ) }, ${ MONEY_STEP } )`;
 
+	// The amount as the server takes it: a signed delta. The sign comes from the
+	// direction alone, as it does for the percentage — a typed minus under
+	// Decrease would otherwise negate the negation.
+	const amountReady = amount !== '' && ! Number.isNaN( Number( amount ) );
+	const signedAmount =
+		( 'decrease' === direction ? -1 : 1 ) * Math.abs( Number( amount ) );
+
 	const buildActions = () => {
 		if ( mode === 'formula' ) {
 			return [ { type: 'formula', field, expression } ];
@@ -1321,13 +1390,39 @@ function BulkEdit( {
 				{ type: 'formula', field, expression: percentExpression },
 			];
 		}
+		if ( mode === 'amount' ) {
+			// Its own action type, not a generated formula: see Actions\Adjust —
+			// the free tier can run this precisely because it is not a formula.
+			return [ { type: 'adjust', field, amount: signedAmount } ];
+		}
 		return [ { type: 'set', field, value } ];
 	};
+
+	// The figure the hint should name. A percentage the panel has already refused
+	// is not described as though it were about to run.
+	const hintAmount = ( () => {
+		if ( mode === 'amount' ) {
+			return amount;
+		}
+
+		return percentTooDeep ? '' : percent;
+	} )();
+
+	// What the hint should read as the source of the fields this change depends
+	// on. Amount has no expression, but it does read the field it writes — naming
+	// it here earns the same "products where that field is empty are left out"
+	// tail the formula modes get, and it is equally true.
+	const hintExpression =
+		( mode === 'percent' && percentExpression ) ||
+		( mode === 'amount' && fieldVariable( field ) ) ||
+		( mode === 'formula' && expression ) ||
+		'';
 
 	// Whether the current inputs form a runnable action.
 	const ready =
 		( mode === 'set' && value !== '' ) ||
 		( mode === 'formula' && expression.trim() !== '' ) ||
+		( mode === 'amount' && amountReady ) ||
 		( mode === 'percent' && percentExpression !== '' );
 
 	// Any edit to the change invalidates the last answer — the preview, and equally
@@ -1759,6 +1854,18 @@ function BulkEdit( {
 								>
 									{ __( 'Set to', 'catalogops' ) }
 								</button>
+								{ /* Between "Set to" and "Percent" because that is
+								     the order of difficulty: a fixed value, then a
+								     fixed step, then a proportion. */ }
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										mode === 'amount' ? ' is-active' : ''
+									}` }
+									onClick={ () => changeMode( 'amount' ) }
+								>
+									{ __( 'Amount', 'catalogops' ) }
+								</button>
 								<button
 									type="button"
 									className={ `catalogops-segmented__btn${
@@ -1895,7 +2002,7 @@ function BulkEdit( {
 								</div>
 							) }
 
-							{ mode === 'percent' && (
+							{ ( mode === 'percent' || mode === 'amount' ) && (
 								<div className="catalogops-field">
 									<span
 										className="catalogops-field-label"
@@ -1942,6 +2049,42 @@ function BulkEdit( {
 											{ __( 'Decrease', 'catalogops' ) }
 										</button>
 									</div>
+								</div>
+							) }
+
+							{ mode === 'amount' && (
+								<div className="catalogops-field">
+									<label htmlFor="catalogops-amount">
+										{ CURRENCY
+											? sprintf(
+													/* translators: %s: the shop's currency symbol. */
+													__(
+														'By (%s)',
+														'catalogops'
+													),
+													CURRENCY
+											  )
+											: __(
+													'By (amount)',
+													'catalogops'
+											  ) }
+									</label>
+									{ /* No ceiling, unlike the percentage: 200 off is
+									     fine at 500 and nonsense at 50, and which is
+									     which cannot be known without the product.
+									     The write guard catches those one at a time,
+									     and the preview shows them as skipped. */ }
+									<input
+										id="catalogops-amount"
+										type="number"
+										step="any"
+										min="0"
+										value={ amount }
+										onChange={ ( e ) => {
+											invalidate();
+											setAmount( e.target.value );
+										} }
+									/>
 								</div>
 							) }
 
@@ -2120,19 +2263,10 @@ function BulkEdit( {
 
 						<div className="catalogops-filter-row">
 							<p className="catalogops-field-hint">
-								{ changeHint(
-									field,
-									mode,
-									mode === 'percent'
-										? percentExpression
-										: expression,
-									{
-										direction,
-										// A rejected amount is not described as
-										// though it were about to run.
-										amount: percentTooDeep ? '' : percent,
-									}
-								) }
+								{ changeHint( field, mode, hintExpression, {
+									direction,
+									amount: hintAmount,
+								} ) }
 							</p>
 						</div>
 

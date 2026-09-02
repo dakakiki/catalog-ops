@@ -13,6 +13,8 @@
 
 namespace CatalogOps\Tests\Integration\Operations;
 
+use CatalogOps\Licensing\License;
+use CatalogOps\Operations\Actions\Adjust;
 use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Actions\Set_Value;
 use CatalogOps\Operations\Changes;
@@ -181,6 +183,47 @@ final class FormulaWriteTest extends Operations_Database_Case {
 		$this->drive( $op_id );
 
 		$this->assertSame( '45', wc_get_product( $product )->get_regular_price() );
+	}
+
+	public function test_an_amount_adjustment_runs_and_the_free_tier_may_use_it(): void {
+		$dear  = $this->make_product( 500, '10' );
+		$cheap = $this->make_product( 50, '10' );
+
+		// Built on a free licence on purpose. Adjust is its own action rather than
+		// a generated `price - 200` formula precisely so this is expressible: the
+		// gate is on the Formula class, and an expression the UI happened to write
+		// would be indistinguishable in the payload from any other.
+		global $wpdb;
+		$free = new Operation_Service(
+			new Query_Engine( $wpdb ),
+			$this->operations,
+			$this->changes,
+			new Field_Providers( new Core_Fields(), new Meta_Fields() ),
+			new Lock( $this->operations ),
+			$this->scheduler,
+			License::free()
+		);
+
+		$op_id = $free->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Adjust( 'regular_price', -200.0 ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$free->queue( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( '300', wc_get_product( $dear )->get_regular_price() );
+
+		// 50 less 200 is not a price. There is no ceiling to catch this up front —
+		// the same amount is sensible at 500 and nonsense at 50 — so the write
+		// guard takes it one object at a time.
+		$this->assertSame( '50', wc_get_product( $cheap )->get_regular_price() );
+		$this->assertSame(
+			'negative_value',
+			$this->skipped_row( $op_id, $cheap )->skip_reason
+		);
 	}
 
 	public function test_the_previews_sample_is_exactly_what_the_run_writes(): void {
