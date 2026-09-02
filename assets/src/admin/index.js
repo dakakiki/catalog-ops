@@ -104,6 +104,17 @@ const EDITABLE_FIELDS = [
 const MONEY_FIELDS = [ 'regular_price', 'sale_price' ];
 
 /**
+ * The smallest step a price should land on.
+ *
+ * A percentage is arithmetic, and arithmetic on money produces thirds of a
+ * penny: 10000.99 cut by 10% is 9000.891, and WooCommerce stores what it is
+ * given. Percent mode therefore rounds to the cent. Anyone wanting a different
+ * landing — prices ending in .99, say — writes it in Formula mode, where
+ * `roundto` is theirs to aim.
+ */
+const MONEY_STEP = '0.01';
+
+/**
  * The fields a formula or percentage change can target — prices only. Percentage
  * and formula edits don't make sense for stock quantity or status, so those are
  * "Set to" only; `stock` is still available as a formula variable to read.
@@ -1296,10 +1307,10 @@ function BulkEdit( {
 	const percentExpression =
 		percent === '' || Number.isNaN( Number( percent ) ) || percentTooDeep
 			? ''
-			: `${ fieldVariable( field ) } * ${ percentFactor(
+			: `roundto( ${ fieldVariable( field ) } * ${ percentFactor(
 					percent,
 					direction
-			  ) }`;
+			  ) }, ${ MONEY_STEP } )`;
 
 	const buildActions = () => {
 		if ( mode === 'formula' ) {
