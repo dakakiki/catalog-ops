@@ -1701,7 +1701,7 @@ function BulkEdit( {
 			) }
 
 			{ previewSample.length === 0 && searching && (
-				<p className="catalogops-sample-caption">
+				<p className="catalogops-table-caption">
 					{ sprintf(
 						/* translators: %s: the SKU searched for. */
 						__(
@@ -4492,6 +4492,25 @@ function App() {
 
 				{ ! loading && otherScope && (
 					<ScopeHint other={ otherScope } onSwitch={ setScope } />
+				) }
+
+				{ /* On a catalogue of thousands the table shows ten and the pager
+				     says "of 1859", which nobody is going to walk. Naming the
+				     window makes the table honest, and points at the control that
+				     answers a question about one product. */ }
+				{ ! loading && items.length > 0 && total > items.length && (
+					<p className="catalogops-table-caption">
+						{ sprintf(
+							/* translators: 1: first row shown, 2: last row shown, 3: total matches. */
+							__(
+								'Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one.',
+								'catalogops'
+							),
+							( page - 1 ) * PER_PAGE + 1,
+							( page - 1 ) * PER_PAGE + items.length,
+							total
+						) }
+					</p>
 				) }
 
 				<table

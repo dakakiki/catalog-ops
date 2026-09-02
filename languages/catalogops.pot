@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-02T07:54:48+00:00\n"
+"POT-Creation-Date: 2026-09-02T08:07:43+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: catalogops\n"
@@ -125,7 +125,7 @@ msgstr ""
 
 #: assets/src/admin/index.js:90
 #: assets/src/admin/index.js:120
-#: assets/src/admin/index.js:4514
+#: assets/src/admin/index.js:4533
 msgid "Sale price"
 msgstr ""
 
@@ -484,14 +484,14 @@ msgstr ""
 
 #: assets/src/admin/index.js:1657
 #: assets/src/admin/index.js:2626
-#: assets/src/admin/index.js:4506
+#: assets/src/admin/index.js:4525
 msgid "SKU"
 msgstr ""
 
 #: assets/src/admin/index.js:1658
 #: assets/src/admin/index.js:2279
 #: assets/src/admin/index.js:3834
-#: assets/src/admin/index.js:4505
+#: assets/src/admin/index.js:4524
 msgid "Name"
 msgstr ""
 
@@ -1160,7 +1160,7 @@ msgid "Values (any if empty)"
 msgstr ""
 
 #: assets/src/admin/index.js:4370
-#: assets/src/admin/index.js:4516
+#: assets/src/admin/index.js:4535
 msgid "Stock"
 msgstr ""
 
@@ -1204,22 +1204,28 @@ msgstr ""
 msgid "%d matching products"
 msgstr ""
 
-#: assets/src/admin/index.js:4504
+#. translators: 1: first row shown, 2: last row shown, 3: total matches.
+#: assets/src/admin/index.js:4505
+#, js-format
+msgid "Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one."
+msgstr ""
+
+#: assets/src/admin/index.js:4523
 msgid "ID"
 msgstr ""
 
-#: assets/src/admin/index.js:4508
+#: assets/src/admin/index.js:4527
 msgid "Cost"
 msgstr ""
 
-#: assets/src/admin/index.js:4511
+#: assets/src/admin/index.js:4530
 msgid "Price"
 msgstr ""
 
-#: assets/src/admin/index.js:4518
+#: assets/src/admin/index.js:4537
 msgid "Qty"
 msgstr ""
 
-#: assets/src/admin/index.js:4526
+#: assets/src/admin/index.js:4545
 msgid "No items match this filter."
 msgstr ""

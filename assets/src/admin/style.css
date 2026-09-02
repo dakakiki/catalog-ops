@@ -635,7 +635,7 @@ be more than a few rows however much is chosen.
 }
 
 /* Says what the table below is: a sample, not the set. */
-.catalogops-sample-caption {
+.catalogops-table-caption {
 	margin: 12px 0 6px;
 	color: var(--co-muted);
 	font-size: 12px;
@@ -1487,12 +1487,30 @@ tr.is-drift td {
 	min-height: var(--co-control-h);
 	box-sizing: border-box;
 	line-height: normal;
+	/* wp-admin gives its inputs a vertical margin, and a flex row centres the
+	   margin box — so without this the input sits two pixels below the button it
+	   is supposed to line up with. */
+	margin: 0;
 }
 
+/* The same shape the filter row and the search bar already use for their
+   buttons. `min-height` is the member that matters: wp-admin's own rule carries
+   min-height: 40px, which outranks any height set beside it, so a height alone
+   left this one 40px tall next to a 30px input. The flex centring is what keeps
+   the label centred against buttons.css's 38px line-height. */
 .catalogops .catalogops-retention .button {
 	height: var(--co-control-h);
+	min-height: var(--co-control-h);
 	box-sizing: border-box;
-	line-height: 1;
+	display: inline-flex;
+	align-items: center;
+	line-height: normal;
+	padding-top: 0;
+	padding-bottom: 0;
+	/* wp-admin hangs a 4px bottom margin off its buttons. A flex row centres the
+	   margin box, so the button and the input beside it end up two pixels out of
+	   line even though both are 30px tall. */
+	margin: 0;
 }
 
 .catalogops-saved {
