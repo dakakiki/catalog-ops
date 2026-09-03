@@ -28,6 +28,22 @@ import './style.css';
 const PER_PAGE = 10;
 
 /**
+ * How often the operation history re-asks the server while something is running.
+ */
+const HISTORY_POLL_ACTIVE_MS = 2000;
+
+/**
+ * How often it asks while nothing is running.
+ *
+ * This is the interval that decides how long a run started by something other
+ * than this browser tab — a schedule firing at 03:00, a colleague on another
+ * screen — stays invisible. Half a minute is soon enough to catch a run that
+ * takes minutes, and gentle enough that a page left open all day costs two
+ * requests a minute against a table that holds operations, not products.
+ */
+const HISTORY_POLL_IDLE_MS = 30000;
+
+/**
  * Plan capabilities for the current site, surfaced by the server via
  * wp_localize_script (see Admin_Page). Missing config fails open — everything
  * allowed — because the REST layer enforces the real limits and returns 402; the
@@ -3399,8 +3415,39 @@ function History( { refreshKey, onChanged } ) {
 	const [ perPage, setPerPage ] = useState( 10 );
 	const timer = useRef( null );
 
+	// The list re-asks the server on a cadence that follows the work: fast while
+	// something is moving, slow while nothing is — but never stopped.
+	//
+	// It used to schedule the next poll only when the response it had just received
+	// already contained a running operation, which made it self-sustaining but not
+	// self-starting. A tab left open while every operation was finished went
+	// dormant for good, so a run a schedule began at 03:00 was invisible until
+	// someone reloaded — exactly the unattended case schedules exist for. The slow
+	// cadence is what notices a run beginning; the fast one is what follows it.
+	//
+	// A hidden tab does not fetch at all, and coming back to it asks immediately,
+	// so returning shows the current state rather than the one it was left with.
 	useEffect( () => {
 		let cancelled = false;
+
+		const again = ( ms ) => {
+			if ( ! cancelled ) {
+				timer.current = setTimeout(
+					() => setTick( ( t ) => t + 1 ),
+					ms
+				);
+			}
+		};
+
+		if ( document.hidden ) {
+			again( HISTORY_POLL_IDLE_MS );
+
+			return () => {
+				cancelled = true;
+				clearTimeout( timer.current );
+			};
+		}
+
 		apiFetch( { path: `/catalogops/v1/operations?page=${ page }` } )
 			.then( ( res ) => {
 				if ( cancelled ) {
@@ -3409,23 +3456,42 @@ function History( { refreshKey, onChanged } ) {
 				setItems( res.items );
 				setTotal( res.total || res.items.length );
 				setPerPage( res.per_page || 10 );
-				// Keep polling while any operation is still moving, so a queued or
-				// running op — e.g. a schedule's "Run now" — visibly progresses to
-				// completion here without a manual refresh.
-				if ( res.items.some( ( op ) => ! isTerminal( op ) ) ) {
-					timer.current = setTimeout(
-						() => setTick( ( t ) => t + 1 ),
-						2000
-					);
-				}
+				setError( '' );
+				again(
+					res.items.some( ( op ) => ! isTerminal( op ) )
+						? HISTORY_POLL_ACTIVE_MS
+						: HISTORY_POLL_IDLE_MS
+				);
 			} )
-			.catch( ( err ) => ! cancelled && setError( err.message ) );
+			.catch( ( err ) => {
+				if ( cancelled ) {
+					return;
+				}
+				setError( err.message );
+				// A failed poll must not be the end of polling: one dropped request
+				// would otherwise freeze the list for the rest of the session, which
+				// is the failure this whole effect was rewritten to remove.
+				again( HISTORY_POLL_IDLE_MS );
+			} );
 
 		return () => {
 			cancelled = true;
 			clearTimeout( timer.current );
 		};
 	}, [ refreshKey, tick, page ] );
+
+	useEffect( () => {
+		const onVisibility = () => {
+			if ( ! document.hidden ) {
+				setTick( ( t ) => t + 1 );
+			}
+		};
+
+		document.addEventListener( 'visibilitychange', onVisibility );
+
+		return () =>
+			document.removeEventListener( 'visibilitychange', onVisibility );
+	}, [] );
 
 	return (
 		<div className="catalogops-history">
