@@ -1353,6 +1353,15 @@ is created — an unread instruction here means a change that silently never run
 	color: var(--co-muted);
 }
 
+/*
+The drift explanation sits under the two radios it explains, and wp-admin's own
+5px top margin on a notice reads as if the text belonged to the second option
+rather than to both. A little air separates the reading from the choosing.
+*/
+.catalogops-undo fieldset .notice {
+	margin-top: 14px;
+}
+
 tr.is-drift td {
 	background: #fcf5e6;
 }

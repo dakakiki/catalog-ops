@@ -2959,6 +2959,18 @@ function UndoPanel( { op, onDone } ) {
 					/>{ ' ' }
 					{ __( 'Force — overwrite anyway', 'catalogops' ) }
 				</label>
+				{ /* Drift is the one word here that means nothing until someone
+				     explains it, and the choice above decides whether a later edit
+				     survives — so the explanation is on the panel rather than
+				     behind a tooltip, naming what each option does to it. */ }
+				<div className="notice notice-info">
+					<p>
+						{ __(
+							'“Drift” means the item changed after this operation ran — by hand, an import, or another plugin: Skip leaves those items exactly as they are now, while Force restores the value from before the operation and discards the later change.',
+							'catalogops'
+						) }
+					</p>
+				</div>
 			</fieldset>
 
 			{ error && (
