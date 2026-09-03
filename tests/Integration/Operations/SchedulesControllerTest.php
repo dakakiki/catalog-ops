@@ -145,6 +145,48 @@ final class SchedulesControllerTest extends Operations_Database_Case {
 		$this->assertSame( array_reverse( $ids ), $paged );
 	}
 
+	/**
+	 * Pins the flag the admin app warns on before resuming.
+	 *
+	 * Pausing hides a schedule from the supervisor but does not move `next_run` —
+	 * nothing writes that column except creating a schedule and recording a run —
+	 * so one paused past its time is due the instant it resumes and fires on the
+	 * next tick. The client cannot work that out for itself without parsing a GMT
+	 * datetime and guessing at time zones, so the comparison is made here.
+	 */
+	public function test_a_schedule_past_its_time_is_reported_as_overdue(): void {
+		$overdue = $this->schedules->create(
+			'QC Overdue',
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Recurrence::DAILY,
+			gmdate( 'Y-m-d H:i:s', time() - HOUR_IN_SECONDS ),
+			'',
+			get_current_user_id()
+		);
+
+		$upcoming = $this->schedules->create(
+			'QC Upcoming',
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Recurrence::DAILY,
+			gmdate( 'Y-m-d H:i:s', time() + DAY_IN_SECONDS ),
+			'',
+			get_current_user_id()
+		);
+
+		$items = $this->controller_for( License::unlimited() )
+			->index( new WP_REST_Request( 'GET', '/catalogops/v1/schedules' ) )
+			->get_data()['items'];
+
+		$by_id = array_column( $items, null, 'id' );
+
+		$this->assertTrue( $by_id[ $overdue ]['is_overdue'] );
+		$this->assertFalse( $by_id[ $upcoming ]['is_overdue'] );
+	}
+
 	public function test_start_time_is_read_as_the_sites_own_clock(): void {
 		// The Start control submits wall-clock time with no timezone: "22:00" means
 		// 22:00 by the shop's clock. WordPress runs PHP in UTC, so reading it there

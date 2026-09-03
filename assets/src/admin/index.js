@@ -3958,10 +3958,19 @@ function SchedulerSetup( { lead = false } ) {
  * @param {Function} props.onDelete Deletes the row.
  */
 function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
-	const [ confirming, setConfirming ] = useState( false );
+	// 'delete' | 'resume' | null — two questions worth asking before acting, and
+	// only one of them can be open at a time.
+	const [ confirming, setConfirming ] = useState( null );
 
 	const done = schedule.status === 'completed';
 	const name = schedule.name || `#${ schedule.id }`;
+
+	// Pausing hides a schedule from the supervisor but does not stop its clock, and
+	// resuming does not reset it: a schedule paused past its due time is due again
+	// the moment it comes back, so Resume is a delayed Run now. Worth a question
+	// first — but only when it is actually true, or the warning becomes noise on
+	// every schedule that was paused early and is nowhere near its time.
+	const resumesIntoARun = schedule.is_overdue;
 
 	return (
 		<>
@@ -4016,7 +4025,16 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 								icon="update"
 								variant="accent"
 								label={ __( 'Resume', 'catalogops' ) }
-								onClick={ () => onAct( schedule.id, 'resume' ) }
+								onClick={ () =>
+									resumesIntoARun
+										? setConfirming(
+												confirming === 'resume'
+													? null
+													: 'resume'
+										  )
+										: onAct( schedule.id, 'resume' )
+								}
+								isActive={ confirming === 'resume' }
 								disabled={ busy }
 							/>
 						) }
@@ -4024,14 +4042,73 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 							icon="trash"
 							variant="danger"
 							label={ __( 'Delete schedule', 'catalogops' ) }
-							onClick={ () => setConfirming( ! confirming ) }
-							isActive={ confirming }
+							onClick={ () =>
+								setConfirming(
+									confirming === 'delete' ? null : 'delete'
+								)
+							}
+							isActive={ confirming === 'delete' }
 							disabled={ busy }
 						/>
 					</div>
 				</td>
 			</tr>
-			{ confirming && (
+			{ confirming === 'resume' && (
+				<tr className="catalogops-detail">
+					<td colSpan="6">
+						<div className="catalogops-confirm">
+							<p className="catalogops-confirm__lead">
+								{ sprintf(
+									/* translators: %s: schedule name. */
+									__(
+										'Resume “%s” — it will run shortly.',
+										'catalogops'
+									),
+									name
+								) }
+							</p>
+							<p>
+								{ sprintf(
+									/* translators: 1: the schedule's due time, 2: minutes between supervisor runs. */
+									__(
+										'Its next run was due at %1$s, which has passed — pausing hid it, but did not move it. Resuming makes it due again, so it will run within about %2$d minutes.',
+										'catalogops'
+									),
+									schedule.next_run_local ||
+										schedule.next_run,
+									CRON.supervisorMinutes || 5
+								) }
+							</p>
+							<p>
+								{ __(
+									'It runs once, not once for every run it missed, and then goes back to its normal times.',
+									'catalogops'
+								) }
+							</p>
+							<div className="catalogops-confirm__actions">
+								<button
+									className="button button-primary"
+									onClick={ () => {
+										setConfirming( null );
+										onAct( schedule.id, 'resume' );
+									} }
+									disabled={ busy }
+								>
+									{ __( 'Resume it', 'catalogops' ) }
+								</button>
+								<button
+									className="button"
+									onClick={ () => setConfirming( null ) }
+									disabled={ busy }
+								>
+									{ __( 'Leave it paused', 'catalogops' ) }
+								</button>
+							</div>
+						</div>
+					</td>
+				</tr>
+			) }
+			{ confirming === 'delete' && (
 				<tr className="catalogops-detail">
 					<td colSpan="6">
 						<div className="catalogops-confirm">
@@ -4055,7 +4132,7 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 								<button
 									className="button catalogops-button--danger"
 									onClick={ () => {
-										setConfirming( false );
+										setConfirming( null );
 										onDelete( schedule.id );
 									} }
 									disabled={ busy }
@@ -4064,7 +4141,7 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 								</button>
 								<button
 									className="button"
-									onClick={ () => setConfirming( false ) }
+									onClick={ () => setConfirming( null ) }
 									disabled={ busy }
 								>
 									{ __( 'Cancel', 'catalogops' ) }

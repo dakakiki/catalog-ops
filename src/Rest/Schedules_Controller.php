@@ -357,6 +357,14 @@ final class Schedules_Controller {
 			// admin table shows, so a shop owner reads their own clock.
 			'next_run'       => $schedule->next_run,
 			'next_run_local' => $this->to_local( $schedule->next_run ),
+			// Resuming does not move next_run — nothing in the plugin writes that
+			// column except creating a schedule and recording a run — so a schedule
+			// paused past its time becomes due the instant it is resumed and fires
+			// on the next supervisor tick. The admin app warns before that happens,
+			// and the comparison belongs here: both sides are GMT MySQL datetimes,
+			// which sort as strings, and the client would have to guess at parsing
+			// and time zones to work it out for itself.
+			'is_overdue'     => $schedule->next_run <= current_time( 'mysql', true ),
 			'last_run'       => $schedule->last_run,
 			'last_run_local' => $this->to_local( $schedule->last_run ),
 			'last_op_id'     => $schedule->last_op_id,
