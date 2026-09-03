@@ -29,6 +29,7 @@ use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
+use InvalidArgumentException;
 use WC_Product_Simple;
 
 /**
@@ -184,6 +185,43 @@ final class UndoTest extends Operations_Database_Case {
 
 		$this->assertSame( '9.99', wc_get_product( $a )->get_regular_price() );
 		$this->assertSame( Operation_Status::REVERTED, $this->operations->find( $undo_id )->status );
+	}
+
+	/**
+	 * An operation that has already been given back cannot be given back again.
+	 *
+	 * Nothing stopped it before: the guard only asked whether the operation was
+	 * still running. Undoing a reverted operation reads every object as drift —
+	 * its current value is the one the undo restored, not the one the operation
+	 * wrote — so the safe policy skips all of them, and what the user gets for a
+	 * full pass over the target list, with the write lock held, is an empty
+	 * operation in the history. The route to putting the change back is undoing
+	 * the undo, which {@see test_undo_of_undo_re_applies_the_operation} covers.
+	 */
+	public function test_cannot_undo_an_operation_that_is_already_reverted(): void {
+		$this->make_product( 20 );
+
+		$op_id   = $this->run_price_change( '9.99' );
+		$undo_id = $this->service->undo( $op_id, Conflict_Policy::SKIP, 1 );
+
+		$this->service->queue( $undo_id );
+		$this->drive( $undo_id );
+
+		$this->assertSame( Operation_Status::REVERTED, $this->operations->find( $op_id )->status );
+
+		$before = $this->operations->count_all();
+
+		try {
+			$this->service->undo( $op_id, Conflict_Policy::SKIP, 1 );
+			$this->fail( 'Expected undoing an already-reverted operation to be refused.' );
+		} catch ( InvalidArgumentException $e ) {
+			$this->assertStringContainsString( 'already been undone', $e->getMessage() );
+		}
+
+		$after = $this->operations->count_all();
+
+		// Refused before anything was recorded: no empty operation left behind.
+		$this->assertSame( $before, $after );
 	}
 
 	public function test_preview_undo_reports_total_and_flags_drift_in_the_sample(): void {

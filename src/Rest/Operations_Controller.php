@@ -16,6 +16,7 @@ use CatalogOps\Operations\Operation_Blocked;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
+use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Operations;
 use CatalogOps\Licensing\License;
 use CatalogOps\Licensing\License_Limited;
@@ -714,7 +715,13 @@ final class Operations_Controller {
 	 * @param Operation $operation The operation.
 	 */
 	private function can_undo( Operation $operation ): bool {
-		return $this->license->can_undo() && ! $operation->status->is_active() && $operation->processed > 0;
+		return $this->license->can_undo()
+			&& ! $operation->status->is_active()
+			// Already given back: an undo here would find every object drifted, skip
+			// them all under the safe policy, and record an operation that did
+			// nothing. The way to put the change back is to undo the undo.
+			&& Operation_Status::REVERTED !== $operation->status
+			&& $operation->processed > 0;
 	}
 
 	/**

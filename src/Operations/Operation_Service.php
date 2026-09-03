@@ -355,7 +355,7 @@ final class Operation_Service {
 	 * @param int             $user_id      Owner user id.
 	 * @return int The new undo operation id.
 	 *
-	 * @throws InvalidArgumentException When the parent is missing or still active.
+	 * @throws InvalidArgumentException When the parent is missing, still active, or already reverted.
 	 * @throws License_Limited          When undo is used without a paid plan.
 	 */
 	public function undo( int $parent_op_id, Conflict_Policy $policy, int $user_id ): int {
@@ -371,6 +371,17 @@ final class Operation_Service {
 
 		if ( $parent->status->is_active() ) {
 			throw new InvalidArgumentException( 'A running operation cannot be undone; stop it first.' );
+		}
+
+		// An operation that has already been reverted has nothing left to give back.
+		// Every object would read as drift — its current value is the one the undo
+		// restored, not the one this operation wrote — so the safe policy would skip
+		// all of them and the forcing one would rewrite values that are already
+		// there. Either way it is a full pass over the target list, holding the write
+		// lock, to leave an empty operation in the history. Putting the change back
+		// is undoing the undo, which is its own operation and is offered.
+		if ( Operation_Status::REVERTED === $parent->status ) {
+			throw new InvalidArgumentException( 'This operation has already been undone. To put its change back, undo the undo instead.' );
 		}
 
 		return $this->operations->create(
