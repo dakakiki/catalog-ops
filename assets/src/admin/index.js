@@ -33,15 +33,31 @@ const PER_PAGE = 10;
 const HISTORY_POLL_ACTIVE_MS = 2000;
 
 /**
- * How often it asks while nothing is running.
+ * How often it asks while nothing is running and nothing is due.
  *
  * This is the interval that decides how long a run started by something other
- * than this browser tab — a schedule firing at 03:00, a colleague on another
- * screen — stays invisible. Half a minute is soon enough to catch a run that
- * takes minutes, and gentle enough that a page left open all day costs two
- * requests a minute against a table that holds operations, not products.
+ * than this browser tab stays invisible, and it has to be shorter than the runs
+ * themselves or it reports history rather than progress: measured on the
+ * 18,583-product catalogue, a 250-product schedule finished in 28 seconds and a
+ * 12-product one in a single second. A first attempt at half a minute could
+ * miss both from beginning to end, so the row appeared already completed and
+ * nothing was ever seen to happen.
+ *
+ * Eight seconds catches anything that runs for longer than a moment, and the
+ * expensive window — a schedule about to fire — does not rely on this at all;
+ * see POLL_DUE_MS.
  */
-const HISTORY_POLL_IDLE_MS = 30000;
+const HISTORY_POLL_IDLE_MS = 8000;
+
+/**
+ * How often both lists ask while a schedule is due to fire.
+ *
+ * A due schedule is the one moment when a new row is about to appear without
+ * anyone in the browser having asked for it, and it is knowable in advance:
+ * the schedules list carries next_run. So the page speeds up before the run
+ * starts rather than discovering it afterwards.
+ */
+const POLL_DUE_MS = 2000;
 
 /**
  * Plan capabilities for the current site, surfaced by the server via
@@ -3403,8 +3419,11 @@ function OperationRow( { op, onChanged } ) {
  * @param {Object}   props            Component props.
  * @param {number}   props.refreshKey Bumping this reloads the list.
  * @param {Function} props.onChanged  Called when an undo finishes.
+ * @param {boolean}  props.firingSoon Whether a schedule is due, so a row is
+ *                                    about to appear here without anyone in
+ *                                    the browser having asked for it.
  */
-function History( { refreshKey, onChanged } ) {
+function History( { refreshKey, onChanged, firingSoon = false } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ tick, setTick ] = useState( 0 );
@@ -3457,8 +3476,12 @@ function History( { refreshKey, onChanged } ) {
 				setTotal( res.total || res.items.length );
 				setPerPage( res.per_page || 10 );
 				setError( '' );
+				// Fast while something is moving, and equally fast while a
+				// schedule is due — that is the window in which a row is about to
+				// appear here, and this list has no other way to know it is coming.
+				const moving = res.items.some( ( op ) => ! isTerminal( op ) );
 				again(
-					res.items.some( ( op ) => ! isTerminal( op ) )
+					moving || firingSoon
 						? HISTORY_POLL_ACTIVE_MS
 						: HISTORY_POLL_IDLE_MS
 				);
@@ -3478,7 +3501,9 @@ function History( { refreshKey, onChanged } ) {
 			cancelled = true;
 			clearTimeout( timer.current );
 		};
-	}, [ refreshKey, tick, page ] );
+		// firingSoon belongs here: when a schedule becomes due the pending slow
+		// timer has to be replaced by a fast one, not waited out.
+	}, [ refreshKey, tick, page, firingSoon ] );
 
 	useEffect( () => {
 		const onVisibility = () => {
@@ -4155,11 +4180,13 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 	);
 }
 
-function Schedules( { refreshKey, onRan } ) {
+function Schedules( { refreshKey, onRan, onFiringSoon } ) {
 	const canSchedule = can( 'canSchedule' );
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ localKey, setLocalKey ] = useState( 0 );
+	const [ tick, setTick ] = useState( 0 );
+	const timer = useRef( null );
 	// The schedule row a request is in flight for, so its buttons show a spinner
 	// and disable rather than leaving the user unsure anything happened.
 	const [ busyId, setBusyId ] = useState( null );
@@ -4168,15 +4195,81 @@ function Schedules( { refreshKey, onRan } ) {
 	const [ total, setTotal ] = useState( 0 );
 	const [ perPage, setPerPage ] = useState( 10 );
 
+	// This list had no timer at all, so a schedule that fired went on reading
+	// "Active", with an empty Last run and a Next run that had already passed,
+	// until someone reloaded the page — while the operation it had spawned was
+	// finishing in the history below. It polls on the same terms as the history
+	// now: quick while a schedule is due, unhurried otherwise, nothing at all
+	// while the tab is hidden.
 	useEffect( () => {
+		let cancelled = false;
+
+		const again = ( ms ) => {
+			if ( ! cancelled ) {
+				timer.current = setTimeout(
+					() => setTick( ( t ) => t + 1 ),
+					ms
+				);
+			}
+		};
+
+		if ( document.hidden ) {
+			again( HISTORY_POLL_IDLE_MS );
+
+			return () => {
+				cancelled = true;
+				clearTimeout( timer.current );
+			};
+		}
+
 		apiFetch( { path: `/catalogops/v1/schedules?page=${ page }` } )
 			.then( ( res ) => {
+				if ( cancelled ) {
+					return;
+				}
 				setItems( res.items );
 				setTotal( res.total || res.items.length );
 				setPerPage( res.per_page || 10 );
+
+				// Due and still active means it is about to fire, or is firing
+				// right now. The history list cannot see this and needs telling,
+				// because that is when its own new row is coming.
+				const due = res.items.some(
+					( s ) => 'active' === s.status && s.is_overdue
+				);
+
+				if ( onFiringSoon ) {
+					onFiringSoon( due );
+				}
+
+				again( due ? POLL_DUE_MS : HISTORY_POLL_IDLE_MS );
 			} )
-			.catch( ( err ) => setError( err.message ) );
-	}, [ refreshKey, localKey, page ] );
+			.catch( ( err ) => {
+				if ( cancelled ) {
+					return;
+				}
+				setError( err.message );
+				again( HISTORY_POLL_IDLE_MS );
+			} );
+
+		return () => {
+			cancelled = true;
+			clearTimeout( timer.current );
+		};
+	}, [ refreshKey, localKey, page, tick, onFiringSoon ] );
+
+	useEffect( () => {
+		const onVisibility = () => {
+			if ( ! document.hidden ) {
+				setTick( ( t ) => t + 1 );
+			}
+		};
+
+		document.addEventListener( 'visibilitychange', onVisibility );
+
+		return () =>
+			document.removeEventListener( 'visibilitychange', onVisibility );
+	}, [] );
 
 	const reload = () => setLocalKey( ( k ) => k + 1 );
 
@@ -4433,6 +4526,11 @@ function App() {
 	const [ attributes, setAttributes ] = useState( [] );
 	// Bumped whenever a schedule is created or acted on, to reload the list.
 	const [ schedulesKey, setSchedulesKey ] = useState( 0 );
+	// Raised by the schedules list when one of its rows is due, and read by the
+	// history list, which has no way of knowing a run is about to appear in it.
+	// Passing the setter itself keeps the reference stable, so it can sit in the
+	// schedules effect's dependencies without re-running it on every render.
+	const [ firingSoon, setFiringSoon ] = useState( false );
 	// Whether the filter, table, and bulk edit target parent products or their
 	// variations (CONTEXT §4).
 	const [ scope, setScope ] = useState( 'product' );
@@ -5094,9 +5192,17 @@ function App() {
 				retentionDays={ onboarding ? onboarding.retention_days : 30 }
 			/>
 
-			<Schedules refreshKey={ schedulesKey } onRan={ refreshAll } />
+			<Schedules
+				refreshKey={ schedulesKey }
+				onRan={ refreshAll }
+				onFiringSoon={ setFiringSoon }
+			/>
 
-			<History refreshKey={ historyKey } onChanged={ refreshAll } />
+			<History
+				refreshKey={ historyKey }
+				onChanged={ refreshAll }
+				firingSoon={ firingSoon }
+			/>
 
 			<RetentionSetting />
 		</div>
