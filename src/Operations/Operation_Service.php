@@ -373,15 +373,27 @@ final class Operation_Service {
 			throw new InvalidArgumentException( 'A running operation cannot be undone; stop it first.' );
 		}
 
+		// Undo is one-way, and it ends there (a product decision, 2026-09-03). Two
+		// shapes of the same rule:
+		//
 		// An operation that has already been reverted has nothing left to give back.
 		// Every object would read as drift — its current value is the one the undo
 		// restored, not the one this operation wrote — so the safe policy would skip
 		// all of them and the forcing one would rewrite values that are already
-		// there. Either way it is a full pass over the target list, holding the write
-		// lock, to leave an empty operation in the history. Putting the change back
-		// is undoing the undo, which is its own operation and is offered.
+		// there: a full pass over the target list, holding the write lock, to leave
+		// an empty operation in the history.
+		//
+		// And an undo is not itself undoable. Reverting a revert would put the
+		// original change back, which turns undo into a toggle someone can ride
+		// indefinitely, and leaves the operation it reverted reading `reverted` while
+		// its change is in force again — a status that has no second move. Once a run
+		// has been given back, what remains is to look at what it did or delete it.
 		if ( Operation_Status::REVERTED === $parent->status ) {
-			throw new InvalidArgumentException( 'This operation has already been undone. To put its change back, undo the undo instead.' );
+			throw new InvalidArgumentException( 'This operation has already been undone.' );
+		}
+
+		if ( $parent->is_undo() ) {
+			throw new InvalidArgumentException( 'An undo cannot itself be undone.' );
 		}
 
 		return $this->operations->create(

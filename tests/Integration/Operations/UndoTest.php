@@ -168,7 +168,17 @@ final class UndoTest extends Operations_Database_Case {
 		$this->assertSame( 0, $this->changes->counts( $undo_id )['skipped'] );
 	}
 
-	public function test_undo_of_undo_re_applies_the_operation(): void {
+	/**
+	 * Undo is one-way and it ends there.
+	 *
+	 * This used to be a redo: undoing the undo reverted its own deltas and put the
+	 * original change back. It is refused now, deliberately — undo that can be
+	 * ridden in both directions is a toggle, not a safety net, and the round trip
+	 * left the first operation reading `reverted` while its change was in force
+	 * again, a status with no second move. Once a run has been given back, what is
+	 * left is to look at what it did or delete it.
+	 */
+	public function test_an_undo_cannot_itself_be_undone(): void {
 		$a = $this->make_product( 20 );
 
 		$op_id = $this->run_price_change( '9.99' );
@@ -178,13 +188,18 @@ final class UndoTest extends Operations_Database_Case {
 		$this->drive( $undo_id );
 		$this->assertSame( '20', wc_get_product( $a )->get_regular_price() );
 
-		// Undo the undo: reverts the undo's own deltas, re-applying 9.99.
-		$redo_id = $this->service->undo( $undo_id, Conflict_Policy::SKIP, 1 );
-		$this->service->queue( $redo_id );
-		$this->drive( $redo_id );
+		$before = $this->operations->count_all();
 
-		$this->assertSame( '9.99', wc_get_product( $a )->get_regular_price() );
-		$this->assertSame( Operation_Status::REVERTED, $this->operations->find( $undo_id )->status );
+		try {
+			$this->service->undo( $undo_id, Conflict_Policy::SKIP, 1 );
+			$this->fail( 'Expected undoing an undo to be refused.' );
+		} catch ( InvalidArgumentException $e ) {
+			$this->assertStringContainsString( 'cannot itself be undone', $e->getMessage() );
+		}
+
+		// The price stays where the undo left it, and nothing was recorded.
+		$this->assertSame( '20', wc_get_product( $a )->get_regular_price() );
+		$this->assertSame( $before, $this->operations->count_all() );
 	}
 
 	/**

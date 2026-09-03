@@ -21,8 +21,10 @@ use WC_Product;
  *
  * Drift is compared tolerantly ({@see Values::equal()}) so `"19.90"` and `19.9`
  * are not a false conflict. The staged write records the current value as the
- * undo's own old_value and the reverted value as its new_value, which is what
- * makes an undo itself undoable.
+ * undo's own old_value and the reverted value as its new_value — not so the undo
+ * can be undone, which is refused ({@see \CatalogOps\Operations\Operation_Service::undo()}),
+ * but so the audit view can show what the undo itself wrote, the same as for any
+ * other operation.
  */
 final class Revert_Plan implements Chunk_Plan {
 

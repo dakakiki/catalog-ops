@@ -717,10 +717,12 @@ final class Operations_Controller {
 	private function can_undo( Operation $operation ): bool {
 		return $this->license->can_undo()
 			&& ! $operation->status->is_active()
-			// Already given back: an undo here would find every object drifted, skip
-			// them all under the safe policy, and record an operation that did
-			// nothing. The way to put the change back is to undo the undo.
+			// Undo is one-way and it ends there. A reverted operation has already
+			// been given back, and an undo is not itself undoable — otherwise undo
+			// becomes a toggle to ride back and forth. What is left on both is to
+			// look at what they did, or delete them.
 			&& Operation_Status::REVERTED !== $operation->status
+			&& ! $operation->is_undo()
 			&& $operation->processed > 0;
 	}
 
