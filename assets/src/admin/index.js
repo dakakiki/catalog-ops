@@ -3140,6 +3140,26 @@ function OperationRow( { op, onChanged } ) {
 			.finally( () => setBusy( false ) );
 	};
 
+	// The route has existed since M2 and nothing called it: the history offered a
+	// disabled Delete whose tooltip told you to cancel the run first, and there was
+	// nowhere to do that. Undo is refused while an operation is active, so without
+	// this the only way to stop a run that is writing the wrong thing was to wait
+	// for it to finish.
+	const confirmCancel = () => {
+		setBusy( true );
+		setError( '' );
+		apiFetch( {
+			path: `/catalogops/v1/operations/${ op.id }/cancel`,
+			method: 'POST',
+		} )
+			.then( () => {
+				setOpen( null );
+				onChanged();
+			} )
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusy( false ) );
+	};
+
 	return (
 		<>
 			<tr>
@@ -3193,6 +3213,15 @@ function OperationRow( { op, onChanged } ) {
 								isActive={ open === 'undo' }
 							/>
 						) }
+						{ stillRunning && (
+							<IconButton
+								icon="controls-pause"
+								variant="pause"
+								label={ __( 'Stop this run', 'catalogops' ) }
+								onClick={ () => toggle( 'cancel' ) }
+								isActive={ open === 'cancel' }
+							/>
+						) }
 						<IconButton
 							icon="trash"
 							variant="danger"
@@ -3201,7 +3230,7 @@ function OperationRow( { op, onChanged } ) {
 							label={
 								stillRunning
 									? __(
-											'Cancel the run before deleting it',
+											'Stop the run before deleting it',
 											'catalogops'
 									  )
 									: __( 'Delete from history', 'catalogops' )
@@ -3217,6 +3246,64 @@ function OperationRow( { op, onChanged } ) {
 				<tr className="catalogops-detail">
 					<td colSpan="6">
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
+						{ open === 'cancel' && (
+							<div className="catalogops-confirm">
+								<p className="catalogops-confirm__lead">
+									{ sprintf(
+										/* translators: %d: operation id. */
+										__(
+											'Stop operation #%d?',
+											'catalogops'
+										),
+										op.id
+									) }
+								</p>
+								<p>
+									{ sprintf(
+										/* translators: 1: objects already written, 2: objects targeted. */
+										__(
+											'It stops at the end of the chunk it is writing now. The %1$d of %2$d items already changed stay changed — stopping is not the same as undoing — but once it has stopped you can undo it from this row.',
+											'catalogops'
+										),
+										op.processed,
+										op.target_count
+									) }
+								</p>
+								{ error && (
+									<div className="notice notice-error">
+										<p>{ error }</p>
+									</div>
+								) }
+								<div className="catalogops-confirm__actions">
+									<button
+										className="button"
+										onClick={ confirmCancel }
+										disabled={ busy }
+									>
+										{ __( 'Stop the run', 'catalogops' ) }
+									</button>
+									<button
+										className="button"
+										onClick={ () => setOpen( null ) }
+										disabled={ busy }
+									>
+										{ __( 'Keep running', 'catalogops' ) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Stopping…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+							</div>
+						) }
 						{ open === 'undo' && (
 							<UndoPanel
 								op={ op }

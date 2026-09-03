@@ -370,7 +370,7 @@ final class Operation_Service {
 		}
 
 		if ( $parent->status->is_active() ) {
-			throw new InvalidArgumentException( 'A running operation cannot be undone; cancel it first.' );
+			throw new InvalidArgumentException( 'A running operation cannot be undone; stop it first.' );
 		}
 
 		return $this->operations->create(
@@ -632,7 +632,7 @@ final class Operation_Service {
 		}
 
 		if ( $operation->status->is_active() ) {
-			throw new Operation_Blocked( 'A running operation cannot be deleted; cancel it first.' );
+			throw new Operation_Blocked( 'A running operation cannot be deleted; stop it first.' );
 		}
 
 		// The deltas first: an operations row with no changes is a harmless stub,
