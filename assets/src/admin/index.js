@@ -3437,6 +3437,21 @@ function OperationRow( { op, onChanged } ) {
 	// nowhere to do that. Undo is refused while an operation is active, so without
 	// this the only way to stop a run that is writing the wrong thing was to wait
 	// for it to finish.
+	const confirmResume = () => {
+		setBusy( true );
+		setError( '' );
+		apiFetch( {
+			path: `/catalogops/v1/operations/${ op.id }/resume`,
+			method: 'POST',
+		} )
+			.then( () => {
+				setOpen( null );
+				onChanged();
+			} )
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusy( false ) );
+	};
+
 	const confirmCancel = () => {
 		setBusy( true );
 		setError( '' );
@@ -3514,6 +3529,19 @@ function OperationRow( { op, onChanged } ) {
 								isActive={ open === 'cancel' }
 							/>
 						) }
+						{ /* Only when there is frozen work left and nothing is
+						     writing it — a run the watchdog failed after a restart,
+						     or one that was stopped. Green: it is the one that
+						     runs. */ }
+						{ op.can_resume && (
+							<IconButton
+								icon="controls-play"
+								variant="run"
+								label={ __( 'Resume this run', 'catalogops' ) }
+								onClick={ () => toggle( 'resume' ) }
+								isActive={ open === 'resume' }
+							/>
+						) }
 						<IconButton
 							icon="trash"
 							variant="danger"
@@ -3538,6 +3566,60 @@ function OperationRow( { op, onChanged } ) {
 				<tr className="catalogops-detail">
 					<td colSpan="6">
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
+						{ open === 'resume' && (
+							<div className="catalogops-confirm">
+								<p className="catalogops-confirm__lead">
+									{ sprintf(
+										/* translators: 1: operation id, 2: items still waiting. */
+										__(
+											'Resume operation #%1$d — %2$d items still waiting?',
+											'catalogops'
+										),
+										op.id,
+										op.pending
+									) }
+								</p>
+								<p>
+									{ __(
+										'It carries on down the list this run froze when it started, so it changes exactly what was approved then. Running the filter again instead would resolve it against the catalog as it is now, which may no longer be the same set of products.',
+										'catalogops'
+									) }
+								</p>
+								{ error && (
+									<div className="notice notice-error">
+										<p>{ error }</p>
+									</div>
+								) }
+								<div className="catalogops-confirm__actions">
+									<button
+										className="button catalogops-button--go"
+										onClick={ confirmResume }
+										disabled={ busy }
+									>
+										{ __( 'Resume', 'catalogops' ) }
+									</button>
+									<button
+										className="button"
+										onClick={ () => setOpen( null ) }
+										disabled={ busy }
+									>
+										{ __( 'Leave it', 'catalogops' ) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Starting…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+							</div>
+						) }
 						{ open === 'cancel' && (
 							<div className="catalogops-confirm">
 								<p className="catalogops-confirm__lead">

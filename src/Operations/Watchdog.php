@@ -16,8 +16,17 @@ namespace CatalogOps\Operations;
  * lock so the catalog is writable again.
  *
  * It deliberately does not touch the changes rows: those stay exactly as the run
- * left them (applied ones applied, the rest pending), which is what makes a
- * failed operation resumable — a later chunk simply picks up the pending rows.
+ * left them, applied ones applied and the rest pending, which is what makes a
+ * failed operation resumable.
+ *
+ * Resuming is an explicit act, not something a later chunk drifts into. `failed`
+ * is terminal ({@see Operation_Status::is_terminal()}) and
+ * {@see Chunk_Runner::run()} turns away at the door for any status that is not
+ * active, so a stray queued chunk cannot restart a run behind the user's back.
+ * {@see Operation_Service::resume()} is the way back, and it matters that it
+ * exists: without it the user is left with a part-changed catalogue and only two
+ * poor moves — undo the fraction that landed, or run the whole filter again
+ * against a catalogue that has since moved on.
  */
 final class Watchdog {
 

@@ -183,6 +183,16 @@ final class Operations_Controller {
 			)
 		);
 
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/operations/(?P<id>\d+)/resume',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'resume' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
+
 		$policy_arg = array(
 			'conflict_policy' => array(
 				'type'    => 'string',
@@ -389,10 +399,19 @@ final class Operations_Controller {
 	 */
 	public function index( WP_REST_Request $request ): WP_REST_Response {
 		$slice = Paging::slice( $request, self::HISTORY_PER_PAGE );
+		$rows  = $this->operations->recent( $slice['per_page'], $slice['offset'] );
+
+		// One grouped count for the page rather than one per row: this list polls
+		// every two seconds while anything is running, and each row needs to know
+		// whether it has work left before it can offer Resume.
+		$pending = $this->changes->pending_counts( array_column( $rows, 'id' ) );
 
 		$operations = array_map(
-			array( $this, 'to_array' ),
-			$this->operations->recent( $slice['per_page'], $slice['offset'] )
+			fn( Operation $operation ): array => $this->to_array(
+				$operation,
+				$pending[ $operation->id ] ?? 0
+			),
+			$rows
 		);
 
 		return new WP_REST_Response(
@@ -445,6 +464,32 @@ final class Operations_Controller {
 		}
 
 		$this->service->cancel( $id );
+
+		return new WP_REST_Response( $this->to_array( $this->operations->find( $id ) ) );
+	}
+
+	/**
+	 * Put a stopped or failed operation back to work on the targets it froze.
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function resume( WP_REST_Request $request ) {
+		$id = (int) $request->get_param( 'id' );
+
+		if ( null === $this->operations->find( $id ) ) {
+			return $this->error( 'catalogops_not_found', 'Operation not found.', 404 );
+		}
+
+		try {
+			$this->service->resume( $id );
+		} catch ( Operation_Blocked $e ) {
+			// Someone else is writing. Not the caller's mistake and not a permanent
+			// state, so 409 rather than 400 — the same answer queueing gives.
+			return $this->error( 'catalogops_locked', $e->getMessage(), 409 );
+		} catch ( InvalidArgumentException $e ) {
+			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
+		}
 
 		return new WP_REST_Response( $this->to_array( $this->operations->find( $id ) ) );
 	}
@@ -660,9 +705,15 @@ final class Operations_Controller {
 	 * Shape an operation for a JSON response.
 	 *
 	 * @param Operation $operation The operation.
+	 * @param int|null  $pending   Rows still waiting, when the caller has already
+	 *                             counted them for a whole page; null to count here.
 	 * @return array<string, mixed>
 	 */
-	private function to_array( Operation $operation ): array {
+	private function to_array( Operation $operation, ?int $pending = null ): array {
+		// Costs a query when the caller has not already counted; the history list
+		// counts a whole page in one and passes the answer in, because it polls.
+		$pending = null === $pending ? $this->changes->pending_count( $operation->id ) : $pending;
+
 		return array(
 			'id'              => $operation->id,
 			'status'          => $operation->status->value,
@@ -677,6 +728,12 @@ final class Operations_Controller {
 			'failed'          => $operation->failed,
 			'percent'         => $operation->percent(),
 			'can_undo'        => $this->can_undo( $operation ),
+			// Work still frozen and waiting, and nothing writing it: an operation the
+			// watchdog failed after a restart, or one the user stopped. Resuming
+			// continues the list that was approved; running the filter again would
+			// resolve a different one.
+			'can_resume'      => ! $operation->status->is_active() && $pending > 0,
+			'pending'         => $pending,
 			'created_at'      => $operation->created_at,
 			'completed_at'    => $operation->completed_at,
 		);

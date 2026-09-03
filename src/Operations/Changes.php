@@ -312,6 +312,60 @@ final class Changes {
 	 *
 	 * @param int $operation_id Operation id.
 	 */
+	/**
+	 * Pending row counts for several operations at once, keyed by operation id.
+	 *
+	 * The history list has to know, per row, whether an operation has work left —
+	 * that is what decides whether Resume is offered. Asking once per row would put
+	 * ten counts behind every poll of a list that polls every two seconds while
+	 * anything is running; one grouped query costs the same as one of them.
+	 * Operations with nothing pending are absent from the result rather than
+	 * present as zero, so callers should default.
+	 *
+	 * @param int[] $operation_ids Operation ids.
+	 * @return array<int, int> Operation id => pending rows.
+	 */
+	public function pending_counts( array $operation_ids ): array {
+		$ids = array_values( array_unique( array_filter( array_map( 'intval', $operation_ids ) ) ) );
+
+		if ( array() === $ids ) {
+			return array();
+		}
+
+		$table        = $this->schema->changes_table();
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+
+		// The placeholders are generated to match $ids exactly, so the static checks
+		// cannot see them in the literal — the same false positive count_page()
+		// already suppresses.
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT operation_id, COUNT(*) AS pending
+				FROM {$table}
+				WHERE operation_id IN ( {$placeholders} ) AND status = 0
+				GROUP BY operation_id",
+				...$ids
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$counts = array();
+
+		foreach ( $rows as $row ) {
+			$counts[ (int) $row['operation_id'] ] = (int) $row['pending'];
+		}
+
+		return $counts;
+	}
+
+	/**
+	 * How many rows an operation still has waiting — what is left to write, and
+	 * therefore whether it has anything to resume.
+	 *
+	 * @param int $operation_id Operation id.
+	 */
 	public function pending_count( int $operation_id ): int {
 		$table = $this->schema->changes_table();
 

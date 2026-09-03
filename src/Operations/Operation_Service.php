@@ -733,6 +733,77 @@ final class Operation_Service {
 	}
 
 	/**
+	 * Put a half-finished operation back to work on the targets it already froze.
+	 *
+	 * An operation stops in the middle for reasons that have nothing to do with
+	 * what it was asked to do: the host restarts, a fatal lands in some other
+	 * plugin, the queue's loopback chain breaks. {@see Watchdog} then marks it
+	 * `failed` after ten minutes of silence and frees the lock, and the user is
+	 * left with a catalogue that is part-changed and two poor moves — undo the
+	 * fraction that landed, or run the whole thing again.
+	 *
+	 * Running it again is not the same thing, which is the point of this method.
+	 * A fresh run resolves the filter anew, against a catalogue that has moved on;
+	 * resuming continues down the list that was frozen when the user pressed Apply
+	 * and agreed to a number. For an overnight run over eighteen thousand products
+	 * those are two different sets, and only one of them is what was approved.
+	 *
+	 * Nothing is re-frozen and nothing is re-counted: the pending rows are still
+	 * there, in order, and this only re-acquires the lock and hands the queue the
+	 * next chunk. {@see Operation_Status::is_terminal()} already describes `failed`
+	 * as a state no chunk leaves "without an explicit new action (resume, undo)" —
+	 * this is that action.
+	 *
+	 * @param int $op_id Operation id.
+	 *
+	 * @throws InvalidArgumentException When the operation is missing, still active,
+	 *                                  or has nothing left to do.
+	 * @throws Operation_Blocked        When another operation holds the write lock.
+	 */
+	public function resume( int $op_id ): void {
+		$operation = $this->operations->find( $op_id );
+
+		if ( null === $operation ) {
+			throw new InvalidArgumentException( 'Operation not found.' );
+		}
+
+		if ( $operation->status->is_active() ) {
+			throw new InvalidArgumentException( 'This operation is already running.' );
+		}
+
+		if ( 0 === $this->changes->pending_count( $op_id ) ) {
+			// Either it finished, or every remaining row was skipped. Nothing is
+			// owed, and re-queueing would put a run on the screen that immediately
+			// settles having done nothing.
+			throw new InvalidArgumentException( 'This operation has nothing left to do.' );
+		}
+
+		if ( ! $this->lock->acquire( $op_id ) ) {
+			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
+		}
+
+		$handed_off = false;
+
+		try {
+			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
+			// A fresh heartbeat, or the watchdog would find a ten-minute-old stamp
+			// on a run that has only just restarted and fail it a second time.
+			$this->operations->touch( $op_id );
+
+			$batch = $operation->batch_size > 0 ? $operation->batch_size : self::DEFAULT_BATCH;
+
+			$this->scheduler->enqueue_chunk( $op_id, $batch );
+			$this->scheduler->kick();
+
+			$handed_off = true;
+		} finally {
+			if ( ! $handed_off ) {
+				$this->lock->release( $op_id );
+			}
+		}
+	}
+
+	/**
 	 * Cancel a running or queued operation: stop scheduling, pause it, and free
 	 * the lock. Already-applied changes remain (undo is a separate M3 operation).
 	 *

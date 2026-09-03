@@ -17,6 +17,7 @@ use CatalogOps\Operations\Changes;
 use CatalogOps\Operations\Conflict_Policy;
 use CatalogOps\Operations\Chunk_Runner;
 use CatalogOps\Operations\Lock;
+use CatalogOps\Operations\Operation_Blocked;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
@@ -362,6 +363,102 @@ final class UndoTest extends Operations_Database_Case {
 	 * @param string $price New price.
 	 * @return int Operation id.
 	 */
+	/**
+	 * A run the watchdog failed part-way finishes the list it froze, not a new one.
+	 *
+	 * This is the hole resume fills. An operation stops for reasons unrelated to
+	 * what it was asked to do — the host restarts, the queue's chain breaks — and
+	 * the watchdog marks it `failed` after ten minutes so the write lock is not
+	 * wedged. Before this the user's only moves were undoing the fraction that
+	 * landed or running the whole filter again, and running it again resolves the
+	 * filter against a catalogue that has since moved on. Resuming carries on down
+	 * the frozen list, which is the set that was approved.
+	 */
+	public function test_a_failed_operation_resumes_the_targets_it_froze(): void {
+		$a = $this->make_product( 20 );
+		$b = $this->make_product( 30 );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array( new Set_Value( 'regular_price', '7.77' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+
+		// One object through, then the run dies and the watchdog fails it.
+		$this->runner->run( $op_id, 1 );
+		$this->operations->set_status( $op_id, Operation_Status::FAILED );
+
+		$partial = $this->operations->find( $op_id );
+		$this->assertSame( Operation_Status::FAILED, $partial->status );
+		$this->assertSame( 1, $this->changes->pending_count( $op_id ) );
+
+		// A product added after the freeze must NOT be swept in — that is exactly
+		// the difference between resuming and running the filter again.
+		$late = $this->make_product( 40 );
+
+		$this->service->resume( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( 0, $this->changes->pending_count( $op_id ) );
+		$this->assertSame( '7.77', wc_get_product( $a )->get_regular_price() );
+		$this->assertSame( '7.77', wc_get_product( $b )->get_regular_price() );
+		$this->assertSame( '40', wc_get_product( $late )->get_regular_price() );
+	}
+
+	public function test_resuming_is_refused_while_another_operation_holds_the_lock(): void {
+		$this->make_product( 20 );
+
+		$stalled = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array( new Set_Value( 'regular_price', '7.77' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $stalled );
+		$this->operations->set_status( $stalled, Operation_Status::FAILED );
+
+		// Someone else starts writing in the meantime.
+		$other = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array( new Set_Value( 'regular_price', '5.55' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $other );
+
+		try {
+			$this->service->resume( $stalled );
+			$this->fail( 'Expected resuming to be refused while another operation writes.' );
+		} catch ( Operation_Blocked $e ) {
+			$this->assertStringContainsString( 'already writing', $e->getMessage() );
+		}
+
+		// Refused without disturbing either side: the stalled run keeps its state,
+		// and the live one keeps the lock it holds.
+		$this->assertSame( Operation_Status::FAILED, $this->operations->find( $stalled )->status );
+		$this->assertTrue( $this->operations->find( $other )->status->is_active() );
+	}
+
+	public function test_resuming_an_operation_with_nothing_left_is_refused(): void {
+		$this->make_product( 20 );
+
+		$op_id = $this->run_price_change( '9.99' );
+
+		$this->assertSame( 0, $this->changes->pending_count( $op_id ) );
+
+		try {
+			$this->service->resume( $op_id );
+			$this->fail( 'Expected resuming a finished operation to be refused.' );
+		} catch ( InvalidArgumentException $e ) {
+			$this->assertStringContainsString( 'nothing left to do', $e->getMessage() );
+		}
+	}
+
 	private function run_price_change( string $price ): int {
 		$op_id = $this->service->create(
 			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
