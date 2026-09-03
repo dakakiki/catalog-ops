@@ -80,6 +80,41 @@ final class WatchdogTest extends Operations_Database_Case {
 	 * @param Operation_Status $status Target status.
 	 * @return int Operation id.
 	 */
+	/**
+	 * The queue pause is shortened only while one of our operations is writing.
+	 *
+	 * Action Scheduler sleeps five seconds between chained queue runs, and on the
+	 * 18.5k catalogue that pause plus a WordPress bootstrap was about 43% of an
+	 * operation's wall clock — six seconds of waiting for every eight of writing.
+	 * The pause exists to keep a long background queue from hammering a shared
+	 * host, so it is shortened only for the burst we are responsible for: with
+	 * nothing of ours running, WooCommerce's own queue work must see the value it
+	 * would have seen with this plugin absent.
+	 */
+	public function test_the_queue_pause_is_only_shortened_while_we_are_writing(): void {
+		$this->assertSame(
+			5,
+			apply_filters( 'action_scheduler_async_request_sleep_seconds', 5 ),
+			'With no operation active the value must pass through untouched.'
+		);
+
+		$op_id = $this->make_running_operation();
+
+		$this->assertLessThan(
+			5,
+			apply_filters( 'action_scheduler_async_request_sleep_seconds', 5 ),
+			'While an operation is writing the pause must be shorter.'
+		);
+
+		$this->operations->set_status( $op_id, Operation_Status::COMPLETED );
+
+		$this->assertSame(
+			5,
+			apply_filters( 'action_scheduler_async_request_sleep_seconds', 5 ),
+			'Once it finishes the value must pass through untouched again.'
+		);
+	}
+
 	private function make_running_operation( Operation_Status $status = Operation_Status::RUNNING ): int {
 		$op_id = $this->operations->create(
 			new Filter(),

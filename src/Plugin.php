@@ -526,6 +526,42 @@ final class Plugin {
 			}
 		);
 
+		/*
+		 * Shorten the pause between queue runs while one of our operations is
+		 * writing.
+		 *
+		 * Action Scheduler sleeps five seconds between chained queue runs, and on
+		 * the 18.5k catalogue that is most of the gap between chunks: measured on a
+		 * 1,855-product run, each chunk spent about eight seconds writing and about
+		 * six seconds waiting, so roughly 43% of the wall clock was this pause plus
+		 * a WordPress bootstrap. Five seconds exists to stop chained loopbacks
+		 * hammering a shared host, which is a real concern for a queue that might
+		 * run for hours — but a bulk edit the user is watching is a burst, not a
+		 * background trickle, and it holds the write lock while it waits.
+		 *
+		 * So the sleep is only shortened while a CatalogOps operation is actually
+		 * active. Any other queue work on the site — WooCommerce's own, another
+		 * plugin's — sees the value untouched, because this returns $seconds
+		 * unchanged the moment we have nothing running. A host that wants the full
+		 * pause back can filter `catalogops_queue_sleep_seconds` to 5.
+		 */
+		add_filter(
+			'action_scheduler_async_request_sleep_seconds',
+			function ( $seconds ) {
+				if ( null === $this->container->get( Operations::class )->active_excluding( 0 ) ) {
+					return $seconds;
+				}
+
+				/**
+				 * Filters the seconds Action Scheduler waits between queue runs
+				 * while a CatalogOps operation is writing.
+				 *
+				 * @param int $seconds Pause between chained queue runs.
+				 */
+				return apply_filters( 'catalogops_queue_sleep_seconds', 1 );
+			}
+		);
+
 		// Schedule the recurring watchdog, retention purge, and schedule
 		// supervisor once Action Scheduler is ready.
 		add_action(
