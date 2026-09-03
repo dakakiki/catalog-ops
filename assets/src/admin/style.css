@@ -1221,12 +1221,16 @@ Scoped under .catalogops for the same reason as the danger button — wp-admin's
 	color: #fff;
 }
 
+/*
+Carries wp-admin's own `notice notice-*` classes, so it reads exactly like the
+preview panel above the form rather than as loose text under a field. Only the
+row layout is overridden: `.catalogops-filter-row` lays its children out in a
+flex row, which would put the summary, the reason list and the caveat side by
+side. Paragraph rhythm is left to `.notice p` on purpose — the point is that the
+two blocks look the same.
+*/
 .catalogops-schedule-preview {
 	display: block;
-}
-
-.catalogops-schedule-preview p {
-	margin: 0 0 4px;
 }
 
 /* --- Scheduler setup --------------------------------------------------- */

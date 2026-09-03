@@ -71,6 +71,76 @@ final class QueryControllerTest extends WP_UnitTestCase {
 		$this->assertSame( array( 'QC Clearance' ), $data['items'][0]['tags'] );
 	}
 
+	public function test_rows_carry_the_category_the_filter_opens_with(): void {
+		// Category is the filter's first control and the one most people reach for,
+		// and it was the one column the results did not show — the same "filter on
+		// what you cannot see" gap brand and tags were added to close. Both
+		// taxonomies come back from one statement, so this also pins that reading
+		// them together did not lose either.
+		$id       = $this->make_product( 40 );
+		$category = wp_insert_term( 'QC Seasonal Wear', 'product_cat' );
+		$tag      = wp_insert_term( 'QC Markdown', 'product_tag' );
+
+		wp_set_object_terms( $id, array( (int) $category['term_id'] ), 'product_cat' );
+		wp_set_object_terms( $id, array( (int) $tag['term_id'] ), 'product_tag' );
+
+		$item = $this->dispatch( array() )['items'][0];
+
+		$this->assertContains( 'QC Seasonal Wear', $item['categories'] );
+		$this->assertSame( array( 'QC Markdown' ), $item['tags'] );
+		// The two must not bleed into each other: a category is not a tag.
+		$this->assertNotContains( 'QC Markdown', $item['categories'] );
+		$this->assertNotContains( 'QC Seasonal Wear', $item['tags'] );
+	}
+
+	public function test_a_term_name_with_an_ampersand_reads_as_written(): void {
+		// WordPress stores term names entity-encoded, and this table reads wp_terms
+		// straight through $wpdb, so nothing decodes them on the way out. React then
+		// renders the value as text and escapes it again, so the row showed
+		// "Home &amp; Kitchen" while the filter's own dropdown — which decodes —
+		// said "Home & Kitchen" for the very same term.
+		global $wpdb;
+
+		$id       = $this->make_product( 40 );
+		$category = wp_insert_term( 'QC Home and Kitchen', 'product_cat' );
+		$term_id  = (int) $category['term_id'];
+
+		// Written as the encoded form the real catalogue holds, rather than trusting
+		// wp_insert_term to encode it, so the test pins the decode and not WordPress.
+		$wpdb->update( $wpdb->terms, array( 'name' => 'QC Home &amp; Kitchen' ), array( 'term_id' => $term_id ), array( '%s' ), array( '%d' ) );
+		clean_term_cache( $term_id, 'product_cat' );
+
+		wp_set_object_terms( $id, array( $term_id ), 'product_cat' );
+
+		$item = $this->dispatch( array() )['items'][0];
+
+		$this->assertContains( 'QC Home & Kitchen', $item['categories'] );
+		$this->assertNotContains( 'QC Home &amp; Kitchen', $item['categories'] );
+	}
+
+	public function test_a_variation_shows_its_parents_categories_and_tags(): void {
+		// A variation carries no terms of its own; it inherits the parent's, which
+		// is also how the filter matches them — for categories exactly as for tags.
+		list( $parent, $variations ) = $this->make_variable_product();
+		$category                    = wp_insert_term( 'QC Parent Cat', 'product_cat' );
+
+		wp_set_object_terms( $parent, array( (int) $category['term_id'] ), 'product_cat' );
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params( array( 'scope' => 'variation', 'filter' => array() ) );
+
+		$response = rest_do_request( $request );
+		$this->assertSame( 200, $response->get_status() );
+
+		$rows = $response->get_data()['items'];
+		$this->assertNotEmpty( $rows );
+		$this->assertContains( $variations['Large'], array_column( $rows, 'id' ) );
+
+		foreach ( $rows as $row ) {
+			$this->assertContains( 'QC Parent Cat', $row['categories'] );
+		}
+	}
+
 	public function test_a_variation_shows_its_parents_tags(): void {
 		// A variation carries no terms of its own; it inherits the parent's, which
 		// is also how the filter matches them.

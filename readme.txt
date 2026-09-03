@@ -84,7 +84,10 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 * Fixed: a schedule that cannot be built no longer stops every other schedule on the site. It pauses itself, records why, and the rest of the tick continues. Previously the failure repeated on every tick and every later schedule was skipped indefinitely — reachable without any bad filter, for example when a licence lapses on a schedule that uses a formula.
 * Fixed: "Run now" on a schedule whose template is no longer valid answers cleanly instead of a critical error.
 * Fixed: an unrecognized filter operator answers with an error naming it, instead of a critical error.
+* Added: the results table shows categories, alongside the brand and tags added in 0.7.1. Category is the filter's first control and was the one thing you could filter by but not see.
+* Fixed: a category or tag whose name contains an ampersand reads as written in the results table. It showed as "Home &amp;amp; Kitchen" while the filter's own dropdown, for the same term, said "Home &amp; Kitchen".
 * Added: `catalogops_schedule_paused` action, fired with the schedule id and the error when the supervisor pauses a schedule itself.
+* The schedule form's summary reads as a notice like the preview above it, and turns amber when a schedule would match products but change none of them — worth knowing before it is saved rather than after it fires.
 
 = 0.7.1 =
 * The results table leads with the SKU and shows brand and tags — both filterable, and until now invisible in the results.

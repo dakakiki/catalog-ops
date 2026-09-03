@@ -1568,6 +1568,18 @@ function BulkEdit( {
 	const omittedBy = ( preview && preview.omitted_by ) || [];
 	const previewWarnings = ( preview && preview.warnings ) || [];
 
+	// The schedule form's own summary is the last thing read before creating
+	// something that will run unattended, so it is a notice like the preview
+	// panel's rather than a loose paragraph of numbers under a form. Green only
+	// when something would actually change: a schedule that would write nothing
+	// is the case worth catching before it is saved, not after it has fired.
+	let schedulePreviewTone = 'notice-info';
+
+	if ( preview ) {
+		schedulePreviewTone =
+			preview.applicable > 0 ? 'notice-success' : 'notice-warning';
+	}
+
 	/**
 	 * How many items were omitted under one reason code.
 	 *
@@ -2512,7 +2524,9 @@ function BulkEdit( {
 									</div>
 								</div>
 
-								<div className="catalogops-filter-row catalogops-schedule-preview">
+								<div
+									className={ `catalogops-filter-row catalogops-schedule-preview notice ${ schedulePreviewTone }` }
+								>
 									{ preview ? (
 										<>
 											<p>
@@ -4711,11 +4725,14 @@ function App() {
 						<tr>
 							{ /* SKU leads, as it does in the preview and the audit
 							     log: it is how a product is named out loud. The id
-							     is addressing, not information. Brand and tags earn
-							     their columns by being filterable — filtering on
-							     something the results do not show is a guess. */ }
+							     is addressing, not information. Category, brand and
+							     tags earn their columns by being filterable —
+							     filtering on something the results do not show is a
+							     guess — and they run in the order the filter's own
+							     controls do. */ }
 							<th>{ __( 'SKU', 'catalogops' ) }</th>
 							<th>{ __( 'Name', 'catalogops' ) }</th>
+							<th>{ __( 'Categories', 'catalogops' ) }</th>
 							<th>{ __( 'Brand', 'catalogops' ) }</th>
 							<th>{ __( 'Tags', 'catalogops' ) }</th>
 							<th className="catalogops-num">
@@ -4736,7 +4753,7 @@ function App() {
 					<tbody>
 						{ items.length === 0 && ! loading ? (
 							<tr>
-								<td colSpan="9">
+								<td colSpan="10">
 									{ __(
 										'No items match this filter.',
 										'catalogops'
@@ -4748,6 +4765,16 @@ function App() {
 								<tr key={ item.id }>
 									<td>{ item.sku }</td>
 									<td>{ item.name }</td>
+									<td>
+										{ item.categories &&
+										item.categories.length > 0 ? (
+											item.categories.join( ', ' )
+										) : (
+											<span className="catalogops-muted">
+												—
+											</span>
+										) }
+									</td>
 									<td>
 										{ item.brand || (
 											<span className="catalogops-muted">
