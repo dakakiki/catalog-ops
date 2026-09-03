@@ -210,6 +210,58 @@ final class VariationQueryTest extends WP_UnitTestCase {
 		$this->assertEqualsCanonicalizing( array_values( $variations ), $all, 'and every variation lacks it' );
 	}
 
+	/**
+	 * "Not equal to" excludes on the variation-attribute path too.
+	 *
+	 * This builder kept its own list of which operators were negative — `NOT_IN`
+	 * and `NOT_EXISTS` — and, like the taxonomy one, forgot `NOT_EQUALS`. Asked to
+	 * leave out the Large variations it returned exactly those, on both branches:
+	 * the live one here, and the vanished-term sentinel below. The rule is shared
+	 * now ({@see \CatalogOps\Query\Operator::is_negative()}).
+	 */
+	public function test_not_equals_on_a_variation_attribute_excludes_that_size(): void {
+		list( , $variations ) = $this->make_variable_product(
+			array(
+				'Small' => 10,
+				'Large' => 20,
+			)
+		);
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::NOT_EQUALS, $this->large ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertNotContains( $variations['Large'], $ids, 'The excluded size came back.' );
+		$this->assertContains( $variations['Small'], $ids );
+	}
+
+	public function test_not_equals_on_a_deleted_variation_term_matches_everything(): void {
+		list( , $variations ) = $this->make_variable_product(
+			array(
+				'Small' => 10,
+				'Large' => 20,
+			)
+		);
+
+		$deleted = $this->large;
+		wp_delete_term( $deleted, $this->size_tax );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::NOT_EQUALS, $deleted ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		// Nothing can carry a term that is gone, so excluding it excludes nobody.
+		$this->assertEqualsCanonicalizing( array_values( $variations ), $ids );
+	}
+
 	public function test_variation_meta_filters_on_the_variations_own_meta(): void {
 		list( , $variations ) = $this->make_variable_product( array( 'Small' => 10, 'Medium' => 50 ) );
 

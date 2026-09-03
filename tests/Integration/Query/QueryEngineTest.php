@@ -267,6 +267,71 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertSame( array(), $ids );
 	}
 
+	/**
+	 * "Not equal to" excludes, on every path that can be asked it.
+	 *
+	 * It used to include. `taxonomy_clause()` and `variation_attribute_clause()`
+	 * each kept their own list of which operators were negative, both listed
+	 * `NOT_IN` and `NOT_EXISTS`, and neither remembered `NOT_EQUALS` — so it fell
+	 * through to the *positive* membership branch and `category != 5` returned
+	 * exactly the products it had been asked to leave out. An exclusion that
+	 * inverts is the worst shape a filter bug can take: the count looks
+	 * reasonable, the preview agrees with the run, and the edit lands on precisely
+	 * the wrong products. `meta_clause()` kept a third copy of the same rule and
+	 * happened to get it right, which is why nobody noticed.
+	 *
+	 * The rule lives in {@see Operator::is_negative()} now, so these three paths
+	 * cannot disagree again.
+	 */
+	public function test_not_equals_excludes_rather_than_includes(): void {
+		$inside  = $this->make_product( array( 'category' => $this->cat_a ) );
+		$outside = $this->make_product( array( 'category' => $this->cat_b ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::NOT_EQUALS, $this->cat_a ) ) )
+		);
+
+		$this->assertNotContains( $inside, $ids, 'The excluded category came back.' );
+		$this->assertContains( $outside, $ids );
+
+		// Its positive twin still means what it says, so the pair is symmetric.
+		$positive = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::EQUALS, $this->cat_a ) ) )
+		);
+
+		$this->assertContains( $inside, $positive );
+		$this->assertNotContains( $outside, $positive );
+	}
+
+	public function test_not_equals_on_a_meta_key_keeps_objects_without_it(): void {
+		// The path that was already right, pinned so the shared rule cannot break
+		// it: an exclusion has to keep the objects that carry no such value at all.
+		// They are, definitively, not that brand.
+		$acme      = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$globex    = $this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
+		$unbranded = $this->make_product( array() );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'meta:_brand', Operator::NOT_EQUALS, 'Acme' ) ) )
+		);
+
+		$this->assertNotContains( $acme, $ids );
+		$this->assertContains( $globex, $ids );
+		$this->assertContains( $unbranded, $ids );
+	}
+
+	public function test_not_equals_on_a_term_that_does_not_exist_matches_everything(): void {
+		// The sentinel branch had the same split rule: excluding a term nothing can
+		// carry excludes nobody, and asking it with != used to answer "nothing".
+		$product = $this->make_product( array( 'category' => $this->cat_a ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::NOT_EQUALS, 99999999 ) ) )
+		);
+
+		$this->assertContains( $product, $ids );
+	}
+
 	public function test_not_in_a_term_that_does_not_exist_matches_everything(): void {
 		// The mirror of the above: nothing can carry a term that is not there, so
 		// excluding it excludes nobody.

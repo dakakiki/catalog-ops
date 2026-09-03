@@ -470,9 +470,7 @@ final class Query_Engine {
 		if ( array() === $tt_ids ) {
 			// Nothing in the catalogue can carry a term that does not exist. "Has
 			// one of these" matches nothing; "has none of these" matches everything.
-			$negative = Operator::NOT_IN === $operator || Operator::NOT_EXISTS === $operator;
-
-			return array( $negative ? '1 = 1' : '1 = 0', array() );
+			return array( $operator->is_negative() ? '1 = 1' : '1 = 0', array() );
 		}
 
 		$relationships = $this->wpdb->term_relationships;
@@ -482,7 +480,7 @@ final class Query_Engine {
 		// Exclusion stays an anti-join in the WHERE: that is the right shape for it,
 		// it is free of NOT IN's NULL pitfalls, and it does not have the plan
 		// problem positive membership does.
-		if ( Operator::NOT_IN === $operator || Operator::NOT_EXISTS === $operator ) {
+		if ( $operator->is_negative() ) {
 			$fragment = "NOT EXISTS (
 				SELECT 1 FROM {$relationships} tr
 				WHERE tr.object_id = {$object_column} AND tr.term_taxonomy_id IN ( {$placeholders} )
@@ -601,12 +599,12 @@ final class Query_Engine {
 			// matches nothing; "has none of these" matches everything. This is the
 			// answer the product scope has always given ({@see taxonomy_clause()});
 			// dropping the clause here made the same filter match every variation.
-			return array( Operator::NOT_IN === $operator ? '1 = 1' : '1 = 0', array() );
+			return array( $operator->is_negative() ? '1 = 1' : '1 = 0', array() );
 		}
 
 		$placeholders = implode( ', ', array_fill( 0, count( $slugs ), '%s' ) );
 
-		if ( Operator::NOT_IN === $operator ) {
+		if ( $operator->is_negative() ) {
 			$fragment = "NOT EXISTS (
 				SELECT 1 FROM {$postmeta} pm
 				WHERE pm.post_id = l.product_id AND pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
@@ -687,15 +685,6 @@ final class Query_Engine {
 		$postmeta = $this->wpdb->postmeta;
 		$operator = $condition->operator;
 
-		// A negative operator is asked as its positive twin, and negated by the
-		// keyword outside the subquery.
-		$positive = match ( $operator ) {
-			Operator::NOT_IN     => Operator::IN,
-			Operator::NOT_EQUALS => Operator::EQUALS,
-			Operator::NOT_EXISTS => Operator::EXISTS,
-			default              => null,
-		};
-
 		if ( ( Operator::IN === $operator || Operator::NOT_IN === $operator )
 			&& array() === array_values( (array) $condition->value ) ) {
 			// An empty list is not a question: asked positively it would decay into
@@ -703,9 +692,12 @@ final class Query_Engine {
 			return array( '', array() );
 		}
 
-		list( $value_test, $value_args ) = $this->meta_value_test( $positive ?? $operator, $condition );
+		// A negative operator is asked as its positive twin and negated by the
+		// keyword outside the subquery — see Operator::positive_twin() for why the
+		// negation may not be pushed in beside the value.
+		list( $value_test, $value_args ) = $this->meta_value_test( $operator->positive_twin(), $condition );
 
-		$keyword = null !== $positive ? 'NOT IN' : 'IN';
+		$keyword = $operator->is_negative() ? 'NOT IN' : 'IN';
 
 		$fragment = "l.product_id {$keyword} (
 			SELECT pm.post_id FROM {$postmeta} pm
