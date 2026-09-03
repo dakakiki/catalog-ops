@@ -712,6 +712,16 @@ be more than a few rows however much is chosen.
 	margin: 0;
 }
 
+/*
+The undo preview puts a plain sentence here rather than a status caption — it
+states how much is about to be reverted, which is the opposite of a footnote, so
+it keeps its normal weight and colour and only loses the paragraph margins that
+would otherwise stretch the row.
+*/
+.catalogops-results-bar > p {
+	margin: 0;
+}
+
 /* Search-only bar (audit detail): push the search to the right edge. */
 .catalogops-results-bar--end {
 	justify-content: flex-end;

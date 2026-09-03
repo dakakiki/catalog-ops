@@ -3135,40 +3135,45 @@ function UndoPanel( { op, onDone } ) {
 
 			{ preview && ! operation && (
 				<div className="catalogops-preview">
-					<p>
-						{ sprintf(
-							/* translators: %d: number of recorded changes. */
-							__( '%d changes will be reverted.', 'catalogops' ),
-							preview.total
-						) }
-						{ sku !== '' &&
-							' ' +
-								sprintf(
-									/* translators: 1: rows matching the search, 2: the SKU searched for. */
-									__(
-										'Showing the %1$d matching “%2$s” — the undo still covers all of them.',
-										'catalogops'
-									),
-									preview.matched,
-									sku
-								) }
-						{ driftCount > 0 &&
-							' ' +
-								sprintf(
-									/* translators: %d: number of drifted objects on this page. */
-									__(
-										'%d on this page changed since the operation.',
-										'catalogops'
-									),
-									driftCount
-								) }
-					</p>
+					{ /* Count on the left, search on the right, one line above the
+					     table — the shape the results table and the audit log already
+					     use. The search earns its place here because this is the table
+					     an undo is agreed to on: a fixed sample of the first rows left
+					     "will the one I care about be skipped?" unanswerable on a
+					     catalogue of any size. */ }
+					<div className="catalogops-results-bar">
+						<p>
+							{ sprintf(
+								/* translators: %d: number of recorded changes. */
+								__(
+									'%d changes will be reverted.',
+									'catalogops'
+								),
+								preview.total
+							) }
+							{ sku !== '' &&
+								' ' +
+									sprintf(
+										/* translators: 1: rows matching the search, 2: the SKU searched for. */
+										__(
+											'Showing the %1$d matching “%2$s” — the undo still covers all of them.',
+											'catalogops'
+										),
+										preview.matched,
+										sku
+									) }
+							{ driftCount > 0 &&
+								' ' +
+									sprintf(
+										/* translators: %d: number of drifted objects on this page. */
+										__(
+											'%d on this page changed since the operation.',
+											'catalogops'
+										),
+										driftCount
+									) }
+						</p>
 
-					{ /* The search sits where the results table and the audit log put
-					     theirs, because this is the table an undo is agreed to on: a
-					     fixed sample of the first rows left "will the one I care about
-					     be skipped?" unanswerable on a catalogue of any size. */ }
-					<div className="catalogops-results-bar catalogops-results-bar--end">
 						<div className="catalogops-search">
 							<input
 								id={ `undo-search-${ op.id }` }
