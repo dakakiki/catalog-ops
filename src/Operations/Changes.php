@@ -172,58 +172,33 @@ final class Changes {
 	}
 
 	/**
-	 * A sample of an operation's applied deltas, oldest object first — for the
-	 * undo preview, which reads each sampled object's current value to show whether
-	 * it would revert or be skipped as drift.
-	 *
-	 * @param int $operation_id Operation id.
-	 * @param int $limit        Maximum rows to return.
-	 * @return list<Change>
-	 */
-	public function applied_sample( int $operation_id, int $limit ): array {
-		$table = $this->schema->changes_table();
-		$limit = max( 0, $limit );
-
-		if ( 0 === $limit ) {
-			return array();
-		}
-
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare(
-				"SELECT * FROM {$table} WHERE operation_id = %d AND status = %d ORDER BY object_id ASC, id ASC LIMIT %d",
-				$operation_id,
-				Change_Status::APPLIED->value,
-				$limit
-			),
-			ARRAY_A
-		);
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-
-		return array_map( array( $this, 'hydrate' ), $rows );
-	}
-
-	/**
 	 * A page of an operation's change rows, oldest id first — the audit-log detail
 	 * view of what an operation did, field by field. An optional object id narrows
 	 * it to a single product/variation, so a user can look up whether a specific
 	 * object was changed (and to what).
 	 *
-	 * @param int    $operation_id Operation id.
-	 * @param int    $limit        Page size.
-	 * @param int    $offset       Rows to skip.
-	 * @param int    $object_id    When > 0, only this object's rows.
-	 * @param string $sku          When non-empty, only objects whose SKU (or, for a
-	 *                             variation, the parent's SKU) matches this substring.
+	 * @param int           $operation_id Operation id.
+	 * @param int           $limit        Page size.
+	 * @param int           $offset       Rows to skip.
+	 * @param int           $object_id    When > 0, only this object's rows.
+	 * @param string        $sku          When non-empty, only objects whose SKU (or, for a
+	 *                                    variation, the parent's SKU) matches this substring.
+	 * @param Change_Status $status       When given, only rows in this state — the undo
+	 *                                    preview pages the applied rows, which are the
+	 *                                    only ones it can give back.
 	 * @return list<Change>
 	 */
-	public function page( int $operation_id, int $limit, int $offset, int $object_id = 0, string $sku = '' ): array {
+	public function page( int $operation_id, int $limit, int $offset, int $object_id = 0, string $sku = '', ?Change_Status $status = null ): array {
 		$table  = $this->schema->changes_table();
 		$limit  = max( 1, $limit );
 		$offset = max( 0, $offset );
 
 		$where = 'operation_id = %d';
 		$args  = array( $operation_id );
+		if ( null !== $status ) {
+			$where .= ' AND status = %d';
+			$args[] = $status->value;
+		}
 		if ( $object_id > 0 ) {
 			$where .= ' AND object_id = %d';
 			$args[] = $object_id;
@@ -263,15 +238,20 @@ final class Changes {
 	 * Count the changes matching a {@see page()} filter (operation + optional
 	 * object / SKU) — the total the audit pager needs to show "page X of Y".
 	 *
-	 * @param int    $operation_id Operation id.
-	 * @param int    $object_id    When > 0, only this object's rows.
-	 * @param string $sku          When non-empty, the SKU substring filter.
+	 * @param int           $operation_id Operation id.
+	 * @param int           $object_id    When > 0, only this object's rows.
+	 * @param string        $sku          When non-empty, the SKU substring filter.
+	 * @param Change_Status $status       When given, only rows in this state.
 	 */
-	public function count_page( int $operation_id, int $object_id = 0, string $sku = '' ): int {
+	public function count_page( int $operation_id, int $object_id = 0, string $sku = '', ?Change_Status $status = null ): int {
 		$table = $this->schema->changes_table();
 
 		$where = 'operation_id = %d';
 		$args  = array( $operation_id );
+		if ( null !== $status ) {
+			$where .= ' AND status = %d';
+			$args[] = $status->value;
+		}
 		if ( $object_id > 0 ) {
 			$where .= ' AND object_id = %d';
 			$args[] = $object_id;

@@ -409,21 +409,28 @@ final class Operation_Service {
 
 	/**
 	 * Preview an undo without writing: the total number of recorded changes that
-	 * would be reverted, and a sample showing, per object, whether it would revert
+	 * would be reverted, and one page showing, per object, whether it would revert
 	 * or be skipped as drift (CONTEXT §3). The exact skipped count is not computed
 	 * here — that would mean reading every target object, which the architecture
-	 * reserves for execution; the sample conveys the shape and the run reports the
-	 * exact figure.
+	 * reserves for execution; the run reports the exact figure.
+	 *
+	 * It pages and searches rather than showing a fixed sample, because an undo is
+	 * agreed to on the strength of this table: with twenty rows out of eighteen
+	 * thousand and no way to look further, "is the one I care about going to be
+	 * skipped?" had no answer. `total` stays the whole undo, `matched` is what the
+	 * search narrowed to — searching must not look as though it shrank the job.
 	 *
 	 * @param int             $parent_op_id The operation to undo.
-	 * @param Conflict_Policy $policy       Policy to reflect in the sample's action.
-	 * @param int             $limit        Maximum sample rows.
-	 * @return array{parent_op_id: int, total: int, conflict_policy: string, sample: list<array{id: int, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
+	 * @param Conflict_Policy $policy       Policy to reflect in each row's action.
+	 * @param int             $per_page     Rows per page.
+	 * @param int             $page         1-based page number.
+	 * @param string          $sku          When non-empty, only objects matching this SKU.
+	 * @return array{parent_op_id: int, total: int, matched: int, page: int, per_page: int, conflict_policy: string, items: list<array{id: int, sku: string, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
 	 *
 	 * @throws InvalidArgumentException When the parent operation is missing.
 	 * @throws License_Limited          When undo is used without a paid plan.
 	 */
-	public function preview_undo( int $parent_op_id, Conflict_Policy $policy, int $limit = 20 ): array {
+	public function preview_undo( int $parent_op_id, Conflict_Policy $policy, int $per_page = 10, int $page = 1, string $sku = '' ): array {
 		if ( ! $this->license->can_undo() ) {
 			throw new License_Limited( 'Undo is a paid-plan feature.' );
 		}
@@ -434,10 +441,28 @@ final class Operation_Service {
 			throw new InvalidArgumentException( 'Operation not found.' );
 		}
 
-		$total  = $this->changes->counts( $parent_op_id )['applied'];
-		$sample = array();
+		$per_page = max( 1, $per_page );
+		$page     = max( 1, $page );
 
-		foreach ( $this->changes->applied_sample( $parent_op_id, max( 0, $limit ) ) as $row ) {
+		// Two counts, and they answer different questions. `total` is every applied
+		// row, which is what the undo will actually attempt and what the headline
+		// states; `matched` is what the current SKU search narrowed that to, which is
+		// what the pager counts. Conflating them would make searching look as though
+		// it had shrunk the undo.
+		$total   = $this->changes->counts( $parent_op_id )['applied'];
+		$matched = $this->changes->count_page( $parent_op_id, 0, $sku, Change_Status::APPLIED );
+		$items   = array();
+
+		$rows = $this->changes->page(
+			$parent_op_id,
+			$per_page,
+			( $page - 1 ) * $per_page,
+			0,
+			$sku,
+			Change_Status::APPLIED
+		);
+
+		foreach ( $rows as $row ) {
 			$resolved = $this->providers->for_storage( $row->field_type, $row->field_key );
 			$product  = wc_get_product( $row->object_id );
 
@@ -448,8 +473,11 @@ final class Operation_Service {
 
 			$drift = ! Values::equal( $current, $row->new_value );
 
-			$sample[] = array(
+			$items[] = array(
 				'id'         => $row->object_id,
+				// Carried so the row can be read, and searched for, by the name the
+				// shop uses out loud rather than by an internal id.
+				'sku'        => $this->sku_for( $product ),
 				'field'      => null === $resolved ? $row->field_key : $resolved['key'],
 				'current'    => $current,
 				'restore_to' => $row->old_value,
@@ -461,9 +489,37 @@ final class Operation_Service {
 		return array(
 			'parent_op_id'    => $parent_op_id,
 			'total'           => $total,
+			'matched'         => $matched,
+			'page'            => $page,
+			'per_page'        => $per_page,
 			'conflict_policy' => $policy->value,
-			'sample'          => $sample,
+			'items'           => $items,
 		);
+	}
+
+	/**
+	 * The SKU to show for a change row's object.
+	 *
+	 * A variation's own SKU is blank in most shops, and the one a user searches by
+	 * is the parent's — the results table and the audit log already read them that
+	 * way, so the undo preview does too rather than showing a blank column.
+	 *
+	 * @param WC_Product|false|null $product The loaded object, if it still exists.
+	 */
+	private function sku_for( $product ): string {
+		if ( ! $product instanceof WC_Product ) {
+			return '';
+		}
+
+		$sku = (string) $product->get_sku();
+
+		if ( '' !== $sku || 0 === $product->get_parent_id() ) {
+			return $sku;
+		}
+
+		$parent = wc_get_product( $product->get_parent_id() );
+
+		return $parent instanceof WC_Product ? (string) $parent->get_sku() : '';
 	}
 
 	/**

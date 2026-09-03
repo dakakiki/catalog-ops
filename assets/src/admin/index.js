@@ -2914,17 +2914,28 @@ function UndoPanel( { op, onDone } ) {
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
 	const [ busy, setBusy ] = useState( false );
+	const [ page, setPage ] = useState( 1 );
+	// Draft is what is typed; sku is the applied search, on Enter or Search —
+	// the same split the audit table uses, so a half-typed SKU does not re-query.
+	const [ draft, setDraft ] = useState( '' );
+	const [ sku, setSku ] = useState( '' );
+	const [ confirming, setConfirming ] = useState( false );
 
 	useOperationPoll( operation, setOperation, onDone );
 
 	const loadPreview = useCallback(
-		( withPolicy ) => {
+		( withPolicy, atPage, forSku ) => {
 			setBusy( true );
 			setError( '' );
 			apiFetch( {
 				path: `/catalogops/v1/operations/${ op.id }/undo/preview`,
 				method: 'POST',
-				data: { conflict_policy: withPolicy },
+				data: {
+					conflict_policy: withPolicy,
+					page: atPage,
+					per_page: CHANGES_PER_PAGE,
+					sku: forSku,
+				},
 			} )
 				.then( setPreview )
 				.catch( ( err ) => setError( err.message ) )
@@ -2934,18 +2945,27 @@ function UndoPanel( { op, onDone } ) {
 	);
 
 	useEffect( () => {
-		loadPreview( policy );
-	}, [ policy, loadPreview ] );
+		loadPreview( policy, page, sku );
+	}, [ policy, page, sku, loadPreview ] );
 
-	const driftCount = preview
-		? preview.sample.filter( ( s ) => s.drift ).length
-		: 0;
+	const applySearch = () => {
+		setPage( 1 );
+		setSku( draft.trim() );
+	};
 
+	const items = preview ? preview.items : [];
+	const driftCount = items.filter( ( s ) => s.drift ).length;
+	const pages = Math.max(
+		1,
+		Math.ceil( ( preview ? preview.matched : 0 ) / CHANGES_PER_PAGE )
+	);
+
+	// Confirmed on the panel, like deleting an operation or stopping a run, rather
+	// than through window.confirm: a browser dialog cannot state the numbers or
+	// which conflict policy is about to be used, which is the whole of what the
+	// user is agreeing to here.
 	const runUndo = () => {
-		// eslint-disable-next-line no-alert
-		if ( ! window.confirm( __( 'Run this undo now?', 'catalogops' ) ) ) {
-			return;
-		}
+		setConfirming( false );
 		setBusy( true );
 		setError( '' );
 		apiFetch( {
@@ -3019,21 +3039,63 @@ function UndoPanel( { op, onDone } ) {
 							__( '%d changes will be reverted.', 'catalogops' ),
 							preview.total
 						) }
+						{ sku !== '' &&
+							' ' +
+								sprintf(
+									/* translators: 1: rows matching the search, 2: the SKU searched for. */
+									__(
+										'Showing the %1$d matching “%2$s” — the undo still covers all of them.',
+										'catalogops'
+									),
+									preview.matched,
+									sku
+								) }
 						{ driftCount > 0 &&
 							' ' +
 								sprintf(
-									/* translators: %d: number of drifted objects in the sample. */
+									/* translators: %d: number of drifted objects on this page. */
 									__(
-										'%d in this sample changed since the operation.',
+										'%d on this page changed since the operation.',
 										'catalogops'
 									),
 									driftCount
 								) }
 					</p>
+
+					{ /* The search sits where the results table and the audit log put
+					     theirs, because this is the table an undo is agreed to on: a
+					     fixed sample of the first rows left "will the one I care about
+					     be skipped?" unanswerable on a catalogue of any size. */ }
+					<div className="catalogops-results-bar catalogops-results-bar--end">
+						<div className="catalogops-search">
+							<input
+								id={ `undo-search-${ op.id }` }
+								type="search"
+								placeholder={ __(
+									'SKU, e.g. COPS-1234',
+									'catalogops'
+								) }
+								aria-label={ __( 'Find by SKU', 'catalogops' ) }
+								value={ draft }
+								onChange={ ( e ) => setDraft( e.target.value ) }
+								onKeyDown={ ( e ) =>
+									e.key === 'Enter' && applySearch()
+								}
+							/>
+							<button
+								className="button"
+								onClick={ applySearch }
+								disabled={ busy }
+							>
+								{ __( 'Search', 'catalogops' ) }
+							</button>
+						</div>
+					</div>
+
 					<table className="wp-list-table widefat fixed striped">
 						<thead>
 							<tr>
-								<th>{ __( 'Object', 'catalogops' ) }</th>
+								<th>{ __( 'SKU', 'catalogops' ) }</th>
 								<th>{ __( 'Field', 'catalogops' ) }</th>
 								<th>{ __( 'Now', 'catalogops' ) }</th>
 								<th>{ __( 'Restore to', 'catalogops' ) }</th>
@@ -3041,14 +3103,35 @@ function UndoPanel( { op, onDone } ) {
 							</tr>
 						</thead>
 						<tbody>
-							{ preview.sample.map( ( s, i ) => (
+							{ items.length === 0 && ! busy && (
+								<tr>
+									<td colSpan="5">
+										{ sku === ''
+											? __(
+													'Nothing to revert.',
+													'catalogops'
+											  )
+											: __(
+													'No item with that SKU was changed by this run.',
+													'catalogops'
+											  ) }
+									</td>
+								</tr>
+							) }
+							{ items.map( ( s, i ) => (
 								<tr
 									key={ i }
 									className={
 										s.action === 'skip' ? 'is-drift' : ''
 									}
 								>
-									<td>{ s.id }</td>
+									<td>
+										{ s.sku || (
+											<span className="catalogops-muted">
+												#{ s.id }
+											</span>
+										) }
+									</td>
 									<td>{ s.field }</td>
 									<td className="catalogops-num">
 										{ s.current }
@@ -3074,13 +3157,85 @@ function UndoPanel( { op, onDone } ) {
 							) ) }
 						</tbody>
 					</table>
+
+					<Pagination
+						page={ page }
+						pages={ pages }
+						busy={ busy }
+						onPage={ setPage }
+					/>
+
+					{ /* Disabled on the whole undo being empty, never on the page or
+					     the search being empty: searching narrows what is shown, not
+					     what would run. */ }
 					<button
 						className="button button-primary"
-						onClick={ runUndo }
+						onClick={ () => setConfirming( ! confirming ) }
 						disabled={ busy || running || preview.total === 0 }
 					>
 						{ __( 'Run undo', 'catalogops' ) }
 					</button>
+
+					{ confirming && (
+						<div className="catalogops-confirm">
+							<p className="catalogops-confirm__lead">
+								{ sprintf(
+									/* translators: 1: operation id, 2: number of recorded changes. */
+									__(
+										'Undo operation #%1$d — %2$d recorded changes?',
+										'catalogops'
+									),
+									op.id,
+									preview.total
+								) }
+							</p>
+							<p>
+								{ policy === 'skip'
+									? __(
+											'Every item still holding the value this run gave it goes back to what it was before. Anything changed since is left exactly as it is now and reported as skipped.',
+											'catalogops'
+									  )
+									: __(
+											'Every item goes back to what it was before this run — including those changed since, whose later value is discarded. This is the forcing option.',
+											'catalogops'
+									  ) }
+							</p>
+							<p>
+								{ __(
+									'It runs in the background and can be stopped from the history while it works. Undoing cannot itself be undone.',
+									'catalogops'
+								) }
+							</p>
+							<div className="catalogops-confirm__actions">
+								<button
+									className="button button-primary"
+									onClick={ runUndo }
+									disabled={ busy }
+								>
+									{ __( 'Run undo', 'catalogops' ) }
+								</button>
+								<button
+									className="button"
+									onClick={ () => setConfirming( false ) }
+									disabled={ busy }
+								>
+									{ __( 'Cancel', 'catalogops' ) }
+								</button>
+								{ busy && (
+									<span
+										className="catalogops-inline-loading"
+										aria-live="polite"
+									>
+										<span
+											className="catalogops-spinner"
+											aria-hidden="true"
+										/>
+										{ __( 'Starting…', 'catalogops' ) }
+									</span>
+								) }
+							</div>
+						</div>
+					) }
 				</div>
 			) }
 

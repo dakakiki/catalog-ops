@@ -210,11 +210,20 @@ final class Operations_Controller {
 				'callback'            => array( $this, 'undo_preview' ),
 				'permission_callback' => array( $this, 'can_manage' ),
 				'args'                => $policy_arg + array(
-					'limit' => array(
+					'page'     => array(
 						'type'    => 'integer',
-						'default' => 20,
-						'minimum' => 0,
+						'default' => 1,
+						'minimum' => 1,
+					),
+					'per_page' => array(
+						'type'    => 'integer',
+						'default' => 10,
+						'minimum' => 1,
 						'maximum' => 100,
+					),
+					'sku'      => array(
+						'type'    => 'string',
+						'default' => '',
 					),
 				),
 			)
@@ -454,7 +463,9 @@ final class Operations_Controller {
 			$preview = $this->service->preview_undo(
 				$id,
 				$this->policy_param( $request ),
-				(int) $request->get_param( 'limit' )
+				(int) $request->get_param( 'per_page' ),
+				(int) $request->get_param( 'page' ),
+				trim( (string) $request->get_param( 'sku' ) )
 			);
 		} catch ( License_Limited $e ) {
 			return $this->error( 'catalogops_upgrade_required', $e->getMessage(), 402 );

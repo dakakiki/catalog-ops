@@ -151,19 +151,30 @@ final class ChangesRepositoryTest extends Operations_Database_Case {
 		$this->assertSame( array(), $this->changes->applied_index( 30, array() ) );
 	}
 
-	public function test_applied_sample_returns_applied_rows_oldest_object_first(): void {
-		$this->changes->seed( 40, $this->rows_for( array( 720, 700, 710 ) ) );
+	/**
+	 * The undo preview reads its page through the same method the audit view uses,
+	 * narrowed to the rows it can actually give back. `applied_sample()` used to
+	 * serve it and was removed once the preview started paging and searching —
+	 * this covers what replaced it.
+	 */
+	public function test_page_can_be_narrowed_to_applied_rows(): void {
+		$this->changes->seed( 40, $this->rows_for( array( 700, 710, 720 ) ) );
+
 		$rows = $this->changes->pending_chunk( 40, 10 );
-		foreach ( $rows as $row ) {
-			$this->changes->mark_applied( $row->id, '10.00', '1.00' );
-		}
+		$this->changes->mark_applied( $rows[0]->id, '10.00', '1.00' );
+		$this->changes->mark_skipped( $rows[1]->id, '10.00' );
 
-		$sample = $this->changes->applied_sample( 40, 2 );
+		$applied = $this->changes->page( 40, 10, 0, 0, '', Change_Status::APPLIED );
 
-		$this->assertCount( 2, $sample );
-		$this->assertSame( 700, $sample[0]->object_id );
-		$this->assertSame( 710, $sample[1]->object_id );
-		$this->assertSame( '10.00', $sample[0]->old_value );
+		$this->assertCount( 1, $applied );
+		$this->assertSame( $rows[0]->object_id, $applied[0]->object_id );
+		$this->assertSame( '10.00', $applied[0]->old_value );
+
+		$this->assertSame( 1, $this->changes->count_page( 40, 0, '', Change_Status::APPLIED ) );
+
+		// Unfiltered, the audit view still sees every row whatever its state.
+		$this->assertCount( 3, $this->changes->page( 40, 10, 0 ) );
+		$this->assertSame( 3, $this->changes->count_page( 40 ) );
 	}
 
 	public function test_page_returns_rows_for_the_audit_view(): void {

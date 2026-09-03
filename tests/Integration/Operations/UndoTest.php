@@ -249,11 +249,12 @@ final class UndoTest extends Operations_Database_Case {
 		$preview = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 20 );
 
 		$this->assertSame( 2, $preview['total'] );
+		$this->assertSame( 2, $preview['matched'] );
 		$this->assertSame( 'skip', $preview['conflict_policy'] );
-		$this->assertCount( 2, $preview['sample'] );
+		$this->assertCount( 2, $preview['items'] );
 
 		$by_id = array();
-		foreach ( $preview['sample'] as $entry ) {
+		foreach ( $preview['items'] as $entry ) {
 			$by_id[ $entry['id'] ] = $entry;
 		}
 
@@ -263,6 +264,59 @@ final class UndoTest extends Operations_Database_Case {
 
 		$this->assertTrue( $by_id[ $b ]['drift'] );
 		$this->assertSame( 'skip', $by_id[ $b ]['action'] );
+	}
+
+	/**
+	 * The preview pages and searches, and neither narrows the undo itself.
+	 *
+	 * It used to return a fixed sample of the first rows with no way to look
+	 * further, so on a catalogue of any size the question an undo is actually
+	 * agreed on — "will the one I care about be reverted or skipped?" — had no
+	 * answer. `total` has to stay the whole job while `matched` follows the
+	 * search, or narrowing the view would read as narrowing the undo.
+	 */
+	public function test_the_preview_pages_and_searches_without_narrowing_the_undo(): void {
+		$this->make_product( 20, 'UNDO-AAA-1' );
+		$this->make_product( 30, 'UNDO-AAA-2' );
+		$this->make_product( 40, 'UNDO-BBB-1' );
+
+		$op_id = $this->run_price_change( '9.99' );
+
+		$first = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 2, 1 );
+
+		$this->assertSame( 3, $first['total'] );
+		$this->assertSame( 3, $first['matched'] );
+		$this->assertCount( 2, $first['items'] );
+		$this->assertSame( 1, $first['page'] );
+
+		$second = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 2, 2 );
+
+		$this->assertCount( 1, $second['items'] );
+		$this->assertSame( 2, $second['page'] );
+
+		// The two pages together are the whole list, exactly once.
+		$paged = array_merge(
+			array_column( $first['items'], 'id' ),
+			array_column( $second['items'], 'id' )
+		);
+		$this->assertCount( 3, array_unique( $paged ) );
+
+		// The SKU reaches the row, so the column is readable and the search means
+		// something to the person typing it.
+		$this->assertContains( 'UNDO-AAA-1', array_column( $first['items'], 'sku' ) );
+
+		$found = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 10, 1, 'UNDO-AAA' );
+
+		$this->assertSame( 2, $found['matched'] );
+		$this->assertCount( 2, $found['items'] );
+		// Unchanged by the search: the undo still covers all three.
+		$this->assertSame( 3, $found['total'] );
+
+		$none = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 10, 1, 'UNDO-ZZZ' );
+
+		$this->assertSame( 0, $none['matched'] );
+		$this->assertSame( array(), $none['items'] );
+		$this->assertSame( 3, $none['total'] );
 	}
 
 	public function test_undo_with_nothing_applied_settles_immediately(): void {
@@ -353,12 +407,15 @@ final class UndoTest extends Operations_Database_Case {
 	 * @param float $price Regular price.
 	 * @return int Product id.
 	 */
-	private function make_product( float $price ): int {
+	private function make_product( float $price, string $sku = '' ): int {
 		$product = new WC_Product_Simple();
 		$product->set_regular_price( (string) $price );
 		$product->set_manage_stock( true );
 		$product->set_stock_quantity( 5 );
 		$product->set_stock_status( 'instock' );
+		if ( '' !== $sku ) {
+			$product->set_sku( $sku );
+		}
 		$id = $product->save();
 
 		$this->created[] = $id;
