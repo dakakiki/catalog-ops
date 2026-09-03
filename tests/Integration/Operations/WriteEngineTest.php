@@ -143,6 +143,58 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$this->assertSame( 0, $counts['pending'] );
 	}
 
+	/**
+	 * A two-field edit reaches 100%, and its target stays the number previewed.
+	 *
+	 * An edit freezes a target of *objects*, because that is what its preview
+	 * promised — "N products will change" — and "the previewed count is the count
+	 * the run delivers" is the promise the pipeline exists to keep. Two fields on
+	 * two products is four change rows but still two products, and the bar has to
+	 * agree with the preview rather than with the row count.
+	 *
+	 * Pinned because the obvious repair for the undo bug below — count rows
+	 * everywhere — breaks exactly this, and does it quietly: the run still
+	 * finishes, it just targets more than the user approved.
+	 */
+	public function test_a_two_field_edit_targets_products_and_reaches_the_end(): void {
+		$this->make_product( 25 );
+		$this->make_product( 30 );
+
+		$actions = array(
+			new Set_Value( 'regular_price', '9.99' ),
+			new Set_Value( 'meta:_catalogops_brand', 'Globex' ),
+		);
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) );
+
+		$preview = $this->service->preview( $filter, $actions );
+
+		$op_id = $this->service->create(
+			$filter,
+			$actions,
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+
+		$this->service->queue( $op_id );
+
+		$operation = $this->operations->find( $op_id );
+
+		$this->assertSame( 2, $operation->target_count );
+		$this->assertSame( $preview['applicable'], $operation->target_count );
+		// Four rows behind it: one per product per field.
+		$this->assertSame( 4, $this->changes->counts( $op_id )['pending'] );
+
+		$this->drive( $op_id );
+
+		$operation = $this->operations->find( $op_id );
+
+		$this->assertSame( Operation_Status::COMPLETED, $operation->status );
+		$this->assertSame( 2, $operation->processed );
+		$this->assertSame( 100, $operation->percent() );
+		$this->assertSame( 0, $this->changes->counts( $op_id )['pending'] );
+	}
+
 	public function test_rerunning_a_completed_operation_is_a_no_op(): void {
 		$product = $this->make_product( 50 );
 

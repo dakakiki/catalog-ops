@@ -320,6 +320,58 @@ final class UndoTest extends Operations_Database_Case {
 		$this->assertSame( 3, $none['total'] );
 	}
 
+	/**
+	 * An undo of a two-field operation finishes at 100%, not at half.
+	 *
+	 * The two kinds of operation count in different units, each matching what its
+	 * own preview promised: an edit targets *products* ("N products will change"),
+	 * an undo targets the parent's applied *rows* ("N changes will be reverted").
+	 * The runner counted objects for both, so an undo of an operation that touched
+	 * two fields set a target of four, reported two, and stopped mid-bar on a run
+	 * that had finished — on the screen someone is watching to decide whether it is
+	 * safe to walk away.
+	 *
+	 * Unreachable from the admin app, which sends one action; reachable the moment
+	 * a provider offers more, which is what M7 is.
+	 */
+	public function test_an_undo_of_a_two_field_operation_reaches_the_end(): void {
+		$a = $this->make_product( 20 );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array(
+				new Set_Value( 'regular_price', '9.99' ),
+				new Set_Value( 'meta:_undo_two', 'after' ),
+			),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		// One product, two fields: the parent applied two rows.
+		$this->assertSame( 2, $this->changes->counts( $op_id )['applied'] );
+
+		$undo_id = $this->service->undo( $op_id, Conflict_Policy::SKIP, 1 );
+		$this->service->queue( $undo_id );
+
+		$undo = $this->operations->find( $undo_id );
+		$this->assertSame( 2, $undo->target_count, 'An undo targets the rows it reverts.' );
+
+		$this->drive( $undo_id );
+
+		$undo = $this->operations->find( $undo_id );
+
+		$this->assertSame( Operation_Status::COMPLETED, $undo->status );
+		$this->assertSame( 2, $undo->processed, 'The bar must reach its own target.' );
+		$this->assertSame( 100, $undo->percent() );
+
+		// And it actually reverted both fields, not just the one it counted.
+		$this->assertSame( '20', wc_get_product( $a )->get_regular_price() );
+		$this->assertSame( '', (string) wc_get_product( $a )->get_meta( '_undo_two', true ) );
+	}
+
 	public function test_undo_with_nothing_applied_settles_immediately(): void {
 		// A completed operation that matched nothing has no applied deltas.
 		$this->make_product( 10 );

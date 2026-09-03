@@ -300,8 +300,10 @@ final class Operations {
 	 * increment form keeps the counters correct regardless.
 	 *
 	 * @param int $id             Operation id.
-	 * @param int $processed_delta Objects processed in this chunk.
-	 * @param int $failed_delta    Objects failed in this chunk.
+	 * @param int $processed_delta Change rows resolved in this chunk — the same unit
+	 *                             target_count is seeded in, so the two compare.
+	 * @param int $failed_delta    Change rows that failed in this chunk, in the same
+	 *                             unit — an object that throws fails all of its rows.
 	 */
 	public function record_progress( int $id, int $processed_delta, int $failed_delta ): void {
 		$table = $this->schema->operations_table();

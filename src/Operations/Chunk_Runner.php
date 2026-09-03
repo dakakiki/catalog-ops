@@ -156,18 +156,33 @@ final class Chunk_Runner {
 
 		$plan = $this->plan_for( $operation, array_map( 'intval', array_keys( $by_object ) ) );
 
-		$processed = 0;
-		$failed    = 0;
+		// Progress is counted in the unit this operation's own target was set in, and
+		// the two kinds differ: an edit freezes a target of *objects*, which is the
+		// number its preview promised ("1,855 products will change"), while an undo
+		// freezes the parent's applied rows and its preview says "143 changes will be
+		// reverted". Counting objects for both — which is what this did — left an
+		// undo of a multi-field operation reporting two against a target of four, so
+		// its bar stopped at half on a run that had finished.
+		//
+		// Making everything rows was tried and is wrong: it puts the frozen target of
+		// an ordinary edit above the number the preview promised, and "the previewed
+		// count is the count the run delivers" is the promise the whole pipeline is
+		// built to keep. Each path stays in the unit its own preview speaks.
+		$counts_rows = $operation->is_undo();
+		$processed   = 0;
+		$failed      = 0;
 
 		foreach ( $by_object as $object_id => $object_rows ) {
+			$counts_as = $counts_rows ? count( $object_rows ) : 1;
+
 			try {
 				$this->apply_object( (int) $object_id, $object_rows, $plan );
-				++$processed;
+				$processed += $counts_as;
 			} catch ( Throwable $e ) {
 				foreach ( $object_rows as $row ) {
 					$this->changes->mark_failed( $row->id );
 				}
-				++$failed;
+				$failed += $counts_as;
 
 				/**
 				 * Fires when a single object in a chunk fails to update.
