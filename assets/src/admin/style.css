@@ -1721,7 +1721,55 @@ tr.is-drift td {
 
 .catalogops-confirm__actions {
 	display: flex;
+	align-items: center;
 	gap: 8px;
+}
+
+/*
+The pair has to read as one row. wp-admin gives `.button` a 4px bottom margin on
+top of its 40px min-height, so a stretched flex row aligns the margin boxes and
+leaves the two borders a couple of pixels out of line. Centre them, drop the
+margin, and pin both members of the height — the same shape
+`.catalogops-filter-row .button` already uses for the controls beside it.
+*/
+.catalogops .catalogops-confirm__actions .button {
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	margin: 0;
+	display: inline-flex;
+	align-items: center;
+	box-sizing: border-box;
+}
+
+/*
+Orange is the colour this app gives to reversing — the undo row icon already
+wears it, and the confirmation's own button should not arrive in a different
+vocabulary. Scoped and class+class deep for the same reason as
+`.catalogops-button--go`: `.wp-core-ui .button` would otherwise outrank it.
+*/
+.catalogops .catalogops-button--undo,
+.catalogops .catalogops-button--undo:visited {
+	border-color: #b45309;
+	background: var(--co-orange);
+	color: #fff;
+	text-shadow: none;
+}
+
+.catalogops .catalogops-button--undo:hover:not( :disabled ),
+.catalogops .catalogops-button--undo:focus:not( :disabled ) {
+	border-color: #92400e;
+	background: #b45309;
+	color: #fff;
+}
+
+.catalogops .catalogops-button--undo:focus:not( :disabled ) {
+	box-shadow: 0 0 0 1px #fff, 0 0 0 3px var(--co-orange);
+}
+
+.catalogops .catalogops-button--undo:disabled {
+	border-color: var(--co-border-strong);
+	background: var(--co-border-strong);
+	color: #fff;
 }
 
 /* --- Cosmetic polish (M6 brand pass) ----------------------------------- */

@@ -31,11 +31,32 @@ final class Settings_Controller {
 	public const TOUR_META = 'catalogops_tour_done';
 
 	/**
-	 * Site option: the mandatory backup reminder has been acknowledged, so the
-	 * first-operation gate steps aside (CONTEXT §9 — "obavezan backup podsetnik pri
-	 * prvoj operaciji"). Site-wide: it is a property of this catalog, not the user.
+	 * Site option: the mandatory backup reminder has been acknowledged (CONTEXT §9).
+	 *
+	 * Superseded by {@see BACKUP_META} and read no longer. It was site-wide and a
+	 * bare `1`, which made it two things at once and neither of them well: as a
+	 * gate, one admin's click silenced the reminder for every colleague who came
+	 * after, so someone's first bulk edit over eighteen thousand products could
+	 * arrive with no warning at all; and as a record it said only that somebody
+	 * with access had clicked something at some point, which cannot answer "who,
+	 * and when". Left in the database rather than deleted — it is a statement about
+	 * a past install, and removing user data to tidy up is not this migration's
+	 * business.
 	 */
 	public const BACKUP_OPTION = 'catalogops_backup_ack';
+
+	/**
+	 * User meta: this user has acknowledged the backup reminder, recorded as
+	 * `{ time, version }` in GMT.
+	 *
+	 * Per user, like {@see TOUR_META} and for the same reason — the reminder exists
+	 * to make a person stop before their first destructive run, and a colleague who
+	 * joins next year has not stopped yet. The time and version are stored because
+	 * an acknowledgement with neither is not a record of anything: with them the
+	 * confirmation can say who agreed and when, and can point out that a backup
+	 * confirmed eight months ago may no longer be recent.
+	 */
+	public const BACKUP_META = 'catalogops_backup_ack';
 
 	/**
 	 * Retention service.
@@ -147,7 +168,21 @@ final class Settings_Controller {
 		}
 
 		if ( true === $request->get_param( 'backup_ack' ) ) {
-			update_option( self::BACKUP_OPTION, 1 );
+			// Written once and never overwritten: the record is of the moment the
+			// user first agreed, and re-stamping it on a later run would quietly
+			// keep it looking fresh — which is the one thing it must not do.
+			$existing = get_user_meta( get_current_user_id(), self::BACKUP_META, true );
+
+			if ( ! is_array( $existing ) || ! isset( $existing['time'] ) ) {
+				update_user_meta(
+					get_current_user_id(),
+					self::BACKUP_META,
+					array(
+						'time'    => current_time( 'mysql', true ),
+						'version' => CATALOGOPS_VERSION,
+					)
+				);
+			}
 		}
 
 		return new WP_REST_Response( $this->onboarding_payload() );
@@ -158,13 +193,44 @@ final class Settings_Controller {
 	 * first-run tour and the first-operation backup gate, plus the retention window
 	 * so the copy can name the concrete undo horizon.
 	 *
-	 * @return array{tour_done: bool, backup_ack: bool, retention_days: int}
+	 * The acknowledgement travels as a boolean plus the record behind it, so the
+	 * confirmation can name who agreed and when instead of silently standing aside.
+	 * Formatting the date here rather than in the client is the same call as
+	 * elsewhere: the value is stored in GMT, and the shop's clock and date format
+	 * are known on this side.
+	 *
+	 * @return array{tour_done: bool, backup_ack: bool, backup_ack_by: string, backup_ack_at: string, backup_ack_version: string, retention_days: int}
 	 */
 	private function onboarding_payload(): array {
+		$user = wp_get_current_user();
+		$ack  = get_user_meta( $user->ID, self::BACKUP_META, true );
+		$has  = is_array( $ack ) && isset( $ack['time'] );
+
 		return array(
-			'tour_done'      => (bool) get_user_meta( get_current_user_id(), self::TOUR_META, true ),
-			'backup_ack'     => (bool) get_option( self::BACKUP_OPTION, false ),
-			'retention_days' => $this->retention->days(),
+			'tour_done'          => (bool) get_user_meta( $user->ID, self::TOUR_META, true ),
+			'backup_ack'         => $has,
+			'backup_ack_by'      => $has ? $user->display_name : '',
+			'backup_ack_at'      => $has ? $this->to_local( (string) $ack['time'] ) : '',
+			'backup_ack_version' => $has ? (string) ( $ack['version'] ?? '' ) : '',
+			'retention_days'     => $this->retention->days(),
+		);
+	}
+
+	/**
+	 * Render a GMT MySQL datetime in the shop's own clock and date format.
+	 *
+	 * @param string $gmt GMT MySQL datetime.
+	 */
+	private function to_local( string $gmt ): string {
+		$timestamp = strtotime( $gmt . ' UTC' );
+
+		if ( false === $timestamp ) {
+			return '';
+		}
+
+		return wp_date(
+			get_option( 'date_format', 'Y-m-d' ) . ' ' . get_option( 'time_format', 'H:i' ),
+			$timestamp
 		);
 	}
 

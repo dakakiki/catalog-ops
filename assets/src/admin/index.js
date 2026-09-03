@@ -16,6 +16,8 @@
 import {
 	createRoot,
 	render,
+	createContext,
+	useContext,
 	useState,
 	useCallback,
 	useEffect,
@@ -26,6 +28,94 @@ import { __, _n, sprintf } from '@wordpress/i18n';
 import './style.css';
 
 const PER_PAGE = 10;
+
+/**
+ * The onboarding record — whether this user has acknowledged the backup reminder,
+ * and, when they have, who and when.
+ *
+ * A context rather than a prop because the two places that need it sit far apart:
+ * the bulk-edit panel is a child of the app, and the undo panel is three levels
+ * down inside a history row. Threading it through History and OperationRow would
+ * make both of them carry something neither has any use for, and the two readers
+ * have to agree — acknowledging in one has to stand the other down too.
+ *
+ * Defaults to acknowledged. A failed fetch must not put a gate in front of
+ * someone's undo; the reminder is a courtesy, and the REST layer is where real
+ * limits are enforced.
+ */
+const OnboardingContext = createContext( {
+	backup_ack: true,
+	backup_ack_by: '',
+	backup_ack_at: '',
+	backup_ack_version: '',
+	retention_days: 30,
+	// Carried alongside the data so whichever panel takes the acknowledgement can
+	// stand the other one down without either knowing the other exists.
+	onAcknowledge: () => {},
+} );
+
+/**
+ * The backup reminder, in whichever of its two states applies: the gate before a
+ * user's first destructive run, or the record of when they passed it.
+ *
+ * Showing the record rather than nothing is the point of storing one. An
+ * acknowledgement from eight months ago is not evidence that a backup exists
+ * today, and the only person who can judge that is looking at this panel.
+ *
+ * @param {Object}   props         Component props.
+ * @param {boolean}  props.checked Whether the box is ticked this time round.
+ * @param {Function} props.onCheck Called as the box is ticked or unticked.
+ */
+function BackupReminder( { checked, onCheck } ) {
+	const onboarding = useContext( OnboardingContext );
+
+	if ( onboarding.backup_ack ) {
+		return (
+			<p className="catalogops-muted">
+				{ sprintf(
+					/* translators: 1: who acknowledged, 2: when, 3: the plugin version then. */
+					__(
+						'Backup confirmed by %1$s on %2$s, in version %3$s. If that was a while ago, now is the moment to check it is still recent.',
+						'catalogops'
+					),
+					onboarding.backup_ack_by,
+					onboarding.backup_ack_at,
+					onboarding.backup_ack_version
+				) }
+			</p>
+		);
+	}
+
+	return (
+		<>
+			<p className="catalogops-confirm__lead">
+				{ __(
+					'Before your first change: CatalogOps is safe, but it is not a backup.',
+					'catalogops'
+				) }
+			</p>
+			<label
+				className="catalogops-confirm__ack"
+				htmlFor="catalogops-backup-ack"
+			>
+				<input
+					id="catalogops-backup-ack"
+					type="checkbox"
+					checked={ checked }
+					onChange={ ( e ) => onCheck( e.target.checked ) }
+				/>
+				{ sprintf(
+					/* translators: %d: the number of days changes remain reversible. */
+					__(
+						'I have a recent backup, and I understand this change can be undone for %d days from History.',
+						'catalogops'
+					),
+					onboarding.retention_days || 30
+				) }
+			</label>
+		</>
+	);
+}
 
 /**
  * How often the operation history re-asks the server while something is running.
@@ -2633,37 +2723,7 @@ function BulkEdit( {
 
 			{ confirming && (
 				<div className="catalogops-confirm">
-					{ ! backupAck ? (
-						<>
-							<p className="catalogops-confirm__lead">
-								{ __(
-									'Before your first change: CatalogOps is safe, but it is not a backup.',
-									'catalogops'
-								) }
-							</p>
-							<label
-								className="catalogops-confirm__ack"
-								htmlFor="catalogops-backup-ack"
-							>
-								<input
-									id="catalogops-backup-ack"
-									type="checkbox"
-									checked={ backupChecked }
-									onChange={ ( e ) =>
-										setBackupChecked( e.target.checked )
-									}
-								/>
-								{ sprintf(
-									/* translators: %d: the number of days changes remain reversible. */
-									__(
-										'I have a recent backup, and I understand this change can be undone for %d days from History.',
-										'catalogops'
-									),
-									retentionDays || 30
-								) }
-							</label>
-						</>
-					) : (
+					{ backupAck && (
 						<p className="catalogops-confirm__lead">
 							{ __(
 								'Apply this change to every matching item?',
@@ -2671,6 +2731,10 @@ function BulkEdit( {
 							) }
 						</p>
 					) }
+					<BackupReminder
+						checked={ backupChecked }
+						onCheck={ setBackupChecked }
+					/>
 					<div className="catalogops-confirm__actions">
 						{ /* Green because this is the one that runs — the same
 						     vocabulary the row actions already use, and the
@@ -2920,6 +2984,8 @@ function UndoPanel( { op, onDone } ) {
 	const [ draft, setDraft ] = useState( '' );
 	const [ sku, setSku ] = useState( '' );
 	const [ confirming, setConfirming ] = useState( false );
+	const [ backupChecked, setBackupChecked ] = useState( false );
+	const onboarding = useContext( OnboardingContext );
 
 	useOperationPoll( operation, setOperation, onDone );
 
@@ -2965,6 +3031,24 @@ function UndoPanel( { op, onDone } ) {
 	// which conflict policy is about to be used, which is the whole of what the
 	// user is agreeing to here.
 	const runUndo = () => {
+		// The backup reminder guards this as it guards Apply, and with a sharper
+		// reason: an undo writes at the same scale, it cannot itself be undone, and
+		// under Force it discards work done after the operation — the one thing this
+		// plugin can destroy that it never recorded and so can never give back.
+		if ( ! onboarding.backup_ack ) {
+			if ( ! backupChecked ) {
+				return;
+			}
+
+			apiFetch( {
+				path: '/catalogops/v1/settings/onboarding',
+				method: 'POST',
+				data: { backup_ack: true },
+			} ).catch( () => {} );
+
+			onboarding.onAcknowledge();
+		}
+
 		setConfirming( false );
 		setBusy( true );
 		setError( '' );
@@ -3165,16 +3249,26 @@ function UndoPanel( { op, onDone } ) {
 						onPage={ setPage }
 					/>
 
-					{ /* Disabled on the whole undo being empty, never on the page or
-					     the search being empty: searching narrows what is shown, not
-					     what would run. */ }
-					<button
-						className="button button-primary"
-						onClick={ () => setConfirming( ! confirming ) }
-						disabled={ busy || running || preview.total === 0 }
-					>
-						{ __( 'Run undo', 'catalogops' ) }
-					</button>
+					{ /* Everything above is the evidence — the rows, the search, the
+					     pager. Everything below acts on it. The rule says which is
+					     which, so the button does not read as another table control. */ }
+					<hr className="catalogops-divider" />
+
+					{ /* The button gives way to the question rather than sitting
+					     above it: two "Run undo" controls on screen at once leaves
+					     the user guessing which one is the real one. Disabled on the
+					     whole undo being empty, never on the page or the search being
+					     empty — searching narrows what is shown, not what would
+					     run. */ }
+					{ ! confirming && (
+						<button
+							className="button catalogops-button--undo"
+							onClick={ () => setConfirming( true ) }
+							disabled={ busy || running || preview.total === 0 }
+						>
+							{ __( 'Run undo', 'catalogops' ) }
+						</button>
+					) }
 
 					{ confirming && (
 						<div className="catalogops-confirm">
@@ -3206,11 +3300,22 @@ function UndoPanel( { op, onDone } ) {
 									'catalogops'
 								) }
 							</p>
+							<BackupReminder
+								checked={ backupChecked }
+								onCheck={ setBackupChecked }
+							/>
 							<div className="catalogops-confirm__actions">
+								{ /* Orange, like the undo icon in the row above: this
+								     app gives reversing its own colour, and the
+								     confirmation is not the place to change dialect. */ }
 								<button
-									className="button button-primary"
+									className="button catalogops-button--undo"
 									onClick={ runUndo }
-									disabled={ busy }
+									disabled={
+										busy ||
+										( ! onboarding.backup_ack &&
+											! backupChecked )
+									}
 								>
 									{ __( 'Run undo', 'catalogops' ) }
 								</button>
@@ -4810,557 +4915,611 @@ function App() {
 	const update = ( key ) => ( event ) =>
 		setForm( { ...form, [ key ]: event.target.value } );
 
+	// The onboarding record reaches the bulk-edit panel and the undo panel, which
+	// sit far apart in the tree and have to agree: acknowledging in one stands the
+	// other down. Falls back to acknowledged while the fetch is in flight or after
+	// it fails — a gate that appears because a request was slow is worse than none.
+	const onboardingValue = {
+		backup_ack: onboarding ? onboarding.backup_ack : true,
+		backup_ack_by: onboarding ? onboarding.backup_ack_by : '',
+		backup_ack_at: onboarding ? onboarding.backup_ack_at : '',
+		backup_ack_version: onboarding ? onboarding.backup_ack_version : '',
+		retention_days: onboarding ? onboarding.retention_days : 30,
+		onAcknowledge: () =>
+			setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) ),
+	};
+
 	return (
-		<div className="catalogops">
-			<div className="catalogops-brand">
-				<svg
-					className="catalogops-brand__mark"
-					viewBox="0 0 40 40"
-					width="40"
-					height="40"
-					aria-hidden="true"
-					focusable="false"
-					xmlns="http://www.w3.org/2000/svg"
-				>
-					<defs>
-						<linearGradient
-							id="catalogops-brand-g"
-							x1="0"
-							y1="0"
-							x2="40"
-							y2="40"
-							gradientUnits="userSpaceOnUse"
-						>
-							<stop offset="0" stopColor="#4f46e5" />
-							<stop offset="1" stopColor="#4338ca" />
-						</linearGradient>
-					</defs>
-					<rect
+		<OnboardingContext.Provider value={ onboardingValue }>
+			<div className="catalogops">
+				<div className="catalogops-brand">
+					<svg
+						className="catalogops-brand__mark"
+						viewBox="0 0 40 40"
 						width="40"
 						height="40"
-						rx="9"
-						fill="url(#catalogops-brand-g)"
-					/>
-					<path
-						d="M20 9 L31 15 L20 21 L9 15 Z"
-						fill="#fff"
-						fillOpacity="0.95"
-					/>
-					<path
-						d="M9 20 L20 26 L31 20"
-						fill="none"
-						stroke="#fff"
-						strokeWidth="2.2"
-						strokeLinecap="round"
-						strokeLinejoin="round"
-						strokeOpacity="0.7"
-					/>
-					<path
-						d="M9 25 L20 31 L31 25"
-						fill="none"
-						stroke="#fff"
-						strokeWidth="2.2"
-						strokeLinecap="round"
-						strokeLinejoin="round"
-						strokeOpacity="0.45"
-					/>
-				</svg>
-				<span className="catalogops-brand__text">
-					<span className="catalogops-brand__name">
-						Catalog<b>Ops</b>
-					</span>
-					<span className="catalogops-brand__tag">
-						{ __( 'Bulk catalog operations', 'catalogops' ) }
-					</span>
-				</span>
-			</div>
-
-			<Onboarding
-				data={ onboarding }
-				onDismiss={ () =>
-					setOnboarding( ( o ) => ( { ...o, tour_done: true } ) )
-				}
-			/>
-
-			<div className="catalogops-card catalogops-browse">
-				<h2>{ __( 'Filter products', 'catalogops' ) }</h2>
-				<div className="catalogops-controls">
-					<div className="catalogops-control-group">
-						<span className="catalogops-group-label">
-							{ __( 'Target', 'catalogops' ) }
-						</span>
-						<div className="catalogops-segmented" role="group">
-							<button
-								type="button"
-								className={ `catalogops-segmented__btn${
-									scope === 'product' ? ' is-active' : ''
-								}` }
-								onClick={ () => setScope( 'product' ) }
+						aria-hidden="true"
+						focusable="false"
+						xmlns="http://www.w3.org/2000/svg"
+					>
+						<defs>
+							<linearGradient
+								id="catalogops-brand-g"
+								x1="0"
+								y1="0"
+								x2="40"
+								y2="40"
+								gradientUnits="userSpaceOnUse"
 							>
-								{ __( 'Products', 'catalogops' ) }
-							</button>
-							<button
-								type="button"
-								className={ `catalogops-segmented__btn${
-									scope === 'variation' ? ' is-active' : ''
-								}` }
-								onClick={ () => setScope( 'variation' ) }
-							>
-								{ __( 'Variations', 'catalogops' ) }
-							</button>
-						</div>
-					</div>
-
-					<div className="catalogops-control-group">
-						<span className="catalogops-group-label">
-							{ __( 'Filter', 'catalogops' ) }
+								<stop offset="0" stopColor="#4f46e5" />
+								<stop offset="1" stopColor="#4338ca" />
+							</linearGradient>
+						</defs>
+						<rect
+							width="40"
+							height="40"
+							rx="9"
+							fill="url(#catalogops-brand-g)"
+						/>
+						<path
+							d="M20 9 L31 15 L20 21 L9 15 Z"
+							fill="#fff"
+							fillOpacity="0.95"
+						/>
+						<path
+							d="M9 20 L20 26 L31 20"
+							fill="none"
+							stroke="#fff"
+							strokeWidth="2.2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							strokeOpacity="0.7"
+						/>
+						<path
+							d="M9 25 L20 31 L31 25"
+							fill="none"
+							stroke="#fff"
+							strokeWidth="2.2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							strokeOpacity="0.45"
+						/>
+					</svg>
+					<span className="catalogops-brand__text">
+						<span className="catalogops-brand__name">
+							Catalog<b>Ops</b>
 						</span>
-						<div className="catalogops-filter-rows">
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field catalogops-field--multi">
-									<MultiSelect
-										label={ __( 'Category', 'catalogops' ) }
-										options={ categories }
-										value={ form.category }
-										onChange={ ( ids ) =>
-											setForm( {
-												...form,
-												category: ids,
-											} )
-										}
-										mode={ form.categoryMode }
-										onModeChange={ ( next ) =>
-											setForm( {
-												...form,
-												categoryMode: next,
-											} )
-										}
-									/>
-								</div>
+						<span className="catalogops-brand__tag">
+							{ __( 'Bulk catalog operations', 'catalogops' ) }
+						</span>
+					</span>
+				</div>
 
-								<div className="catalogops-field catalogops-field--multi">
-									<MultiSelect
-										label={ __( 'Brand', 'catalogops' ) }
-										options={ brands.map( ( b ) => ( {
-											id: b,
-											name: b,
-										} ) ) }
-										value={ form.brand }
-										onChange={ ( ids ) =>
-											setForm( { ...form, brand: ids } )
-										}
-										mode={ form.brandMode }
-										onModeChange={ ( next ) =>
-											setForm( {
-												...form,
-												brandMode: next,
-											} )
-										}
-									/>
-								</div>
+				<Onboarding
+					data={ onboarding }
+					onDismiss={ () =>
+						setOnboarding( ( o ) => ( { ...o, tour_done: true } ) )
+					}
+				/>
 
-								<div className="catalogops-field catalogops-field--multi">
-									<MultiSelect
-										label={ __( 'Tag', 'catalogops' ) }
-										options={ tags }
-										value={ form.tag }
-										onChange={ ( ids ) =>
-											setForm( {
-												...form,
-												tag: ids,
-											} )
-										}
-										mode={ form.tagMode }
-										onModeChange={ ( next ) =>
-											setForm( {
-												...form,
-												tagMode: next,
-											} )
-										}
-									/>
-								</div>
-							</div>
-
-							{ /* Stock and price are the two conditions about an
-							     item's own numbers, so they sit together and last —
-							     after the terms that say *which* items, and after
-							     the attribute pair that only exists for variations. */ }
-							<div className="catalogops-filter-row">
-								{ 'variation' === scope &&
-									attributes.length > 0 && (
-										<div className="catalogops-field">
-											<label htmlFor="catalogops-attribute">
-												{ __(
-													'Attribute',
-													'catalogops'
-												) }
-											</label>
-											<select
-												id="catalogops-attribute"
-												value={ form.attribute }
-												onChange={ ( e ) =>
-													setForm( {
-														...form,
-														attribute:
-															e.target.value,
-														attributeValues: [],
-													} )
-												}
-											>
-												<option value="">
-													{ __(
-														'Any',
-														'catalogops'
-													) }
-												</option>
-												{ attributes.map( ( a ) => (
-													<option
-														key={ a.field }
-														value={ a.field }
-													>
-														{ a.label }
-													</option>
-												) ) }
-											</select>
-										</div>
-									) }
-
-								{ 'variation' === scope &&
-									attributes.length > 0 &&
-									selectedAttribute && (
-										<div className="catalogops-field catalogops-field--multi">
-											<MultiSelect
-												label={
-													'not_in' ===
-													form.attributeMode
-														? __(
-																'Values (none if empty)',
-																'catalogops'
-														  )
-														: __(
-																'Values (any if empty)',
-																'catalogops'
-														  )
-												}
-												options={
-													selectedAttribute.terms
-												}
-												value={ form.attributeValues }
-												onChange={ ( ids ) =>
-													setForm( {
-														...form,
-														attributeValues: ids,
-													} )
-												}
-												mode={ form.attributeMode }
-												onModeChange={ ( next ) =>
-													setForm( {
-														...form,
-														attributeMode: next,
-													} )
-												}
-											/>
-										</div>
-									) }
-
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-stock">
-										{ __( 'Stock', 'catalogops' ) }
-									</label>
-									<select
-										id="catalogops-stock"
-										value={ form.stockStatus }
-										onChange={ update( 'stockStatus' ) }
-									>
-										<option value="">
-											{ __( 'Any', 'catalogops' ) }
-										</option>
-										<option value="instock">
-											{ __( 'In stock', 'catalogops' ) }
-										</option>
-										<option value="outofstock">
-											{ __(
-												'Out of stock',
-												'catalogops'
-											) }
-										</option>
-									</select>
-								</div>
-
-								<div className="catalogops-field catalogops-field--price">
-									<label htmlFor="catalogops-price-min">
-										{ __( 'Price range', 'catalogops' ) }
-									</label>
-									<div className="catalogops-price-inputs">
-										<input
-											id="catalogops-price-min"
-											type="number"
-											placeholder={ __(
-												'Min',
-												'catalogops'
-											) }
-											aria-label={ __(
-												'Minimum price',
-												'catalogops'
-											) }
-											value={ form.priceMin }
-											onChange={ update( 'priceMin' ) }
-										/>
-										<input
-											id="catalogops-price-max"
-											type="number"
-											placeholder={ __(
-												'Max',
-												'catalogops'
-											) }
-											aria-label={ __(
-												'Maximum price',
-												'catalogops'
-											) }
-											value={ form.priceMax }
-											onChange={ update( 'priceMax' ) }
-										/>
-									</div>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row">
+				<div className="catalogops-card catalogops-browse">
+					<h2>{ __( 'Filter products', 'catalogops' ) }</h2>
+					<div className="catalogops-controls">
+						<div className="catalogops-control-group">
+							<span className="catalogops-group-label">
+								{ __( 'Target', 'catalogops' ) }
+							</span>
+							<div className="catalogops-segmented" role="group">
 								<button
-									className="button button-primary"
-									onClick={ () => run( 1 ) }
-									disabled={ loading }
+									type="button"
+									className={ `catalogops-segmented__btn${
+										scope === 'product' ? ' is-active' : ''
+									}` }
+									onClick={ () => setScope( 'product' ) }
 								>
-									{ scope === 'variation'
-										? __( 'Show variations', 'catalogops' )
-										: __( 'Show products', 'catalogops' ) }
+									{ __( 'Products', 'catalogops' ) }
+								</button>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										scope === 'variation'
+											? ' is-active'
+											: ''
+									}` }
+									onClick={ () => setScope( 'variation' ) }
+								>
+									{ __( 'Variations', 'catalogops' ) }
 								</button>
 							</div>
 						</div>
+
+						<div className="catalogops-control-group">
+							<span className="catalogops-group-label">
+								{ __( 'Filter', 'catalogops' ) }
+							</span>
+							<div className="catalogops-filter-rows">
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field catalogops-field--multi">
+										<MultiSelect
+											label={ __(
+												'Category',
+												'catalogops'
+											) }
+											options={ categories }
+											value={ form.category }
+											onChange={ ( ids ) =>
+												setForm( {
+													...form,
+													category: ids,
+												} )
+											}
+											mode={ form.categoryMode }
+											onModeChange={ ( next ) =>
+												setForm( {
+													...form,
+													categoryMode: next,
+												} )
+											}
+										/>
+									</div>
+
+									<div className="catalogops-field catalogops-field--multi">
+										<MultiSelect
+											label={ __(
+												'Brand',
+												'catalogops'
+											) }
+											options={ brands.map( ( b ) => ( {
+												id: b,
+												name: b,
+											} ) ) }
+											value={ form.brand }
+											onChange={ ( ids ) =>
+												setForm( {
+													...form,
+													brand: ids,
+												} )
+											}
+											mode={ form.brandMode }
+											onModeChange={ ( next ) =>
+												setForm( {
+													...form,
+													brandMode: next,
+												} )
+											}
+										/>
+									</div>
+
+									<div className="catalogops-field catalogops-field--multi">
+										<MultiSelect
+											label={ __( 'Tag', 'catalogops' ) }
+											options={ tags }
+											value={ form.tag }
+											onChange={ ( ids ) =>
+												setForm( {
+													...form,
+													tag: ids,
+												} )
+											}
+											mode={ form.tagMode }
+											onModeChange={ ( next ) =>
+												setForm( {
+													...form,
+													tagMode: next,
+												} )
+											}
+										/>
+									</div>
+								</div>
+
+								{ /* Stock and price are the two conditions about an
+							     item's own numbers, so they sit together and last —
+							     after the terms that say *which* items, and after
+							     the attribute pair that only exists for variations. */ }
+								<div className="catalogops-filter-row">
+									{ 'variation' === scope &&
+										attributes.length > 0 && (
+											<div className="catalogops-field">
+												<label htmlFor="catalogops-attribute">
+													{ __(
+														'Attribute',
+														'catalogops'
+													) }
+												</label>
+												<select
+													id="catalogops-attribute"
+													value={ form.attribute }
+													onChange={ ( e ) =>
+														setForm( {
+															...form,
+															attribute:
+																e.target.value,
+															attributeValues: [],
+														} )
+													}
+												>
+													<option value="">
+														{ __(
+															'Any',
+															'catalogops'
+														) }
+													</option>
+													{ attributes.map( ( a ) => (
+														<option
+															key={ a.field }
+															value={ a.field }
+														>
+															{ a.label }
+														</option>
+													) ) }
+												</select>
+											</div>
+										) }
+
+									{ 'variation' === scope &&
+										attributes.length > 0 &&
+										selectedAttribute && (
+											<div className="catalogops-field catalogops-field--multi">
+												<MultiSelect
+													label={
+														'not_in' ===
+														form.attributeMode
+															? __(
+																	'Values (none if empty)',
+																	'catalogops'
+															  )
+															: __(
+																	'Values (any if empty)',
+																	'catalogops'
+															  )
+													}
+													options={
+														selectedAttribute.terms
+													}
+													value={
+														form.attributeValues
+													}
+													onChange={ ( ids ) =>
+														setForm( {
+															...form,
+															attributeValues:
+																ids,
+														} )
+													}
+													mode={ form.attributeMode }
+													onModeChange={ ( next ) =>
+														setForm( {
+															...form,
+															attributeMode: next,
+														} )
+													}
+												/>
+											</div>
+										) }
+
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-stock">
+											{ __( 'Stock', 'catalogops' ) }
+										</label>
+										<select
+											id="catalogops-stock"
+											value={ form.stockStatus }
+											onChange={ update( 'stockStatus' ) }
+										>
+											<option value="">
+												{ __( 'Any', 'catalogops' ) }
+											</option>
+											<option value="instock">
+												{ __(
+													'In stock',
+													'catalogops'
+												) }
+											</option>
+											<option value="outofstock">
+												{ __(
+													'Out of stock',
+													'catalogops'
+												) }
+											</option>
+										</select>
+									</div>
+
+									<div className="catalogops-field catalogops-field--price">
+										<label htmlFor="catalogops-price-min">
+											{ __(
+												'Price range',
+												'catalogops'
+											) }
+										</label>
+										<div className="catalogops-price-inputs">
+											<input
+												id="catalogops-price-min"
+												type="number"
+												placeholder={ __(
+													'Min',
+													'catalogops'
+												) }
+												aria-label={ __(
+													'Minimum price',
+													'catalogops'
+												) }
+												value={ form.priceMin }
+												onChange={ update(
+													'priceMin'
+												) }
+											/>
+											<input
+												id="catalogops-price-max"
+												type="number"
+												placeholder={ __(
+													'Max',
+													'catalogops'
+												) }
+												aria-label={ __(
+													'Maximum price',
+													'catalogops'
+												) }
+												value={ form.priceMax }
+												onChange={ update(
+													'priceMax'
+												) }
+											/>
+										</div>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<button
+										className="button button-primary"
+										onClick={ () => run( 1 ) }
+										disabled={ loading }
+									>
+										{ scope === 'variation'
+											? __(
+													'Show variations',
+													'catalogops'
+											  )
+											: __(
+													'Show products',
+													'catalogops'
+											  ) }
+									</button>
+								</div>
+							</div>
+						</div>
 					</div>
-				</div>
 
-				<hr className="catalogops-divider" />
+					<hr className="catalogops-divider" />
 
-				<div className="catalogops-results-bar">
-					<p className="catalogops-status">
-						{ loading && __( 'Loading…', 'catalogops' ) }
-						{ ! loading &&
-							scope === 'variation' &&
-							sprintf(
-								/* translators: %d: number of matching variations. */
-								__( '%d matching variations', 'catalogops' ),
-								total
-							) }
-						{ ! loading &&
-							scope !== 'variation' &&
-							sprintf(
-								/* translators: %d: number of matching products. */
-								__( '%d matching products', 'catalogops' ),
-								total
-							) }
-					</p>
-					<div className="catalogops-search">
-						<input
-							id="catalogops-sku"
-							type="search"
-							placeholder={ __(
-								'SKU, e.g. COPS-1234',
-								'catalogops'
-							) }
-							aria-label={ __( 'Find by SKU', 'catalogops' ) }
-							value={ form.sku }
-							onChange={ update( 'sku' ) }
-							onKeyDown={ ( e ) => e.key === 'Enter' && run( 1 ) }
-						/>
-						<button
-							className="button"
-							onClick={ () => run( 1 ) }
-							disabled={ loading }
-						>
-							{ __( 'Search', 'catalogops' ) }
-						</button>
+					<div className="catalogops-results-bar">
+						<p className="catalogops-status">
+							{ loading && __( 'Loading…', 'catalogops' ) }
+							{ ! loading &&
+								scope === 'variation' &&
+								sprintf(
+									/* translators: %d: number of matching variations. */
+									__(
+										'%d matching variations',
+										'catalogops'
+									),
+									total
+								) }
+							{ ! loading &&
+								scope !== 'variation' &&
+								sprintf(
+									/* translators: %d: number of matching products. */
+									__( '%d matching products', 'catalogops' ),
+									total
+								) }
+						</p>
+						<div className="catalogops-search">
+							<input
+								id="catalogops-sku"
+								type="search"
+								placeholder={ __(
+									'SKU, e.g. COPS-1234',
+									'catalogops'
+								) }
+								aria-label={ __( 'Find by SKU', 'catalogops' ) }
+								value={ form.sku }
+								onChange={ update( 'sku' ) }
+								onKeyDown={ ( e ) =>
+									e.key === 'Enter' && run( 1 )
+								}
+							/>
+							<button
+								className="button"
+								onClick={ () => run( 1 ) }
+								disabled={ loading }
+							>
+								{ __( 'Search', 'catalogops' ) }
+							</button>
+						</div>
 					</div>
-				</div>
 
-				{ error && (
-					<div className="notice notice-error">
-						<p>{ error }</p>
-					</div>
-				) }
+					{ error && (
+						<div className="notice notice-error">
+							<p>{ error }</p>
+						</div>
+					) }
 
-				{ ! loading && otherScope && (
-					<ScopeHint other={ otherScope } onSwitch={ setScope } />
-				) }
+					{ ! loading && otherScope && (
+						<ScopeHint other={ otherScope } onSwitch={ setScope } />
+					) }
 
-				{ /* On a catalogue of thousands the table shows ten and the pager
+					{ /* On a catalogue of thousands the table shows ten and the pager
 				     says "of 1859", which nobody is going to walk. Naming the
 				     window makes the table honest, and points at the control that
 				     answers a question about one product. */ }
-				{ ! loading && items.length > 0 && total > items.length && (
-					<p className="catalogops-table-caption">
-						{ sprintf(
-							/* translators: 1: first row shown, 2: last row shown, 3: total matches. */
-							__(
-								'Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one.',
-								'catalogops'
-							),
-							( page - 1 ) * PER_PAGE + 1,
-							( page - 1 ) * PER_PAGE + items.length,
-							total
-						) }
-					</p>
-				) }
+					{ ! loading && items.length > 0 && total > items.length && (
+						<p className="catalogops-table-caption">
+							{ sprintf(
+								/* translators: 1: first row shown, 2: last row shown, 3: total matches. */
+								__(
+									'Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one.',
+									'catalogops'
+								),
+								( page - 1 ) * PER_PAGE + 1,
+								( page - 1 ) * PER_PAGE + items.length,
+								total
+							) }
+						</p>
+					) }
 
-				<table
-					className={ `wp-list-table widefat fixed striped${
-						loading ? ' catalogops-loading-dim' : ''
-					}` }
-				>
-					<thead>
-						<tr>
-							{ /* SKU leads, as it does in the preview and the audit
+					<table
+						className={ `wp-list-table widefat fixed striped${
+							loading ? ' catalogops-loading-dim' : ''
+						}` }
+					>
+						<thead>
+							<tr>
+								{ /* SKU leads, as it does in the preview and the audit
 							     log: it is how a product is named out loud. The id
 							     is addressing, not information. Category, brand and
 							     tags earn their columns by being filterable —
 							     filtering on something the results do not show is a
 							     guess — and they run in the order the filter's own
 							     controls do. */ }
-							<th>{ __( 'SKU', 'catalogops' ) }</th>
-							<th>{ __( 'Name', 'catalogops' ) }</th>
-							<th>{ __( 'Categories', 'catalogops' ) }</th>
-							<th>{ __( 'Brand', 'catalogops' ) }</th>
-							<th>{ __( 'Tags', 'catalogops' ) }</th>
-							<th className="catalogops-num">
-								{ __( 'Cost', 'catalogops' ) }
-							</th>
-							<th className="catalogops-num">
-								{ __( 'Price', 'catalogops' ) }
-							</th>
-							<th className="catalogops-num">
-								{ __( 'Sale price', 'catalogops' ) }
-							</th>
-							<th>{ __( 'Stock', 'catalogops' ) }</th>
-							<th className="catalogops-num">
-								{ __( 'Qty', 'catalogops' ) }
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						{ items.length === 0 && ! loading ? (
-							<tr>
-								<td colSpan="10">
-									{ __(
-										'No items match this filter.',
-										'catalogops'
-									) }
-								</td>
+								<th>{ __( 'SKU', 'catalogops' ) }</th>
+								<th>{ __( 'Name', 'catalogops' ) }</th>
+								<th>{ __( 'Categories', 'catalogops' ) }</th>
+								<th>{ __( 'Brand', 'catalogops' ) }</th>
+								<th>{ __( 'Tags', 'catalogops' ) }</th>
+								<th className="catalogops-num">
+									{ __( 'Cost', 'catalogops' ) }
+								</th>
+								<th className="catalogops-num">
+									{ __( 'Price', 'catalogops' ) }
+								</th>
+								<th className="catalogops-num">
+									{ __( 'Sale price', 'catalogops' ) }
+								</th>
+								<th>{ __( 'Stock', 'catalogops' ) }</th>
+								<th className="catalogops-num">
+									{ __( 'Qty', 'catalogops' ) }
+								</th>
 							</tr>
-						) : (
-							items.map( ( item ) => (
-								<tr key={ item.id }>
-									<td>{ item.sku }</td>
-									<td>{ item.name }</td>
-									<td>
-										{ item.categories &&
-										item.categories.length > 0 ? (
-											item.categories.join( ', ' )
-										) : (
-											<span className="catalogops-muted">
-												—
-											</span>
+						</thead>
+						<tbody>
+							{ items.length === 0 && ! loading ? (
+								<tr>
+									<td colSpan="10">
+										{ __(
+											'No items match this filter.',
+											'catalogops'
 										) }
-									</td>
-									<td>
-										{ item.brand || (
-											<span className="catalogops-muted">
-												—
-											</span>
-										) }
-									</td>
-									<td>
-										{ item.tags && item.tags.length > 0 ? (
-											item.tags.join( ', ' )
-										) : (
-											<span className="catalogops-muted">
-												—
-											</span>
-										) }
-									</td>
-									<td className="catalogops-num">
-										{ item.cost === null ||
-										item.cost === undefined ? (
-											<span className="catalogops-muted">
-												—
-											</span>
-										) : (
-											item.cost
-										) }
-									</td>
-									<td className="catalogops-num">
-										{ item.price }
-									</td>
-									<td className="catalogops-num">
-										{ item.sale_price === null ||
-										item.sale_price === undefined ? (
-											<span className="catalogops-muted">
-												—
-											</span>
-										) : (
-											item.sale_price
-										) }
-									</td>
-									<td>
-										<span
-											className={ `catalogops-badge catalogops-badge--${ stockBadge(
-												item.stock_status
-											) }` }
-										>
-											{ item.stock_status }
-										</span>
-									</td>
-									<td className="catalogops-num">
-										{ item.stock_quantity }
 									</td>
 								</tr>
-							) )
-						) }
-					</tbody>
-				</table>
+							) : (
+								items.map( ( item ) => (
+									<tr key={ item.id }>
+										<td>{ item.sku }</td>
+										<td>{ item.name }</td>
+										<td>
+											{ item.categories &&
+											item.categories.length > 0 ? (
+												item.categories.join( ', ' )
+											) : (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) }
+										</td>
+										<td>
+											{ item.brand || (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) }
+										</td>
+										<td>
+											{ item.tags &&
+											item.tags.length > 0 ? (
+												item.tags.join( ', ' )
+											) : (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) }
+										</td>
+										<td className="catalogops-num">
+											{ item.cost === null ||
+											item.cost === undefined ? (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) : (
+												item.cost
+											) }
+										</td>
+										<td className="catalogops-num">
+											{ item.price }
+										</td>
+										<td className="catalogops-num">
+											{ item.sale_price === null ||
+											item.sale_price === undefined ? (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) : (
+												item.sale_price
+											) }
+										</td>
+										<td>
+											<span
+												className={ `catalogops-badge catalogops-badge--${ stockBadge(
+													item.stock_status
+												) }` }
+											>
+												{ item.stock_status }
+											</span>
+										</td>
+										<td className="catalogops-num">
+											{ item.stock_quantity }
+										</td>
+									</tr>
+								) )
+							) }
+						</tbody>
+					</table>
 
-				<Pagination
-					page={ page }
-					pages={ pages }
-					busy={ loading }
-					onPage={ run }
+					<Pagination
+						page={ page }
+						pages={ pages }
+						busy={ loading }
+						onPage={ run }
+					/>
+				</div>
+
+				<BulkEdit
+					filter={ appliedFilter }
+					resetKey={ resetKey }
+					onDone={ onApplyDone }
+					onScheduleCreated={ onScheduleCreated }
+					backupAck={ onboarding ? onboarding.backup_ack : true }
+					onBackupAck={ () =>
+						setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) )
+					}
+					retentionDays={
+						onboarding ? onboarding.retention_days : 30
+					}
 				/>
+
+				<Schedules
+					refreshKey={ schedulesKey }
+					onRan={ refreshAll }
+					onFiringSoon={ setFiringSoon }
+				/>
+
+				<History
+					refreshKey={ historyKey }
+					onChanged={ refreshAll }
+					firingSoon={ firingSoon }
+				/>
+
+				<RetentionSetting />
 			</div>
-
-			<BulkEdit
-				filter={ appliedFilter }
-				resetKey={ resetKey }
-				onDone={ onApplyDone }
-				onScheduleCreated={ onScheduleCreated }
-				backupAck={ onboarding ? onboarding.backup_ack : true }
-				onBackupAck={ () =>
-					setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) )
-				}
-				retentionDays={ onboarding ? onboarding.retention_days : 30 }
-			/>
-
-			<Schedules
-				refreshKey={ schedulesKey }
-				onRan={ refreshAll }
-				onFiringSoon={ setFiringSoon }
-			/>
-
-			<History
-				refreshKey={ historyKey }
-				onChanged={ refreshAll }
-				firingSoon={ firingSoon }
-			/>
-
-			<RetentionSetting />
-		</div>
+		</OnboardingContext.Provider>
 	);
 }
 
