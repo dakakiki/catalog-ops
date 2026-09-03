@@ -2985,12 +2985,16 @@ function UndoPanel( { op, onDone } ) {
 	const [ sku, setSku ] = useState( '' );
 	const [ confirming, setConfirming ] = useState( false );
 	const [ backupChecked, setBackupChecked ] = useState( false );
+	const [ loading, setLoading ] = useState( true );
 	const onboarding = useContext( OnboardingContext );
 
 	useOperationPoll( operation, setOperation, onDone );
 
+	// Its own flag, not `busy`: busy also covers starting the undo, and the table
+	// must not say "Loading…" while the run it is about to launch is being queued.
 	const loadPreview = useCallback(
 		( withPolicy, atPage, forSku ) => {
+			setLoading( true );
 			setBusy( true );
 			setError( '' );
 			apiFetch( {
@@ -3005,7 +3009,10 @@ function UndoPanel( { op, onDone } ) {
 			} )
 				.then( setPreview )
 				.catch( ( err ) => setError( err.message ) )
-				.finally( () => setBusy( false ) );
+				.finally( () => {
+					setBusy( false );
+					setLoading( false );
+				} );
 		},
 		[ op.id ]
 	);
@@ -3115,6 +3122,17 @@ function UndoPanel( { op, onDone } ) {
 				</div>
 			) }
 
+			{ /* Outside the panel below, not inside it. The panel only exists once a
+			     preview has arrived, so a notice placed within it could never appear
+			     on the first open — which is the one time the wait is long enough to
+			     need explaining, because the server is reading each object's current
+			     value to work out what has drifted. */ }
+			{ loading && ! operation && (
+				<p className="catalogops-loading">
+					{ __( 'Loading…', 'catalogops' ) }
+				</p>
+			) }
+
 			{ preview && ! operation && (
 				<div className="catalogops-preview">
 					<p>
@@ -3187,7 +3205,7 @@ function UndoPanel( { op, onDone } ) {
 							</tr>
 						</thead>
 						<tbody>
-							{ items.length === 0 && ! busy && (
+							{ items.length === 0 && ! loading && (
 								<tr>
 									<td colSpan="5">
 										{ sku === ''
