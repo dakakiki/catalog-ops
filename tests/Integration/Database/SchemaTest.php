@@ -92,6 +92,21 @@ final class SchemaTest extends WP_UnitTestCase {
 		);
 	}
 
+	/**
+	 * Pins migration 8: a fresh install leaves `schedule_id` on the operations
+	 * table, so a run can name the schedule that made it. Before it, the only link
+	 * ran the other way and one row deep — `schedules.last_op_id`, overwritten on
+	 * every fire — so undoing any run but the newest could not find the schedule
+	 * that was about to apply the change again.
+	 */
+	public function test_the_operations_table_records_the_schedule_that_ran_it(): void {
+		$this->schema->install();
+
+		$this->assertTrue(
+			$this->column_exists( $this->schema->operations_table(), 'schedule_id' )
+		);
+	}
+
 	public function test_maybe_upgrade_installs_when_behind(): void {
 		$this->assertFalse( $this->table_exists( $this->schema->changes_table() ) );
 

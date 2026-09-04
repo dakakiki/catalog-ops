@@ -147,7 +147,8 @@ final class Schedule_Runner {
 				$schedule->actions(),
 				$schedule->mode,
 				Operation_Source::SCHEDULE,
-				$schedule->user_id
+				$schedule->user_id,
+				$schedule->id
 			);
 
 			$this->service->queue( $op_id );

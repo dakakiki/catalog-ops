@@ -54,6 +54,7 @@ final class Operations {
 	 * @param Operation_Mode                          $mode         Write strategy.
 	 * @param Operation_Source                        $source          Origin.
 	 * @param int                                     $user_id         Owner user id.
+	 * @param int|null                                $schedule_id     Schedule that spawned this run.
 	 * @param int|null                                $parent_op_id    Parent operation, for undo.
 	 * @param Conflict_Policy|null                    $conflict_policy Drift policy (undo only).
 	 * @return int The new operation id.
@@ -64,6 +65,7 @@ final class Operations {
 		Operation_Mode $mode,
 		Operation_Source $source,
 		int $user_id,
+		?int $schedule_id = null,
 		?int $parent_op_id = null,
 		?Conflict_Policy $conflict_policy = null
 	): int {
@@ -74,6 +76,7 @@ final class Operations {
 				'user_id'         => $user_id,
 				'status'          => Operation_Status::DRAFT->value,
 				'source'          => $source->value,
+				'schedule_id'     => $schedule_id,
 				'parent_op_id'    => $parent_op_id,
 				'filter_json'     => (string) wp_json_encode( $filter->to_array() ),
 				'actions_json'    => (string) wp_json_encode( Action_Factory::list_to_array( $actions ) ),
@@ -84,7 +87,7 @@ final class Operations {
 				'batch_size'      => 0,
 				'conflict_policy' => null === $conflict_policy ? null : $conflict_policy->value,
 			),
-			array( '%s', '%d', '%s', '%s', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s' )
+			array( '%s', '%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s' )
 		);
 
 		return (int) $this->wpdb->insert_id;
@@ -354,6 +357,7 @@ final class Operations {
 			Operation_Mode::from( (string) $row['mode'] ),
 			(int) $row['user_id'],
 			null === $row['parent_op_id'] ? null : (int) $row['parent_op_id'],
+			empty( $row['schedule_id'] ) ? null : (int) $row['schedule_id'],
 			is_array( $filter_data ) ? $filter_data : array(),
 			is_array( $actions_data ) ? $actions_data : array(),
 			(int) $row['target_count'],
