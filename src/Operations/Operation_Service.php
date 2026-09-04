@@ -109,11 +109,42 @@ final class Operation_Service {
 	private Evaluator $evaluator;
 
 	/**
+	 * Schedules repository, for stopping a schedule whose run has been undone.
+	 *
+	 * @var Schedules|null
+	 */
+	private ?Schedules $schedules;
+
+	/**
 	 * How many objects the preview shows worked out in full. Ten is a sample, not
 	 * a set: enough to see the shape of the change, few enough to load quickly and
 	 * to read without scrolling. The search covers "but I want to see that one".
 	 */
 	private const SAMPLE_SIZE = 10;
+
+	/**
+	 * Why a schedule stopped when a user undid one of its runs.
+	 *
+	 * Stored as it is written here rather than translated at render time, and in
+	 * English like the supervisor's own reasons ({@see Schedule_Runner::pause()},
+	 * which records an exception message): the column is a record of what happened,
+	 * and the locale of whoever happened to press Undo is not part of that. Well
+	 * inside the column's 191 characters.
+	 */
+	private const UNDONE_PAUSE_REASON = 'A user undid this run, so the schedule was paused instead of being left to apply the same change again.';
+
+	/**
+	 * Why a schedule stopped when a user stopped one of its runs.
+	 *
+	 * Deliberately says nothing about the stopped run still being resumable, though
+	 * it almost always is. {@see Chunk_Runner::run()} reads the operation's status
+	 * once, on entry, and {@see Chunk_Runner::finalize()} writes COMPLETED without
+	 * looking again — so a Stop that lands while the last chunk is in flight settles
+	 * the run as completed anyway, with nothing left to resume. The window is small
+	 * and the outcome is benign, but a reason recorded on a schedule outlives it,
+	 * and a sentence that is occasionally false is worse than one that says less.
+	 */
+	private const STOPPED_PAUSE_REASON = 'A user stopped this run, so the schedule was paused instead of being left to start the same work again on its next tick.';
 
 	/**
 	 * Build the service.
@@ -128,6 +159,15 @@ final class Operation_Service {
 	 *                                        (unlicensed development and tests).
 	 * @param Write_Rules|null    $rules      Applicability rules; the default set is
 	 *                                        stateless, so it is built when omitted.
+	 * @param Schedules|null      $schedules  Schedules repository, so undoing a
+	 *                                        scheduled run can stop the schedule that
+	 *                                        would re-apply it. Unlike the two above,
+	 *                                        omitting it is not a neutral default: the
+	 *                                        pause simply does not happen. The
+	 *                                        container always supplies it; it is
+	 *                                        optional only so the many tests that
+	 *                                        never involve a schedule need not build
+	 *                                        one.
 	 */
 	public function __construct(
 		Query_Engine $engine,
@@ -137,7 +177,8 @@ final class Operation_Service {
 		Lock $lock,
 		Operation_Scheduler $scheduler,
 		?License $license = null,
-		?Write_Rules $rules = null
+		?Write_Rules $rules = null,
+		?Schedules $schedules = null
 	) {
 		$this->engine     = $engine;
 		$this->operations = $operations;
@@ -147,6 +188,7 @@ final class Operation_Service {
 		$this->scheduler  = $scheduler;
 		$this->license    = $license ?? License::unlimited();
 		$this->rules      = $rules ?? new Write_Rules();
+		$this->schedules  = $schedules;
 		$this->evaluator  = new Evaluator( $providers, $this->rules );
 	}
 
@@ -158,6 +200,7 @@ final class Operation_Service {
 	 * @param Operation_Mode                          $mode    Write strategy.
 	 * @param Operation_Source                        $source  Origin.
 	 * @param int                                     $user_id Owner user id.
+	 * @param int|null                                $schedule_id Schedule that spawned this run, or null.
 	 * @return int The new operation id.
 	 *
 	 * @throws InvalidArgumentException  When an action targets a field no provider handles.
@@ -168,7 +211,8 @@ final class Operation_Service {
 		array $actions,
 		Operation_Mode $mode,
 		Operation_Source $source,
-		int $user_id
+		int $user_id,
+		?int $schedule_id = null
 	): int {
 		// The filter first: it decides *what* is written, so a filter that cannot be
 		// answered exactly must not get as far as a draft row. The engine refuses the
@@ -180,7 +224,7 @@ final class Operation_Service {
 		$this->assert_formulas_allowed( $actions );
 		$this->assert_values_writable( $actions );
 
-		return $this->operations->create( $filter, $actions, $mode, $source, $user_id );
+		return $this->operations->create( $filter, $actions, $mode, $source, $user_id, $schedule_id );
 	}
 
 	/**
@@ -396,15 +440,92 @@ final class Operation_Service {
 			throw new InvalidArgumentException( 'An undo cannot itself be undone.' );
 		}
 
-		return $this->operations->create(
+		$undo_id = $this->operations->create(
 			new Filter(),
 			array(),
 			$parent->mode,
 			Operation_Source::UNDO,
 			$user_id,
+			null,
 			$parent_op_id,
 			$policy
 		);
+
+		$this->pause_parent_schedule( $parent, self::UNDONE_PAUSE_REASON );
+
+		return $undo_id;
+	}
+
+	/**
+	 * Stop the schedule that produced an operation the user has just rejected — by
+	 * undoing it ({@see undo()}) or by stopping it part-way ({@see cancel()}).
+	 *
+	 * Both are the same sentence from the user: not this run. Neither meant anything
+	 * to the schedule, which stayed active with `next_run` untouched.
+	 *
+	 * After an undo, the next tick rebuilt the same operation from the same stored
+	 * template, re-resolved the filter — which has no notion of "already changed by
+	 * an earlier fire" — and wrote the reverted values straight back. The revert
+	 * survived a single tick, and because {@see Notifier} mails only on a scheduled
+	 * source, the one message in the sequence was the one announcing the run that
+	 * overwrote it.
+	 *
+	 * After a stop it is worse in a quieter way, and it was seen live: a run stopped
+	 * at 20,500 of 21,366 leaves its remaining rows frozen and resumable, and
+	 * {@see Operations::active_excluding()} does not count a paused operation, so the
+	 * schedule fired again thirty-seven minutes later and began a second full pass
+	 * over the same objects. Two half-finished runs from one schedule, and the user
+	 * had already said stop.
+	 *
+	 * Paused, not completed. COMPLETED is how a spent one-shot ends, and
+	 * {@see Schedule_Runner::run_one()} refuses it for ever — so completing a
+	 * recurring schedule here would permanently take away the user's ability to start
+	 * it again, a large consequence for what may be a one-off correction. Paused is
+	 * the reversible shape of the same stop: the table says why, and Resume is one
+	 * click, already warned when it would fire immediately.
+	 *
+	 * Three schedules are left exactly as they are. A completed one cannot fire
+	 * again, and moving it to paused would *grant* it a Run now it had spent. A
+	 * paused one is not going to fire either, and overwriting its reason would throw
+	 * away a diagnosis the supervisor recorded in order to say something the history
+	 * already shows. A deleted one is gone; the runs it made keep its id, which
+	 * {@see \CatalogOps\Database\Migrations\Add_Operation_Schedule_Column} explains.
+	 *
+	 * Contained, because stopping and undoing are the things the user actually asked
+	 * for. Both callers run this after their own work has landed, and a failure here
+	 * must not be able to lose it — the same rule {@see Schedule_Runner::fire()}
+	 * follows in the other direction, where bookkeeping that fails is not allowed to
+	 * delete an operation that is already queued.
+	 *
+	 * The reason is passed in rather than derived, because the two callers are not
+	 * telling the reader the same thing and the schedules table is where they will
+	 * read it.
+	 *
+	 * @param Operation $operation The operation the user rejected.
+	 * @param string    $reason    What to record on the schedule, under 191 characters.
+	 */
+	private function pause_parent_schedule( Operation $operation, string $reason ): void {
+		if ( null === $this->schedules || null === $operation->schedule_id ) {
+			return;
+		}
+
+		try {
+			$schedule = $this->schedules->find( $operation->schedule_id );
+
+			if ( null === $schedule || Schedule_Status::ACTIVE !== $schedule->status ) {
+				return;
+			}
+
+			$this->schedules->set_status(
+				$schedule->id,
+				Schedule_Status::PAUSED,
+				$reason
+			);
+		} catch ( Throwable $e ) {
+			// Deliberately swallowed; see the note above. The schedules screen is the
+			// source of truth for whether the pause stuck, and it is one click away.
+			return;
+		}
 	}
 
 	/**
@@ -425,7 +546,7 @@ final class Operation_Service {
 	 * @param int             $per_page     Rows per page.
 	 * @param int             $page         1-based page number.
 	 * @param string          $sku          When non-empty, only objects matching this SKU.
-	 * @return array{parent_op_id: int, total: int, matched: int, page: int, per_page: int, conflict_policy: string, items: list<array{id: int, sku: string, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
+	 * @return array{parent_op_id: int, total: int, matched: int, page: int, per_page: int, conflict_policy: string, schedule: array{id: int, name: string}|null, items: list<array{id: int, sku: string, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
 	 *
 	 * @throws InvalidArgumentException When the parent operation is missing.
 	 * @throws License_Limited          When undo is used without a paid plan.
@@ -493,7 +614,42 @@ final class Operation_Service {
 			'page'            => $page,
 			'per_page'        => $per_page,
 			'conflict_policy' => $policy->value,
+			'schedule'        => $this->live_schedule_for( $parent ),
 			'items'           => $items,
+		);
+	}
+
+	/**
+	 * The schedule an operation came from, when there is one and it is still live.
+	 *
+	 * Answered here rather than on the history rows.
+	 * {@see \CatalogOps\Rest\Operations_Controller::to_array()} shapes every row of a
+	 * paged list, so looking a schedule up there would be a query per row to serve a
+	 * sentence that appears on one panel. The undo preview is fetched once, when the
+	 * user opens the very thing that needs it.
+	 *
+	 * Only an ACTIVE schedule is reported, because the sentence this feeds is a
+	 * promise that something is about to be stopped. A paused or completed one is not
+	 * going to fire, {@see pause_parent_schedule()} leaves it alone, and naming it
+	 * would raise a worry the user then has to go and dismiss.
+	 *
+	 * @param Operation $parent_operation The operation being previewed for undo.
+	 * @return array{id: int, name: string}|null
+	 */
+	private function live_schedule_for( Operation $parent_operation ): ?array {
+		if ( null === $this->schedules || null === $parent_operation->schedule_id ) {
+			return null;
+		}
+
+		$schedule = $this->schedules->find( $parent_operation->schedule_id );
+
+		if ( null === $schedule || Schedule_Status::ACTIVE !== $schedule->status ) {
+			return null;
+		}
+
+		return array(
+			'id'   => $schedule->id,
+			'name' => $schedule->name,
 		);
 	}
 
@@ -807,6 +963,13 @@ final class Operation_Service {
 	 * Cancel a running or queued operation: stop scheduling, pause it, and free
 	 * the lock. Already-applied changes remain (undo is a separate M3 operation).
 	 *
+	 * A schedule that produced this run is paused with it. Stopping was the user
+	 * saying "not this", and leaving the schedule running answered them by starting
+	 * the same work again on the next tick — see {@see pause_parent_schedule()},
+	 * which also explains why it is paused rather than completed. It happens last,
+	 * so a failure to reach the schedules table cannot leave a run that is still
+	 * writing: the stop itself is the part that must not fail.
+	 *
 	 * @param int $op_id Operation id.
 	 */
 	public function cancel( int $op_id ): void {
@@ -814,6 +977,57 @@ final class Operation_Service {
 
 		if ( null === $operation || ! $operation->status->is_active() ) {
 			return;
+		}
+
+		$this->scheduler->cancel_operation( $op_id );
+		$this->operations->set_status( $op_id, Operation_Status::PAUSED );
+		$this->lock->release( $op_id );
+
+		$this->pause_parent_schedule( $operation, self::STOPPED_PAUSE_REASON );
+	}
+
+	/**
+	 * Take a dead run back: settle it and free the write lock, leaving its schedule
+	 * running.
+	 *
+	 * Mechanically this is {@see cancel()}. It exists as its own method because the
+	 * two are not the same sentence, and the difference is the whole of the rule the
+	 * owner set down: a user's decision stops a schedule, a machine's failure must
+	 * not. Stopping a run that is working says "not this change"; taking over one
+	 * whose process died says "the machine dropped it, carry on" — and an hourly
+	 * schedule left paused by a server restart means someone has to get up in the
+	 * night to start it again, which is the opposite of what scheduling is for.
+	 *
+	 * Routed apart rather than branched inside `cancel()` so the difference cannot be
+	 * lost to a later edit: the two paths are named, tested in a pair, and the one
+	 * that must not touch a schedule has no code that could.
+	 *
+	 * The refusal is the point of the guard. `is_stalled` reaches here from the
+	 * client, which learned it from a poll that may be seconds old, and a run that
+	 * has since drawn breath must not be taken from a live writer on the strength of
+	 * a stale screen. So the server measures again, at the instant of the act,
+	 * against {@see Watchdog::is_stalled()} — the same test the supervisor uses. A
+	 * run that has recovered is refused, and the user is told to stop it instead,
+	 * which is the honest control for a run that is working.
+	 *
+	 * @param int $op_id Operation id.
+	 *
+	 * @throws InvalidArgumentException When the operation is missing, not running, or
+	 *                                  still reporting progress.
+	 */
+	public function take_over( int $op_id ): void {
+		$operation = $this->operations->find( $op_id );
+
+		if ( null === $operation ) {
+			throw new InvalidArgumentException( 'Operation not found.' );
+		}
+
+		if ( ! $operation->status->is_active() ) {
+			throw new InvalidArgumentException( 'This operation is not running.' );
+		}
+
+		if ( ! Watchdog::is_stalled( $operation ) ) {
+			throw new InvalidArgumentException( 'This run is still reporting progress; stop it instead.' );
 		}
 
 		$this->scheduler->cancel_operation( $op_id );
