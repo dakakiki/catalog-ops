@@ -860,8 +860,12 @@ would otherwise stretch the row.
 	color: var(--co-red);
 }
 
+/* Amber holds. A run that has stopped reporting belongs here rather than with the
+   indigo in-progress states: it is not progressing, and it is not yet failed —
+   the watchdog turns it red on its next pass. */
 .catalogops-status-badge.is-reverted,
-.catalogops-status-badge.is-paused {
+.catalogops-status-badge.is-paused,
+.catalogops-status-badge.is-stalled {
 	background: #fcf5e6;
 	color: var(--co-amber);
 }

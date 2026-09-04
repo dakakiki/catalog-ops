@@ -150,6 +150,33 @@ const HISTORY_POLL_IDLE_MS = 8000;
 const POLL_DUE_MS = 2000;
 
 /**
+ * How long a run may go without reporting before the history mentions it.
+ *
+ * Chunks land seconds apart, so a minute of silence is already out of the
+ * ordinary — but it is not yet news. The server decides when a run is genuinely
+ * not responding; this only decides when it is worth saying that nothing has
+ * happened for a while, which is a smaller claim and belongs to the screen.
+ */
+const QUIET_AFTER_SECONDS = 60;
+
+/**
+ * A number of seconds as a person would say it: "48s", "1m 20s".
+ *
+ * Minutes and seconds only. Anything longer than an hour without a heartbeat is
+ * not a duration the reader is measuring any more, and by then the row says the
+ * run is not responding instead.
+ *
+ * @param {number} seconds How long it has been quiet.
+ * @return {string} The duration, spoken.
+ */
+const quietFor = ( seconds ) => {
+	const whole = Math.max( 0, Math.floor( seconds || 0 ) );
+	const mins = Math.floor( whole / 60 );
+
+	return mins > 0 ? `${ mins }m ${ whole % 60 }s` : `${ whole }s`;
+};
+
+/**
  * Plan capabilities for the current site, surfaced by the server via
  * wp_localize_script (see Admin_Page). Missing config fails open — everything
  * allowed — because the REST layer enforces the real limits and returns 402; the
@@ -3319,10 +3346,31 @@ function UndoPanel( { op, onDone } ) {
 							</p>
 							<p>
 								{ __(
-									'It runs in the background and can be stopped from the history while it works. Undoing cannot itself be undone.',
+									'It runs in the background and can be paused from the history while it works. Undoing cannot itself be undone.',
 									'catalogops'
 								) }
 							</p>
+							{ /* Only present when the server found a schedule behind this
+							     run that is still active. Undoing pauses it, and saying so
+							     here is the only place the two facts meet: without it the
+							     next tick rebuilds the same operation from the same stored
+							     template and writes back exactly what is being reverted,
+							     and the schedules card is a different screen that would
+							     contradict the history long after the change was already
+							     back. */ }
+							{ preview.schedule && (
+								<p>
+									{ sprintf(
+										/* translators: %s: the schedule's name, or #id when it has none. */
+										__(
+											'This run came from the schedule “%s”, which is still active. Undoing pauses it, so it cannot put the change back — resume it from Schedules whenever you want it running again.',
+											'catalogops'
+										),
+										preview.schedule.name ||
+											`#${ preview.schedule.id }`
+									) }
+								</p>
+							) }
 							<BackupReminder
 								checked={ backupChecked }
 								onCheck={ setBackupChecked }
@@ -3427,8 +3475,11 @@ function IconButton( {
  * @param {Object}   props.op        The operation.
  * @param {Function} props.onChanged Called when an undo or delete from this row
  *                                   finishes, so the list reloads.
+ * @param {boolean}  props.offline   Whether the last poll failed, in which case
+ *                                   the row's numbers are stale and its controls
+ *                                   are withheld rather than shown as usable.
  */
-function OperationRow( { op, onChanged } ) {
+function OperationRow( { op, onChanged, offline = false } ) {
 	const [ open, setOpen ] = useState( null ); // 'changes' | 'undo' | 'delete' | null
 	const [ busy, setBusy ] = useState( false );
 	const [ error, setError ] = useState( '' );
@@ -3439,6 +3490,23 @@ function OperationRow( { op, onChanged } ) {
 	// Deleting mid-write would strand the operation's remaining chunks, so the
 	// control is closed off until the run is cancelled.
 	const stillRunning = op.status === 'queued' || op.status === 'running';
+
+	// One control, one result — a paused run with its frozen list intact — under
+	// two names, because the user is not doing the same thing. Pausing a run that is
+	// working is a considered interruption; stopping one that has died is how you
+	// take it back, and it is the only way to, since a stalled run still holds the
+	// write lock and Resume is therefore not offered. The stalled notice below tells
+	// them to press Stop, so the button has to say Stop.
+	const stopping = op.is_stalled;
+
+	// Silence worth mentioning, well short of silence worth alarming about. Chunks
+	// land seconds apart, so a minute without one is already unusual — but saying so
+	// quietly, with a number that grows, is a different act from declaring the run
+	// dead, and the reader can tell the two apart without being told which is which.
+	const quiet =
+		! op.is_stalled &&
+		typeof op.quiet_seconds === 'number' &&
+		op.quiet_seconds >= QUIET_AFTER_SECONDS;
 
 	const confirmDelete = () => {
 		setBusy( true );
@@ -3479,7 +3547,12 @@ function OperationRow( { op, onChanged } ) {
 		setBusy( true );
 		setError( '' );
 		apiFetch( {
-			path: `/catalogops/v1/operations/${ op.id }/cancel`,
+			// Two routes, because they mean two different things to the schedule
+			// behind the run: stopping a working run is the user's decision and
+			// pauses it, taking back a dead one is a machine failure and must not.
+			path: `/catalogops/v1/operations/${ op.id }/${
+				stopping ? 'take-over' : 'cancel'
+			}`,
 			method: 'POST',
 		} )
 			.then( () => {
@@ -3495,10 +3568,18 @@ function OperationRow( { op, onChanged } ) {
 			<tr>
 				<td>{ op.source }</td>
 				<td>
+					{ /* A run whose host died stays `running` with a progress bar that
+					     has simply stopped — the same badge and the same numbers as a
+					     slow one. The server decides which it is, from the threshold the
+					     watchdog itself uses, so the two can never disagree. */ }
 					<span
-						className={ `catalogops-badge catalogops-status-badge is-${ op.status }` }
+						className={ `catalogops-badge catalogops-status-badge is-${
+							op.is_stalled ? 'stalled' : op.status
+						}` }
 					>
-						{ op.status }
+						{ op.is_stalled
+							? __( 'Not responding', 'catalogops' )
+							: op.status }
 					</span>
 				</td>
 				<td className="catalogops-num">
@@ -3524,7 +3605,12 @@ function OperationRow( { op, onChanged } ) {
 					) }
 				</td>
 				<td>{ op.user_name || '—' }</td>
-				<td>{ op.created_at }</td>
+				{ /* The site's clock, not GMT — and the fallback keeps an older
+				     payload readable rather than blank. The schedules card next to
+				     this one has always shown local time, so a raw GMT stamp here
+				     did not read as a timezone question: it read as the run having
+				     fired at the wrong hour. */ }
+				<td>{ op.created_at_local || op.created_at }</td>
 				<td className="catalogops-cell--actions">
 					<div className="catalogops-actions">
 						<IconButton
@@ -3545,11 +3631,16 @@ function OperationRow( { op, onChanged } ) {
 						) }
 						{ stillRunning && (
 							<IconButton
-								icon="controls-pause"
+								icon={ stopping ? 'dismiss' : 'controls-pause' }
 								variant="pause"
-								label={ __( 'Stop this run', 'catalogops' ) }
+								label={
+									stopping
+										? __( 'Stop this run', 'catalogops' )
+										: __( 'Pause this run', 'catalogops' )
+								}
 								onClick={ () => toggle( 'cancel' ) }
 								isActive={ open === 'cancel' }
+								disabled={ offline }
 							/>
 						) }
 						{ /* Only when there is frozen work left and nothing is
@@ -3563,6 +3654,7 @@ function OperationRow( { op, onChanged } ) {
 								label={ __( 'Resume this run', 'catalogops' ) }
 								onClick={ () => toggle( 'resume' ) }
 								isActive={ open === 'resume' }
+								disabled={ offline }
 							/>
 						) }
 						<IconButton
@@ -3573,18 +3665,50 @@ function OperationRow( { op, onChanged } ) {
 							label={
 								stillRunning
 									? __(
-											'Stop the run before deleting it',
+											'Pause the run before deleting it',
 											'catalogops'
 									  )
 									: __( 'Delete from history', 'catalogops' )
 							}
 							onClick={ () => toggle( 'delete' ) }
 							isActive={ open === 'delete' }
-							disabled={ stillRunning }
+							disabled={ stillRunning || offline }
 						/>
 					</div>
 				</td>
 			</tr>
+			{ /* Its own full-width row, never a cell. Put in the Status column this
+			     text pushed Progress, By, Created and Actions into a narrow strip and
+			     wrapped the icon buttons one under another — a table that reflows
+			     because one row has something to say is worse than the silence it
+			     replaced. Always visible rather than behind a toggle: a run nobody is
+			     writing is not a detail to go looking for. */ }
+			{ ( op.is_stalled || quiet ) && (
+				<tr className="catalogops-detail">
+					<td colSpan="6">
+						<p className="catalogops-muted">
+							{ op.is_stalled
+								? sprintf(
+										/* translators: 1: how long it has been quiet, e.g. "12m 4s". 2: number of items still frozen and unwritten. */
+										__(
+											'Nothing has written this for %1$s. It is picked up again automatically, and its schedule keeps running — or Stop it to take over, which keeps the %2$d frozen items for Resume to finish.',
+											'catalogops'
+										),
+										quietFor( op.quiet_seconds ),
+										op.pending
+								  )
+								: sprintf(
+										/* translators: %s: how long it has been quiet, e.g. "1m 20s". */
+										__(
+											'No progress for %s. If it does not carry on by itself, it is picked up automatically.',
+											'catalogops'
+										),
+										quietFor( op.quiet_seconds )
+								  ) }
+						</p>
+					</td>
+				</tr>
+			) }
 			{ open && (
 				<tr className="catalogops-detail">
 					<td colSpan="6">
@@ -3645,27 +3769,63 @@ function OperationRow( { op, onChanged } ) {
 						) }
 						{ open === 'cancel' && (
 							<div className="catalogops-confirm">
+								{ /* Two whole calls rather than one with a computed format
+								     string: the .pot scanner reads literals, so a ternary
+								     inside sprintf() or __() extracts as nothing at all and
+								     the sentence never reaches a translator. */ }
 								<p className="catalogops-confirm__lead">
-									{ sprintf(
-										/* translators: %d: operation id. */
-										__(
-											'Stop operation #%d?',
-											'catalogops'
-										),
-										op.id
-									) }
+									{ stopping
+										? sprintf(
+												/* translators: %d: operation id. */
+												__(
+													'Stop operation #%d?',
+													'catalogops'
+												),
+												op.id
+										  )
+										: sprintf(
+												/* translators: %d: operation id. */
+												__(
+													'Pause operation #%d?',
+													'catalogops'
+												),
+												op.id
+										  ) }
 								</p>
 								<p>
 									{ sprintf(
 										/* translators: 1: objects already written, 2: objects targeted. */
 										__(
-											'It stops at the end of the chunk it is writing now. The %1$d of %2$d items already changed stay changed — stopping is not the same as undoing — but once it has stopped you can undo it from this row.',
+											'It stops at the end of the chunk it is writing now. The %1$d of %2$d items already changed stay changed — this is not the same as undoing — but once it has stopped you can undo it from this row.',
 											'catalogops'
 										),
 										op.processed,
 										op.target_count
 									) }
 								</p>
+								{ /* Said before the click, not discovered after it — and
+								     the two cases say opposite things on purpose. Stopping
+								     a working run is a decision about the change, so its
+								     schedule pauses with it. Taking back a run whose
+								     process died is not a decision about anything, so the
+								     schedule keeps its hours: nobody should have to get up
+								     in the night because a server restarted. */ }
+								{ op.schedule_id && ! stopping && (
+									<p>
+										{ __(
+											'This run came from a schedule. That schedule is paused too, so it does not begin the same work again on its next tick — resume it from Schedules when you want it running.',
+											'catalogops'
+										) }
+									</p>
+								) }
+								{ op.schedule_id && stopping && (
+									<p>
+										{ __(
+											'This run came from a schedule. The schedule keeps running on its usual hours — a run that stopped responding is a machine failure, not a change of mind, so nothing about the schedule is altered.',
+											'catalogops'
+										) }
+									</p>
+								) }
 								{ error && (
 									<div className="notice notice-error">
 										<p>{ error }</p>
@@ -3677,7 +3837,12 @@ function OperationRow( { op, onChanged } ) {
 										onClick={ confirmCancel }
 										disabled={ busy }
 									>
-										{ __( 'Stop the run', 'catalogops' ) }
+										{ stopping
+											? __( 'Stop the run', 'catalogops' )
+											: __(
+													'Pause the run',
+													'catalogops'
+											  ) }
 									</button>
 									<button
 										className="button"
@@ -3695,7 +3860,15 @@ function OperationRow( { op, onChanged } ) {
 												className="catalogops-spinner"
 												aria-hidden="true"
 											/>
-											{ __( 'Stopping…', 'catalogops' ) }
+											{ stopping
+												? __(
+														'Stopping…',
+														'catalogops'
+												  )
+												: __(
+														'Pausing…',
+														'catalogops'
+												  ) }
 										</span>
 									) }
 								</div>
@@ -3925,6 +4098,12 @@ function History( { refreshKey, onChanged, firingSoon = false } ) {
 								key={ op.id }
 								op={ op }
 								onChanged={ onChanged }
+								// Every row's numbers are as old as the last poll
+								// that worked. While polling is failing, offering
+								// controls invites a click that cannot arrive — and
+								// worse, one decided on a snapshot that may be
+								// minutes stale.
+								offline={ error !== '' }
 							/>
 						) )
 					) }
@@ -4373,15 +4552,6 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 					>
 						{ schedule.status }
 					</span>
-					{ /* A schedule that stopped itself has to say why, or the only
-					     control on offer — Resume — just stops it again on the next
-					     tick. The text is the server's own message, rendered as it
-					     arrives, like every other error in this app. */ }
-					{ schedule.paused_reason && (
-						<p className="catalogops-muted">
-							{ schedule.paused_reason }
-						</p>
-					) }
 				</td>
 				<td>
 					{ done
@@ -4443,6 +4613,22 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 					</div>
 				</td>
 			</tr>
+			{ /* A schedule that stopped has to say why, or the only control on offer —
+			     Resume — just stops it again on the next tick. Its own full-width row
+			     rather than the Status cell: these reasons are whole sentences now,
+			     and in a cell they squeezed Repeat, Next run, Last run and Actions
+			     into a strip and wrapped the buttons one under another. The text is
+			     the server's own message, rendered as it arrives, like every other
+			     error in this app. */ }
+			{ schedule.paused_reason && (
+				<tr className="catalogops-detail">
+					<td colSpan="6">
+						<p className="catalogops-muted">
+							{ schedule.paused_reason }
+						</p>
+					</td>
+				</tr>
+			) }
 			{ confirming === 'resume' && (
 				<tr className="catalogops-detail">
 					<td colSpan="6">
@@ -4595,6 +4781,13 @@ function Schedules( { refreshKey, onRan, onFiringSoon } ) {
 				setItems( res.items );
 				setTotal( res.total || res.items.length );
 				setPerPage( res.per_page || 10 );
+				// The history list has always cleared its own error here, and this one
+				// did not: a single dropped request — a restarted server, a dropped
+				// connection — left "Could not get a valid response from the server."
+				// above a table that was, by then, refreshing perfectly. Worse than
+				// untidy, because the notice sits beside a Paused badge and invites the
+				// reader to blame the outage for a pause that has nothing to do with it.
+				setError( '' );
 
 				// Due and still active means it is about to fire, or is firing
 				// right now. The history list cannot see this and needs telling,
@@ -4989,6 +5182,13 @@ function App() {
 	const refreshAll = useCallback( () => {
 		run( page );
 		setHistoryKey( ( k ) => k + 1 );
+		// The schedules list too, because an undo can now change it: reverting a
+		// scheduled run pauses the schedule that made it. Without this the
+		// confirmation says the schedule is about to be paused, the history row
+		// flips at once, and the card that would prove it goes on showing Active
+		// until its own poll comes round — the one screen that settles the question
+		// being the last to answer it.
+		setSchedulesKey( ( k ) => k + 1 );
 	}, [ run, page ] );
 
 	// Clear the filter, its results, and (via resetKey) the bulk-edit and
