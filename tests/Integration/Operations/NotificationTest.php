@@ -23,7 +23,10 @@ use CatalogOps\Operations\Notifier;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
+use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Recurrence;
+use CatalogOps\Operations\Schedule_Status;
+use CatalogOps\Operations\Watchdog;
 use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedules;
 use CatalogOps\Operations\Operations;
@@ -41,6 +44,9 @@ final class NotificationTest extends Operations_Database_Case {
 
 	private Operations $operations;
 	private Schedules $schedules;
+	private Changes $changes;
+	private Lock $lock;
+	private Notifier $notifier;
 	private Operation_Service $service;
 	private Chunk_Runner $chunk_runner;
 	private Schedule_Runner $schedule_runner;
@@ -83,8 +89,16 @@ final class NotificationTest extends Operations_Database_Case {
 		// on this hook; clear it so exactly one notifier (ours, over these repos)
 		// fires and the mail count is deterministic.
 		remove_all_actions( 'catalogops_operation_completed' );
-		$notifier = new Notifier( $this->operations, $changes, $this->schedules );
-		add_action( 'catalogops_operation_completed', array( $notifier, 'notify' ) );
+		remove_all_actions( 'catalogops_operation_failed' );
+		remove_all_actions( 'catalogops_schedule_paused' );
+
+		$this->changes  = $changes;
+		$this->lock     = $lock;
+		$this->notifier = new Notifier( $this->operations, $changes, $this->schedules );
+
+		add_action( 'catalogops_operation_completed', array( $this->notifier, 'notify' ) );
+		add_action( 'catalogops_operation_failed', array( $this->notifier, 'notify_failed' ) );
+		add_action( 'catalogops_schedule_paused', array( $this->notifier, 'notify_schedule_paused' ), 10, 2 );
 
 		add_filter( 'pre_wp_mail', array( $this, 'capture_mail' ), 10, 2 );
 	}
@@ -93,6 +107,10 @@ final class NotificationTest extends Operations_Database_Case {
 		remove_filter( 'pre_wp_mail', array( $this, 'capture_mail' ), 10 );
 		remove_filter( 'pre_option_admin_email', array( $this, 'admin_email' ) );
 		remove_all_actions( 'catalogops_operation_completed' );
+		remove_all_actions( 'catalogops_operation_failed' );
+		remove_all_actions( 'catalogops_schedule_paused' );
+		delete_option( 'catalogops_active_operation' );
+		delete_option( 'catalogops_writer_active' );
 
 		foreach ( $this->created as $id ) {
 			wp_delete_post( $id, true );
@@ -126,8 +144,15 @@ final class NotificationTest extends Operations_Database_Case {
 		return 'boss@example.com';
 	}
 
-	public function test_scheduled_operation_emails_a_report(): void {
+	/**
+	 * A run with something to report says so. The second product already holds the
+	 * target price, so it is written, comes back unchanged, and is recorded as
+	 * skipped — which is the kind of thing the reader cannot see from the outside
+	 * and is the reason the report exists at all.
+	 */
+	public function test_a_scheduled_run_with_skips_emails_a_report(): void {
 		$this->make_product( 50 );
+		$this->make_product( 9.99 );
 
 		$id = $this->schedules->create(
 			'Nightly cut',
@@ -148,11 +173,39 @@ final class NotificationTest extends Operations_Database_Case {
 		$this->assertSame( 'ops@example.com', $this->mails[0]['to'] );
 		$this->assertStringContainsString( 'Nightly cut', $this->mails[0]['subject'] );
 		$this->assertStringContainsString( 'Changed:  1', $this->mails[0]['message'] );
+		$this->assertStringContainsString( 'Skipped:  1', $this->mails[0]['message'] );
+	}
+
+	/**
+	 * And a run that did everything it promised says nothing. An hourly schedule was
+	 * sending twenty-four of these a day, which is how a reader learns to delete the
+	 * twenty-fifth unopened — and the twenty-fifth is now the one that says something
+	 * went wrong.
+	 */
+	public function test_a_scheduled_run_with_nothing_to_report_is_silent(): void {
+		$this->make_product( 50 );
+
+		$id = $this->schedules->create(
+			'Nightly cut',
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Recurrence::ONCE,
+			'2026-08-10 11:59:00',
+			'ops@example.com',
+			1
+		);
+
+		$this->schedule_runner->run_due( '2026-08-10 12:00:00' );
+		$this->drive( (int) $this->schedules->find( $id )->last_op_id );
+
+		$this->assertSame( array(), $this->mails );
 	}
 
 	public function test_scheduled_report_falls_back_to_admin_email_when_unset(): void {
 		add_filter( 'pre_option_admin_email', array( $this, 'admin_email' ) );
 		$this->make_product( 50 );
+		$this->make_product( 9.99 );
 
 		$id = $this->schedules->create(
 			'',
@@ -170,6 +223,75 @@ final class NotificationTest extends Operations_Database_Case {
 
 		$this->assertCount( 1, $this->mails );
 		$this->assertSame( 'boss@example.com', $this->mails[0]['to'] );
+	}
+
+	/**
+	 * The message the plugin most needed and did not have. A run that died announced
+	 * nothing at all, so the person who set the schedule up found out by opening a
+	 * screen they had no reason to open.
+	 */
+	public function test_a_run_that_is_given_up_on_says_so(): void {
+		$this->make_product( 50 );
+
+		$id = $this->schedules->create(
+			'Nightly cut',
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Recurrence::ONCE,
+			'2026-08-10 11:59:00',
+			'ops@example.com',
+			1
+		);
+
+		$this->schedule_runner->run_due( '2026-08-10 12:00:00' );
+		$op_id = (int) $this->schedules->find( $id )->last_op_id;
+
+		// Left running with a heartbeat older than the watchdog tolerates: a process
+		// that went away and could not be carried on.
+		global $wpdb;
+		$this->operations->set_status( $op_id, Operation_Status::RUNNING );
+		$wpdb->update(
+			$this->schema->operations_table(),
+			array( 'last_progress_at' => gmdate( 'Y-m-d H:i:s', time() - Watchdog::STALL_THRESHOLD - 60 ) ),
+			array( 'id' => $op_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		( new Watchdog( $this->operations, $this->lock ) )->run();
+
+		$this->assertCount( 1, $this->mails );
+		$this->assertSame( 'ops@example.com', $this->mails[0]['to'] );
+		$this->assertStringContainsString( 'stopped', $this->mails[0]['subject'] );
+		// And it says the work is recoverable, which is the part the reader can act on.
+		$this->assertStringContainsString( 'Resume', $this->mails[0]['message'] );
+	}
+
+	/**
+	 * A schedule that stops itself is worse than a failed run: there is no row in the
+	 * history to notice, it simply never happens again. The hook that announces it
+	 * existed all along with nobody listening.
+	 */
+	public function test_a_schedule_that_stops_itself_says_so(): void {
+		$id = $this->schedules->create(
+			'Nightly cut',
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Recurrence::HOURLY,
+			'2026-08-10 11:59:00',
+			'ops@example.com',
+			1
+		);
+
+		$this->schedules->set_status( $id, Schedule_Status::PAUSED, 'No provider handles the field "colour".' );
+		do_action( 'catalogops_schedule_paused', $id, new \RuntimeException( 'No provider handles the field "colour".' ) );
+
+		$this->assertCount( 1, $this->mails );
+		$this->assertSame( 'ops@example.com', $this->mails[0]['to'] );
+		$this->assertStringContainsString( 'Nightly cut', $this->mails[0]['subject'] );
+		$this->assertStringContainsString( 'colour', $this->mails[0]['message'] );
 	}
 
 	public function test_ui_operation_does_not_notify(): void {
