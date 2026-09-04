@@ -251,7 +251,13 @@ final class Chunk_Runner {
 				// the extra read to one every few seconds instead of one per save.
 				// The exposure is therefore a few seconds of writing after a wrongful
 				// hand-over, not the rest of the chunk.
-				if ( ! $this->lock->still_held( $generation ) ) {
+				// An empty generation means this worker never had an identity to lose,
+				// not that it has lost one. Fencing on it would be the worst of both:
+				// `still_held('')` is false by construction, so the very first pulse
+				// would break the chain of a run nothing was actually contending —
+				// silently, since a surrendering worker neither enqueues nor errors.
+				// Without an identity there is simply nothing to check.
+				if ( '' !== $generation && ! $this->lock->still_held( $generation ) ) {
 					$surrendered = true;
 					break;
 				}

@@ -193,6 +193,43 @@ final class LockGenerationTest extends Operations_Database_Case {
 	}
 
 	/**
+	 * A worker that never had an identity has none to lose. `still_held('')` is false
+	 * by construction, so fencing on an empty generation would break the chain of a
+	 * run nothing was contending — and silently, since a surrendering worker neither
+	 * enqueues nor errors. It must run normally instead.
+	 */
+	public function test_a_worker_with_no_generation_is_not_fenced_out(): void {
+		foreach ( range( 1, 4 ) as $i ) {
+			$this->make_product( 10 * $i );
+		}
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '4.44' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+
+		// The lock gone before the chunk starts: nothing to identify this worker by.
+		delete_option( 'catalogops_active_operation' );
+		$this->assertSame( '', $this->lock->generation() );
+
+		$pulse_every_object = static fn(): float => 0.0;
+		add_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+
+		try {
+			$this->runner->run( $op_id, 100 );
+		} finally {
+			remove_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+		}
+
+		// It did the work rather than abandoning the run after one object.
+		$this->assertSame( 0, $this->changes->pending_count( $op_id ) );
+	}
+
+	/**
 	 * A simple product the filter will match.
 	 *
 	 * @param float $price Its regular price.

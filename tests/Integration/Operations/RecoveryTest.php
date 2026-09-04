@@ -193,6 +193,38 @@ final class RecoveryTest extends Operations_Database_Case {
 	}
 
 	/**
+	 * The one that nearly cost every large edit. `queue()` holds the lock while the
+	 * row still reads DRAFT and only moves it to QUEUED once the filter has resolved
+	 * and every target is seeded — minutes on a real catalogue. Reading "not active"
+	 * as "settled" freed the lock out from under a live request, and the chunk that
+	 * followed captured an empty generation, failed its own fence on the first pulse,
+	 * and abandoned the chain after a few dozen objects with no error anywhere.
+	 */
+	public function test_a_draft_still_being_prepared_keeps_its_lock(): void {
+		$this->make_product( 50 );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+
+		// The state queue() is in while it freezes: lock taken, row still a draft.
+		$this->lock->acquire( $op_id );
+		$mine = $this->lock->generation();
+		$this->assertSame( Operation_Status::DRAFT, $this->operations->find( $op_id )->status );
+
+		$this->assertFalse( $this->recovery->run() );
+
+		// Untouched: the lock is still held, under the same turn, and the flag still
+		// points at it.
+		$this->assertTrue( $this->lock->still_held( $mine ) );
+		$this->assertSame( $op_id, $this->lock->watching() );
+	}
+
+	/**
 	 * The flag outliving its run would otherwise cost a row read on every request
 	 * for ever.
 	 */

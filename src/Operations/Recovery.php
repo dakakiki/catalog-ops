@@ -120,9 +120,30 @@ final class Recovery {
 
 		$operation = $this->operations->find( $op_id );
 
-		if ( null === $operation || ! $operation->status->is_active() ) {
-			// The registered writer has settled without saying so — the flag outlived
-			// its run. Clear it rather than reading this row on every request for ever.
+		if ( null === $operation ) {
+			$this->lock->release( $op_id );
+
+			return false;
+		}
+
+		// A draft is not a run that has stopped, it is one being prepared, and the
+		// distinction nearly cost the site every large edit it had. {@see
+		// Operation_Service::queue()} takes the lock while the row still reads DRAFT
+		// and only moves it to QUEUED once the filter has resolved and every target
+		// row is seeded — seconds on a small catalogue, minutes on a real one. For
+		// that whole window the flag points at a row whose status is not active, so
+		// treating "not active" as "settled" freed the lock out from under a request
+		// that was very much alive: a second operation could then take it, and the
+		// chunk that followed captured an empty generation, failed its own fence on
+		// the first pulse, and abandoned the chain after a few dozen objects with no
+		// error anywhere.
+		if ( Operation_Status::DRAFT === $operation->status ) {
+			return false;
+		}
+
+		if ( ! $operation->status->is_active() ) {
+			// Genuinely settled without saying so — the flag outlived its run. Clear it
+			// rather than reading this row on every request for ever.
 			$this->lock->release( $op_id );
 
 			return false;
