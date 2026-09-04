@@ -20,6 +20,7 @@ use CatalogOps\Operations\Lock;
 use CatalogOps\Operations\Notifier;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Recovery;
 use CatalogOps\Operations\Retention;
 use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedules;
@@ -119,6 +120,13 @@ final class Plugin {
 		// Apply pending migrations after a plugin update (no reactivation needed).
 		add_action( 'admin_init', array( $this, 'maybe_upgrade_database' ) );
 
+		// Early, and on `init` rather than `admin_init`, because the requests most
+		// certain to be arriving while a run is dying are the admin screen's own REST
+		// polls — which `admin_init` never sees — and the cron request, which reaches
+		// a site nobody is looking at. See Recovery for why this cannot be a
+		// scheduled job.
+		add_action( 'init', array( $this, 'maybe_recover_operation' ), 5 );
+
 		add_action(
 			'rest_api_init',
 			function (): void {
@@ -201,6 +209,14 @@ final class Plugin {
 	 */
 	public function maybe_upgrade_database(): void {
 		$this->container->get( Schema::class )->maybe_upgrade();
+	}
+
+	/**
+	 * Hand a run whose writer disappeared to a new one. Hooked to init; costs an
+	 * integer comparison when nothing is running, which is nearly always.
+	 */
+	public function maybe_recover_operation(): void {
+		$this->container->get( Recovery::class )->run();
 	}
 
 	/**
@@ -373,7 +389,18 @@ final class Plugin {
 				$container->get( Lock::class ),
 				$container->get( Scheduler::class ),
 				$container->get( License::class ),
-				$container->get( Write_Rules::class )
+				$container->get( Write_Rules::class ),
+				$container->get( Schedules::class )
+			)
+		);
+
+		$this->container->singleton(
+			Recovery::class,
+			static fn( Container $container ): Recovery => new Recovery(
+				$container->get( Operations::class ),
+				$container->get( Changes::class ),
+				$container->get( Lock::class ),
+				$container->get( Scheduler::class )
 			)
 		);
 
@@ -524,6 +551,25 @@ final class Plugin {
 			function ( $op_id = 0 ): void {
 				$this->container->get( Notifier::class )->notify( (int) $op_id );
 			}
+		);
+
+		// The two messages the plugin lacked. Until these, it announced only success:
+		// a run that died and a schedule that stopped itself both went unmentioned,
+		// which is exactly backwards for work nobody is sitting and watching.
+		add_action(
+			'catalogops_operation_failed',
+			function ( $op_id = 0 ): void {
+				$this->container->get( Notifier::class )->notify_failed( (int) $op_id );
+			}
+		);
+
+		add_action(
+			'catalogops_schedule_paused',
+			function ( $schedule_id = 0, $error = null ): void {
+				$this->container->get( Notifier::class )->notify_schedule_paused( (int) $schedule_id, $error );
+			},
+			10,
+			2
 		);
 
 		/*

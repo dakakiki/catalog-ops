@@ -1,0 +1,209 @@
+<?php
+/**
+ * Integration tests for the write lock's generation, and the fence it makes possible.
+ *
+ * The lock has always named its holder. Naming was enough while the only way to
+ * lose it was to finish, but recovery changed that: a run whose process appears to
+ * have died is handed back to a new worker under the *same operation id*, on the
+ * strength of a heartbeat that has gone cold. A heartbeat is evidence, never proof
+ * — a process can be blocked rather than dead — and such a process would wake,
+ * read the holder, recognise its own id, and go on writing beside its replacement.
+ *
+ * Two writers over one catalogue is bad anywhere. Here it is specific: an Adjust
+ * reads the field it writes, so "add 15" applied by both is not a repeated change
+ * but a wrong number, and no later reading of the audit log would explain it.
+ *
+ * The generation is what turns "my id" into "my turn". These tests pin that a
+ * grant always mints one, that the previous holder can tell it has lost it, and
+ * that a worker which has lost it stops writing and — just as important — does not
+ * re-enter the chain or settle the operation on its way out.
+ *
+ * @package CatalogOps\Tests\Integration\Operations
+ */
+
+namespace CatalogOps\Tests\Integration\Operations;
+
+use CatalogOps\Operations\Actions\Set_Value;
+use CatalogOps\Operations\Changes;
+use CatalogOps\Operations\Chunk_Runner;
+use CatalogOps\Operations\Fields\Core_Fields;
+use CatalogOps\Operations\Fields\Field_Providers;
+use CatalogOps\Operations\Fields\Meta_Fields;
+use CatalogOps\Operations\Lock;
+use CatalogOps\Operations\Operation_Mode;
+use CatalogOps\Operations\Operation_Service;
+use CatalogOps\Operations\Operation_Source;
+use CatalogOps\Operations\Operation_Status;
+use CatalogOps\Operations\Operations;
+use CatalogOps\Query\Condition;
+use CatalogOps\Query\Filter;
+use CatalogOps\Query\Operator;
+use CatalogOps\Query\Query_Engine;
+use WC_Product_Simple;
+
+/**
+ * @covers \CatalogOps\Operations\Lock
+ * @covers \CatalogOps\Operations\Chunk_Runner
+ */
+final class LockGenerationTest extends Operations_Database_Case {
+
+	private Operations $operations;
+	private Changes $changes;
+	private Lock $lock;
+	private Operation_Service $service;
+	private Chunk_Runner $runner;
+
+	/**
+	 * Product ids created during a test, deleted in tear_down.
+	 *
+	 * @var int[]
+	 */
+	private array $created = array();
+
+	public function set_up(): void {
+		parent::set_up();
+
+		if ( ! function_exists( 'wc_get_product' ) ) {
+			$this->markTestSkipped( 'WooCommerce is not available in the test environment.' );
+		}
+
+		global $wpdb;
+		$engine           = new Query_Engine( $wpdb );
+		$this->operations = new Operations( $wpdb, $this->schema );
+		$this->changes    = new Changes( $wpdb, $this->schema );
+		$providers        = new Field_Providers( new Core_Fields(), new Meta_Fields() );
+		$this->lock       = new Lock( $this->operations );
+		$scheduler        = new Recording_Scheduler();
+
+		$this->service = new Operation_Service( $engine, $this->operations, $this->changes, $providers, $this->lock, $scheduler );
+		$this->runner  = new Chunk_Runner( $this->operations, $this->changes, $providers, $scheduler, $this->lock );
+	}
+
+	public function tear_down(): void {
+		foreach ( $this->created as $id ) {
+			wp_delete_post( $id, true );
+		}
+		$this->created = array();
+
+		delete_option( 'catalogops_active_operation' );
+
+		parent::tear_down();
+	}
+
+	public function test_the_holder_is_still_readable_as_a_plain_id(): void {
+		$this->assertTrue( $this->lock->acquire( 41 ) );
+
+		// Every reader that predates the generation asks this question and must keep
+		// getting the same answer.
+		$this->assertSame( 41, $this->lock->holder() );
+		$this->assertStringStartsWith( '41:', $this->lock->generation() );
+	}
+
+	public function test_each_grant_mints_a_new_generation(): void {
+		$this->lock->acquire( 41 );
+		$first = $this->lock->generation();
+
+		// The same operation asking again is recovery handing its run to a new
+		// worker, not a formality — so it gets a new turn, not the old one back.
+		$this->lock->acquire( 41 );
+
+		$this->assertNotSame( $first, $this->lock->generation() );
+		$this->assertSame( 41, $this->lock->holder() );
+	}
+
+	public function test_the_previous_holder_can_tell_it_has_lost_its_turn(): void {
+		$this->lock->acquire( 41 );
+		$mine = $this->lock->generation();
+
+		$this->assertTrue( $this->lock->still_held( $mine ) );
+
+		$this->lock->acquire( 41 );
+
+		$this->assertFalse( $this->lock->still_held( $mine ) );
+	}
+
+	public function test_a_released_lock_is_held_by_nobody(): void {
+		$this->lock->acquire( 41 );
+		$mine = $this->lock->generation();
+
+		$this->lock->release( 41 );
+
+		$this->assertSame( 0, $this->lock->holder() );
+		$this->assertFalse( $this->lock->still_held( $mine ) );
+	}
+
+	/**
+	 * The fence itself, end to end: a run is taken from its worker mid-chunk, and the
+	 * worker stops rather than writing beside its replacement. It must also leave the
+	 * chain alone — enqueueing would put it back in a sequence it has been removed
+	 * from, and finalizing would settle an operation another process is still writing.
+	 */
+	public function test_a_worker_that_loses_its_turn_stops_and_leaves_the_chain(): void {
+		foreach ( range( 1, 6 ) as $i ) {
+			$this->make_product( 10 * $i );
+		}
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '4.44' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+
+		$pending_before = $this->changes->pending_count( $op_id );
+		$this->assertGreaterThan( 0, $pending_before );
+
+		// The steal has to land *while* the worker is inside its loop — it captures
+		// its generation on entry, so taking the lock beforehand would simply hand it
+		// the new one and prove nothing. Riding a per-object WooCommerce hook puts the
+		// hand-over exactly where a real one would fall: between two saves.
+		$lock  = $this->lock;
+		$taken = false;
+
+		$steal = static function () use ( $lock, $op_id, &$taken ): void {
+			if ( $taken ) {
+				return;
+			}
+
+			$taken = true;
+			$lock->acquire( $op_id );
+		};
+
+		// Beat on every object, so the check is reached without a five-second test.
+		$pulse_every_object = static fn(): float => 0.0;
+
+		add_action( 'woocommerce_update_product', $steal );
+		add_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+
+		try {
+			$this->runner->run( $op_id, 100 );
+		} finally {
+			remove_action( 'woocommerce_update_product', $steal );
+			remove_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+		}
+
+		$this->assertTrue( $taken, 'the hand-over never happened, so nothing was tested' );
+
+		// It did not settle the operation, and it did not put itself back in the queue.
+		$operation = $this->operations->find( $op_id );
+		$this->assertNotSame( Operation_Status::COMPLETED, $operation->status );
+		$this->assertGreaterThan( 0, $this->changes->pending_count( $op_id ) );
+	}
+
+	/**
+	 * A simple product the filter will match.
+	 *
+	 * @param float $price Its regular price.
+	 */
+	private function make_product( float $price ): int {
+		$product = new WC_Product_Simple();
+		$product->set_regular_price( (string) $price );
+		$id = $product->save();
+
+		$this->created[] = $id;
+
+		return $id;
+	}
+}

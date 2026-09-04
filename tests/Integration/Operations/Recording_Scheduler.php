@@ -58,6 +58,35 @@ final class Recording_Scheduler implements Operation_Scheduler {
 	public function cancel_operation( int $op_id ): void {}
 
 	/**
+	 * Abandoned chunks the double should report as released on the next call, so a
+	 * test can reproduce a process that died mid-chunk without an Action Scheduler.
+	 *
+	 * @var int
+	 */
+	private int $stuck = 0;
+
+	/**
+	 * Leave a chunk looking claimed-and-abandoned.
+	 *
+	 * @param int $count How many.
+	 */
+	public function strand_chunks( int $count ): void {
+		$this->stuck = $count;
+	}
+
+	/**
+	 * Release whatever was stranded, once.
+	 *
+	 * @param int $op_id Operation id.
+	 */
+	public function release_stuck_chunks( int $op_id ): int {
+		$released    = $this->stuck;
+		$this->stuck = 0;
+
+		return $released;
+	}
+
+	/**
 	 * How many enqueue calls were recorded.
 	 */
 	public function count(): int {

@@ -49,6 +49,29 @@ final class Chunk_Runner {
 	private const MAX_BATCH = 1000;
 
 	/**
+	 * How often a running chunk marks itself alive, in seconds.
+	 *
+	 * The heartbeat used to be written only at the chunk's edges — once on entry and
+	 * once after the whole object loop — so the longest a *healthy* run could stay
+	 * silent was one entire chunk, and a chunk may hold {@see MAX_BATCH} objects.
+	 * Every threshold built on that silence had to be longer than the slowest
+	 * imaginable chunk, which is why {@see Watchdog::STALL_THRESHOLD} is ten minutes:
+	 * not because ten minutes of quiet means death, but because less than that could
+	 * not be told apart from work.
+	 *
+	 * Beating from inside the loop separates the two for the first time. A live
+	 * process now says so every few seconds however long its chunk runs, so silence
+	 * becomes evidence rather than a guess — which lets the wait shrink honestly, and
+	 * closes the hazard in the other direction too: a legitimately slow chunk could
+	 * previously outlast the watchdog and be failed while it was still writing.
+	 *
+	 * Five seconds is chosen against the measured cadence — objects take on the order
+	 * of 80ms in safe mode, so this is a write every sixty-odd objects, against sixty
+	 * object saves. Cheaper than the counters the same loop already keeps.
+	 */
+	private const PULSE_SECONDS = 5;
+
+	/**
 	 * Operations repository.
 	 *
 	 * @var Operations
@@ -172,6 +195,31 @@ final class Chunk_Runner {
 		$processed   = 0;
 		$failed      = 0;
 
+		// The pulse starts with the chunk: the touch above is this loop's first beat.
+		$pulsed_at = microtime( true );
+
+		// The generation this worker is writing under. Recovery can decide, wrongly,
+		// that this process is dead — a timeout is evidence, never proof — and hand
+		// the same operation to a new worker. Carrying the generation is what lets
+		// this one find out and stop, rather than write beside it.
+		$generation  = $this->lock->generation();
+		$surrendered = false;
+
+		/**
+		 * Filters how often a running chunk marks itself alive and checks that the
+		 * run is still its own, in seconds.
+		 *
+		 * A real seam rather than a hook for testing's sake: the default is set
+		 * against a catalogue whose objects save in about 80ms, and a site whose
+		 * saves are an order of magnitude slower or faster has a different idea of
+		 * how much silence is normal. Zero pulses on every object, which is what the
+		 * fence's own test needs to reach the check without waiting five seconds.
+		 *
+		 * @param float $seconds How long between beats.
+		 * @param int   $op_id   The operation being written.
+		 */
+		$pulse = (float) apply_filters( 'catalogops_pulse_seconds', self::PULSE_SECONDS, $op_id );
+
 		foreach ( $by_object as $object_id => $object_rows ) {
 			$counts_as = $counts_rows ? count( $object_rows ) : 1;
 
@@ -193,9 +241,35 @@ final class Chunk_Runner {
 				 */
 				do_action( 'catalogops_chunk_object_failed', $op_id, (int) $object_id, $e );
 			}
+
+			if ( microtime( true ) - $pulsed_at >= $pulse ) {
+				$this->operations->touch( $op_id );
+				$pulsed_at = microtime( true );
+
+				// Checked on the pulse rather than per object: the same cadence that
+				// says "alive" is the natural one to ask "still mine?", and it keeps
+				// the extra read to one every few seconds instead of one per save.
+				// The exposure is therefore a few seconds of writing after a wrongful
+				// hand-over, not the rest of the chunk.
+				if ( ! $this->lock->still_held( $generation ) ) {
+					$surrendered = true;
+					break;
+				}
+			}
 		}
 
+		// Recorded either way: what this worker wrote before it let go really was
+		// written, and the counters have to describe the catalogue rather than the
+		// worker's fate.
 		$this->operations->record_progress( $op_id, $processed, $failed );
+
+		if ( $surrendered ) {
+			// Everything below belongs to whoever holds the lock now. Enqueueing would
+			// put this worker back in a chain it has been removed from, and finalizing
+			// would settle — or complete — an operation another process is still
+			// writing. Leaving quietly is the whole of this worker's remaining job.
+			return;
+		}
 
 		$next = $this->adapt_batch_size( $batch_size, microtime( true ) - $started, count( $by_object ) );
 		$this->operations->set_batch_size( $op_id, $next );
