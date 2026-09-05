@@ -711,6 +711,14 @@ final class Operation_Service {
 			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 		}
 
+		// The turn this preparation was granted, to be checked before it publishes.
+		// {@see Lock::acquire()} refuses only a holder whose row reads *active*, and
+		// for the whole of the freeze below this row reads `draft` — so a second
+		// operation asking for the lock during it is simply given it, and on a real
+		// catalogue "during it" is minutes. Nothing used to notice: this method went
+		// on to publish its row and hand a chunk to the scheduler beside the thief.
+		$hold = $this->lock->generation();
+
 		// The lock is held across freezing and handed to the async runner on
 		// success. The finally releases it on every other exit — the settle-now
 		// path (nothing to do) and any thrown failure, such as a free-tier
@@ -748,6 +756,15 @@ final class Operation_Service {
 			// two statements handed a run that had never executed a single chunk to a
 			// second worker, beside the chunk enqueued three lines below.
 			$this->operations->touch( $op_id );
+
+			// Still ours? The row goes active on the next statement, and from that
+			// instant {@see Lock::acquire()} refuses everyone else — so this is the
+			// last moment the hold can have been taken, and the first at which anything
+			// would notice. Losing it is the same answer the caller would have had a
+			// moment earlier, and it takes the same path: the draft is discarded by the
+			// catch below and nothing is queued.
+			$this->assert_still_holding( $hold );
+
 			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
 
 			$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
@@ -765,9 +782,51 @@ final class Operation_Service {
 			throw $e;
 		} finally {
 			if ( ! $handed_off ) {
-				$this->lock->release( $op_id );
+				// Named, because this caller can honestly name it: it is giving back the
+				// hold it was granted, not taking a run down. A hold that was taken from
+				// it mid-freeze belongs to somebody else and is not this method's to free.
+				$this->lock->release( $op_id, $hold );
 			}
 		}
+	}
+
+	/**
+	 * Refuse to go on when the write lock is no longer the one this request was
+	 * granted.
+	 *
+	 * The check a preparation owes, and the reason it cannot be left to
+	 * {@see Lock::acquire()}. That method refuses a holder whose row reads active,
+	 * which is the right rule for a run that is executing and the wrong one for a run
+	 * that is being prepared: `queue()` holds the lock across a freeze that takes
+	 * minutes while its row still reads `draft`, and `resume()` holds it over a row
+	 * that still reads `failed`. Both are stolen from without a word.
+	 *
+	 * Teaching `acquire()` to refuse those was designed and rejected, twice. It would
+	 * have to tell a preparation in progress from one whose process died half way, and
+	 * the only thing separating them is time — so a preparation killed mid-freeze
+	 * would leave a hold nothing could take, and the site would decline every
+	 * operation until the timer expired. That is a worse failure than the one being
+	 * fixed, and it is why the check belongs to the preparer, which knows the answer
+	 * exactly: it is holding the turn it was given, or it is not.
+	 *
+	 * {@see Lock::still_held()} rather than a comparison, for that method's own
+	 * reason: the steal happens in a different request, so a request-cached read
+	 * cannot see it and the check would pass for ever while being worthless.
+	 *
+	 * What is left is one statement — this call and the status write that follows it,
+	 * after which the row is active and acquire() guards it. Closing that too would
+	 * need the grant itself to be conditional, which the options API cannot express.
+	 *
+	 * @param string $hold The turn {@see Lock::generation()} returned at acquisition.
+	 *
+	 * @throws Operation_Blocked When the lock has been granted to somebody else.
+	 */
+	private function assert_still_holding( string $hold ): void {
+		if ( $this->lock->still_held( $hold ) ) {
+			return;
+		}
+
+		throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 	}
 
 	/**
@@ -947,6 +1006,12 @@ final class Operation_Service {
 			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 		}
 
+		// The turn this restart was granted. Narrower than `queue()`'s — there is no
+		// freeze here — but the same hole: until the status write below, this row
+		// still reads `failed` or `paused`, and {@see Lock::acquire()} hands the
+		// catalogue to anyone who asks for it over a row that is not active.
+		$hold = $this->lock->generation();
+
 		$handed_off = false;
 
 		try {
@@ -967,6 +1032,11 @@ final class Operation_Service {
 			// its original reason: without it the watchdog would find a ten-minute-old
 			// stamp on a run that has only just restarted and fail it a second time.
 			$this->operations->touch( $op_id );
+
+			// Still ours? See {@see assert_still_holding()}. The row goes active on the
+			// next statement, so this is the last moment the hold can have been taken.
+			$this->assert_still_holding( $hold );
+
 			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
 
 			$batch = $operation->batch_size > 0 ? $operation->batch_size : self::DEFAULT_BATCH;
@@ -977,7 +1047,9 @@ final class Operation_Service {
 			$handed_off = true;
 		} finally {
 			if ( ! $handed_off ) {
-				$this->lock->release( $op_id );
+				// Named, for the reason given in {@see queue()}: a hold taken from this
+				// request belongs to somebody else and is not this method's to free.
+				$this->lock->release( $op_id, $hold );
 			}
 		}
 	}

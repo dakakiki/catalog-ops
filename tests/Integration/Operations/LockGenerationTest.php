@@ -30,6 +30,7 @@ use CatalogOps\Operations\Fields\Core_Fields;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Operations\Fields\Meta_Fields;
 use CatalogOps\Operations\Lock;
+use CatalogOps\Operations\Operation_Blocked;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
@@ -52,6 +53,7 @@ final class LockGenerationTest extends Operations_Database_Case {
 	private Lock $lock;
 	private Operation_Service $service;
 	private Chunk_Runner $runner;
+	private Recording_Scheduler $scheduler;
 
 	/**
 	 * Product ids created during a test, deleted in tear_down.
@@ -73,10 +75,10 @@ final class LockGenerationTest extends Operations_Database_Case {
 		$this->changes    = new Changes( $wpdb, $this->schema );
 		$providers        = new Field_Providers( new Core_Fields(), new Meta_Fields() );
 		$this->lock       = new Lock( $this->operations );
-		$scheduler        = new Recording_Scheduler();
+		$this->scheduler  = new Recording_Scheduler();
 
-		$this->service = new Operation_Service( $engine, $this->operations, $this->changes, $providers, $this->lock, $scheduler );
-		$this->runner  = new Chunk_Runner( $this->operations, $this->changes, $providers, $scheduler, $this->lock );
+		$this->service = new Operation_Service( $engine, $this->operations, $this->changes, $providers, $this->lock, $this->scheduler );
+		$this->runner  = new Chunk_Runner( $this->operations, $this->changes, $providers, $this->scheduler, $this->lock );
 	}
 
 	public function tear_down(): void {
@@ -289,6 +291,146 @@ final class LockGenerationTest extends Operations_Database_Case {
 
 		// It did the work rather than abandoning the run after one object.
 		$this->assertSame( 0, $this->changes->pending_count( $op_id ) );
+	}
+
+	/**
+	 * A preparation must not hand work to the scheduler on a lock it no longer owns.
+	 *
+	 * {@see Lock::acquire()} refuses only a holder whose row reads *active*, and a
+	 * draft is not active — so for the whole of `queue()`'s freeze, which is minutes
+	 * on a real catalogue, any second operation asking for the lock is simply given
+	 * it. Before this, the first preparation carried on regardless: it published its
+	 * row, enqueued a chunk and started writing beside the thief, and
+	 * {@see \CatalogOps\Operations\Actions\Adjust} reads the field it writes.
+	 *
+	 * So the preparer captures the hold it was granted and checks it is still its own
+	 * before it publishes. Losing it is the same answer the caller would have had if
+	 * the lock had been busy a moment earlier — refused, with the draft discarded and
+	 * nothing queued.
+	 */
+	public function test_a_preparation_that_loses_the_lock_while_freezing_does_not_publish(): void {
+		foreach ( range( 1, 4 ) as $i ) {
+			$this->make_product( 10 * $i );
+		}
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '4.44' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+
+		// A second operation asking for the lock mid-freeze, which acquire() grants
+		// because this row still reads `draft`. Riding the seeding INSERT puts the
+		// steal inside the freeze, where a real one would fall.
+		$lock   = $this->lock;
+		$table  = $this->schema->changes_table();
+		$thief  = 4242;
+		$stolen = false;
+
+		$steal = static function ( $query ) use ( $lock, $table, $thief, &$stolen ) {
+			if ( $stolen || ! str_contains( $query, 'INSERT' ) || ! str_contains( $query, $table ) ) {
+				return $query;
+			}
+
+			$stolen = true;
+			$lock->acquire( $thief );
+
+			return $query;
+		};
+
+		add_filter( 'query', $steal );
+
+		try {
+			$this->service->queue( $op_id );
+			$this->fail( 'Expected queueing to be refused after the lock was taken.' );
+		} catch ( Operation_Blocked $e ) {
+			$this->assertStringContainsString( 'already writing', $e->getMessage() );
+		} finally {
+			remove_filter( 'query', $steal );
+		}
+
+		$this->assertTrue( $stolen, 'the lock was never taken, so nothing was tested' );
+
+		// Nothing was handed to the queue, and the draft is gone rather than left in
+		// the history as an operation the user was told had been refused.
+		$this->assertSame( 0, $this->scheduler->count() );
+		$this->assertNull( $this->operations->find( $op_id ) );
+
+		// And the thief keeps what it took.
+		$this->assertSame( $thief, $this->lock->holder() );
+	}
+
+	/**
+	 * The same rule on the restart path. `resume()` has no freeze, so its window is
+	 * statements rather than minutes — but the row reads `failed` for all of it, and
+	 * that is all {@see Lock::acquire()} looks at.
+	 *
+	 * A refused restart must leave the run exactly as it found it: still failed, with
+	 * its frozen list intact, so the user can try again once the catalogue is free.
+	 */
+	public function test_a_restart_that_loses_the_lock_before_publishing_does_not_run(): void {
+		foreach ( range( 1, 4 ) as $i ) {
+			$this->make_product( 10 * $i );
+		}
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '4.44' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->operations->set_status( $op_id, Operation_Status::FAILED );
+
+		$pending = $this->changes->pending_count( $op_id );
+		$this->assertGreaterThan( 0, $pending );
+
+		$enqueued = $this->scheduler->count();
+
+		// The steal rides the heartbeat write, which under this ordering is the first
+		// statement after the lock is taken and before the row goes active.
+		$lock   = $this->lock;
+		$table  = $this->schema->operations_table();
+		$thief  = 4242;
+		$stolen = false;
+
+		$steal = static function ( $query ) use ( $lock, $table, $thief, &$stolen ) {
+			if ( $stolen || ! str_contains( $query, 'UPDATE' ) || ! str_contains( $query, $table ) ) {
+				return $query;
+			}
+
+			if ( ! str_contains( $query, 'last_progress_at' ) ) {
+				return $query;
+			}
+
+			$stolen = true;
+			$lock->acquire( $thief );
+
+			return $query;
+		};
+
+		add_filter( 'query', $steal );
+
+		try {
+			$this->service->resume( $op_id );
+			$this->fail( 'Expected the restart to be refused after the lock was taken.' );
+		} catch ( Operation_Blocked $e ) {
+			$this->assertStringContainsString( 'already writing', $e->getMessage() );
+		} finally {
+			remove_filter( 'query', $steal );
+		}
+
+		$this->assertTrue( $stolen, 'the lock was never taken, so nothing was tested' );
+
+		// Left exactly as it was found: still failed, nothing queued, list intact.
+		$this->assertSame( Operation_Status::FAILED, $this->operations->find( $op_id )->status );
+		$this->assertSame( $enqueued, $this->scheduler->count() );
+		$this->assertSame( $pending, $this->changes->pending_count( $op_id ) );
+
+		$this->assertSame( $thief, $this->lock->holder() );
 	}
 
 	/**
