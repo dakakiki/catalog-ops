@@ -33,6 +33,7 @@ use CatalogOps\Operations\Recovery;
 use CatalogOps\Operations\Recurrence;
 use CatalogOps\Operations\Schedule_Status;
 use CatalogOps\Operations\Schedules;
+use CatalogOps\Operations\Watchdog;
 use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Operator;
@@ -226,13 +227,215 @@ final class RecoveryTest extends Operations_Database_Case {
 
 	/**
 	 * The flag outliving its run would otherwise cost a row read on every request
-	 * for ever.
+	 * for ever. The housekeeping is patient now, not abandoned.
 	 */
-	public function test_a_stale_writer_flag_is_cleared(): void {
+	public function test_a_stale_writer_flag_is_cleared_once_the_hold_is_old_enough(): void {
+		$op_id = $this->queued_run();
+		$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
+		$this->age_the_hold();
+
+		$this->assertSame( $op_id, $this->lock->watching() );
+		$this->assertFalse( $this->recovery->run() );
+		$this->assertSame( 0, $this->lock->watching() );
+	}
+
+	/**
+	 * The other half of the same rule, and the deliberate sibling of
+	 * `test_a_draft_still_being_prepared_keeps_its_lock`: a hold granted a moment ago
+	 * over a row that is not active is not evidence of a corpse. It is what
+	 * {@see Operation_Service::resume()} looks like between taking the lock and
+	 * writing the status, and freeing it there hands a live catalogue to a second
+	 * writer.
+	 */
+	public function test_a_settled_run_that_has_only_just_stopped_keeps_its_flag(): void {
+		$op_id = $this->queued_run();
+		$this->operations->set_status( $op_id, Operation_Status::FAILED );
+
+		// A fresh hold over a settled row: exactly the state resume() publishes.
+		$this->lock->acquire( $op_id );
+		$mine = $this->lock->generation();
+
+		$this->assertFalse( $this->recovery->run() );
+
+		$this->assertTrue( $this->lock->still_held( $mine ) );
+		$this->assertSame( $op_id, $this->lock->watching() );
+	}
+
+	/**
+	 * W1 as an interleaving rather than a state, driven through the real service at
+	 * the only instant it exists.
+	 *
+	 * {@see Lock::acquire()} fires this hook after both option writes and before
+	 * `resume()` has written anything to the row, which is precisely what another
+	 * request sees. The run must come out of it holding the lock it was granted, and
+	 * — the assertion that catches a recovery which handed the run on rather than
+	 * freeing it — with exactly one chunk enqueued.
+	 */
+	public function test_a_resume_in_flight_does_not_lose_its_lock_to_recovery(): void {
+		$op_id = $this->failed_run_with_work_left();
+
+		$recovery  = $this->recovery;
+		$intruded  = false;
+		$recovered = 0;
+		$before    = $this->scheduler->count();
+
+		// Recovery writes options of its own, so this must not re-enter.
+		$intrude = static function () use ( $recovery, &$intruded ): void {
+			if ( $intruded ) {
+				return;
+			}
+
+			$intruded = true;
+			$recovery->run();
+		};
+
+		$count = static function () use ( &$recovered ): void {
+			++$recovered;
+		};
+
+		add_action( 'update_option_catalogops_writer_active', $intrude );
+		add_action( 'add_option_catalogops_writer_active', $intrude );
+		add_action( 'catalogops_operation_recovered', $count );
+
+		try {
+			$this->service->resume( $op_id );
+		} finally {
+			remove_action( 'update_option_catalogops_writer_active', $intrude );
+			remove_action( 'add_option_catalogops_writer_active', $intrude );
+			remove_action( 'catalogops_operation_recovered', $count );
+		}
+
+		$this->assertTrue( $intruded, 'recovery never ran inside the window, so nothing was tested' );
+
+		$this->assertSame( $op_id, $this->lock->holder() );
+		$this->assertSame( $op_id, $this->lock->watching() );
+		$this->assertSame( Operation_Status::QUEUED, $this->operations->find( $op_id )->status );
+
+		// One chunk, not two: recovery neither freed the lock nor handed the run on.
+		$this->assertSame( $before + 1, $this->scheduler->count() );
+		$this->assertSame( 0, $recovered );
+	}
+
+	/**
+	 * W2, the window on the other side of the lock: between the status write and the
+	 * heartbeat, a resumed run reads active and — because ten minutes of silence is
+	 * what failed it — cold, which is the full hand-off path, not merely a freed
+	 * flag. Touched first, there is no such instant.
+	 *
+	 * Observed through core's `query` filter because {@see Operations::set_status()}
+	 * fires no hooks of its own: catch the UPDATE that writes `queued` for this
+	 * operation and read the heartbeat as it stood at that moment.
+	 */
+	public function test_a_resumed_run_is_warm_before_it_is_active(): void {
+		global $wpdb;
+
+		$op_id = $this->failed_run_with_work_left();
+		$this->chill( $op_id );
+
+		$table  = $this->schema->operations_table();
+		$caught = null;
+		$busy   = false;
+
+		$watch = function ( $query ) use ( $table, $op_id, &$caught, &$busy ) {
+			if ( $busy || null !== $caught ) {
+				return $query;
+			}
+
+			if ( ! str_contains( $query, 'UPDATE' ) || ! str_contains( $query, $table ) ) {
+				return $query;
+			}
+
+			if ( ! str_contains( $query, "'queued'" ) || ! str_contains( $query, (string) $op_id ) ) {
+				return $query;
+			}
+
+			// The nested read goes through this same filter.
+			$busy   = true;
+			$caught = $this->operations->find( $op_id )->last_progress_at;
+			$busy   = false;
+
+			return $query;
+		};
+
+		add_filter( 'query', $watch );
+
+		try {
+			$this->service->resume( $op_id );
+		} finally {
+			remove_filter( 'query', $watch );
+		}
+
+		$this->assertNotNull( $caught, 'the status write was never seen, so nothing was tested' );
+
+		// Warm at the instant the row went active — not the ten-minute-old stamp the
+		// watchdog failed it on, which is what recovery would have read as cold.
+		$this->assertGreaterThan(
+			gmdate( 'Y-m-d H:i:s', time() - Recovery::COLD_AFTER ),
+			$caught
+		);
+	}
+
+	/**
+	 * The `queue()` half of W2. A draft has no heartbeat, so coldness falls back to
+	 * `created_at` — and after a freeze that took minutes the row is already past
+	 * {@see Recovery::COLD_AFTER} at the instant it goes active. A run that has never
+	 * executed a chunk must not be handed to a second worker on those grounds.
+	 */
+	public function test_a_run_queued_after_a_long_freeze_is_not_handed_on_immediately(): void {
+		foreach ( range( 1, 3 ) as $i ) {
+			$this->make_product( 10 * $i );
+		}
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+
+		// What a freeze of minutes leaves behind: a draft older than COLD_AFTER, and
+		// no heartbeat of its own to be judged by.
+		$this->backdate_creation( $op_id );
+
+		$recovered = 0;
+		$count     = static function () use ( &$recovered ): void {
+			++$recovered;
+		};
+		add_action( 'catalogops_operation_recovered', $count );
+
+		$intruded = false;
+		$intruder = $this->recovery_between_the_two_writes( $op_id, $intruded );
+		add_filter( 'query', $intruder );
+
+		try {
+			$this->service->queue( $op_id );
+		} finally {
+			remove_filter( 'query', $intruder );
+			remove_action( 'catalogops_operation_recovered', $count );
+		}
+
+		$this->assertTrue( $intruded, 'recovery never ran inside the window, so nothing was tested' );
+
+		// One chunk from queue() itself, and none from a recovery that mistook a run
+		// which had never executed anything for one that had died.
+		$this->assertSame( 1, $this->scheduler->count() );
+		$this->assertSame( 0, $recovered );
+		$this->assertSame( $op_id, $this->lock->holder() );
+	}
+
+	/**
+	 * A hold written by the release before this one carries no grant time. It must
+	 * read as old — the flag is tidied exactly as it is today — rather than as fresh,
+	 * which would protect every pre-upgrade hold for ever.
+	 */
+	public function test_a_hold_granted_before_this_release_is_not_treated_as_fresh(): void {
 		$op_id = $this->queued_run();
 		$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
 
-		$this->assertSame( $op_id, $this->lock->watching() );
+		// The two-field shape the previous release wrote.
+		update_option( 'catalogops_active_operation', $op_id . ':' . uniqid( '', true ), false );
+
 		$this->assertFalse( $this->recovery->run() );
 		$this->assertSame( 0, $this->lock->watching() );
 	}
@@ -293,6 +496,105 @@ final class RecoveryTest extends Operations_Database_Case {
 		$wpdb->update(
 			$this->schema->operations_table(),
 			array( 'last_progress_at' => gmdate( 'Y-m-d H:i:s', time() - Recovery::COLD_AFTER - 60 ) ),
+			array( 'id' => $op_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+	}
+
+	/**
+	 * A `query` filter that runs recovery once, in the gap between the two writes
+	 * that publish a run — the status and the heartbeat.
+	 *
+	 * {@see Operations::set_status()} and {@see Operations::touch()} fire no hooks,
+	 * and the gap is one statement wide, so the SQL is the only seam that lands
+	 * inside it. The filter runs *before* its query executes, so riding the heartbeat
+	 * write puts recovery exactly where the other write has already landed under the
+	 * old order and has not yet under the new one — which is the whole difference
+	 * being tested.
+	 *
+	 * Under the old order recovery finds the row active and cold and takes the
+	 * hand-off path. Under the new one it finds a row that has not gone active yet —
+	 * and which branch then turns it away depends on the caller, which is worth being
+	 * exact about: from `queue()` the row is still DRAFT, so the draft clause stops
+	 * it; from `resume()` the row reads `failed` over a hold seconds old, so
+	 * {@see Recovery::FRESH_HOLD_GRACE} does. Two windows, two guards, one ordering.
+	 *
+	 * @param int  $op_id    The operation whose heartbeat write to ride.
+	 * @param bool $intruded Set to true when recovery actually ran, so a caller can
+	 *                       assert the window was reached rather than passing because
+	 *                       it never was.
+	 * @return callable The filter, to be added and removed by the caller.
+	 */
+	private function recovery_between_the_two_writes( int $op_id, bool &$intruded ): callable {
+		$recovery = $this->recovery;
+		$table    = $this->schema->operations_table();
+		$done     = false;
+		$busy     = false;
+
+		return static function ( $query ) use ( $recovery, $table, $op_id, &$done, &$busy, &$intruded ) {
+			if ( $done || $busy ) {
+				return $query;
+			}
+
+			if ( ! str_contains( $query, 'UPDATE' ) || ! str_contains( $query, $table ) ) {
+				return $query;
+			}
+
+			if ( ! str_contains( $query, 'last_progress_at' ) || ! str_contains( $query, (string) $op_id ) ) {
+				return $query;
+			}
+
+			// Recovery reads and writes through this same filter.
+			$done     = true;
+			$intruded = true;
+			$busy     = true;
+			$recovery->run();
+			$busy = false;
+
+			return $query;
+		};
+	}
+
+	/**
+	 * A run the watchdog stopped part-way, with frozen work still behind it — what
+	 * Resume is for, and the state resume() is always entered from.
+	 */
+	private function failed_run_with_work_left(): int {
+		$op_id = $this->queued_run();
+
+		$this->operations->set_status( $op_id, Operation_Status::FAILED );
+		$this->lock->release( $op_id );
+
+		$this->assertGreaterThan( 0, $this->changes->pending_count( $op_id ) );
+
+		return $op_id;
+	}
+
+	/**
+	 * Push the current hold's grant time back, so recovery stops treating it as a
+	 * hand-off that might still be in progress. The id and the generation are kept —
+	 * only the third field moves — so the value keeps the shape the code writes.
+	 */
+	private function age_the_hold(): void {
+		$parts    = explode( ':', $this->lock->generation() );
+		$parts[2] = (string) ( time() - Recovery::FRESH_HOLD_GRACE - 60 );
+
+		update_option( 'catalogops_active_operation', implode( ':', $parts ), false );
+	}
+
+	/**
+	 * Age a run's heartbeat to the ten-minute silence the watchdog failed it on,
+	 * without touching its status.
+	 *
+	 * @param int $op_id The operation to chill.
+	 */
+	private function chill( int $op_id ): void {
+		global $wpdb;
+
+		$wpdb->update(
+			$this->schema->operations_table(),
+			array( 'last_progress_at' => gmdate( 'Y-m-d H:i:s', time() - Watchdog::STALL_THRESHOLD - 60 ) ),
 			array( 'id' => $op_id ),
 			array( '%s' ),
 			array( '%d' )

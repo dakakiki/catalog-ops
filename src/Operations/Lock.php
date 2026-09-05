@@ -90,23 +90,102 @@ final class Lock {
 		// A fresh generation on every grant, the re-grant to the same operation
 		// included — that case is not a formality, it is recovery handing a run whose
 		// process died to a new worker, and it is the one that most needs the old
-		// worker fenced out. See {@see generation()}.
-		update_option( self::OPTION, $op_id . ':' . uniqid( '', true ), false );
+		// worker fenced out. See {@see generation()}. The grant time rides along as a
+		// third field; see {@see granted_at()}.
+		update_option( self::OPTION, $op_id . ':' . uniqid( '', true ) . ':' . time(), false );
 		update_option( self::WATCH_OPTION, $op_id, true );
 
 		return true;
 	}
 
 	/**
-	 * Release the lock, but only if this operation holds it.
+	 * Release the lock, but only if this operation holds it — and, when the caller
+	 * names one, only the exact hold it was granted or judged.
 	 *
-	 * @param int $op_id Operation releasing the lock.
+	 * The id alone stopped being enough the day recovery learned to re-grant one
+	 * operation to a second worker: "operation 31 holds the lock" and "the hold I am
+	 * talking about" are no longer the same sentence. A caller that arrives here on
+	 * the strength of something it read a moment ago — {@see Recovery}'s housekeeping
+	 * is the one that does — would otherwise free whatever hold is there now,
+	 * including one granted after it looked.
+	 *
+	 * The generation is optional because most callers cannot honestly supply one and
+	 * do not need to. {@see Operation_Service::cancel()},
+	 * {@see Operation_Service::take_over()}, {@see Operation_Service::delete()} and
+	 * {@see Watchdog::run()} are not giving back a hold they took: they are taking a
+	 * run down, and freeing whatever it holds is the act being asked for. They pass
+	 * nothing and get the id-only match they have always had, at the price they have
+	 * always paid.
+	 *
+	 * {@see still_held()} rather than {@see generation()}, for that method's own
+	 * reason: the re-grant this is looking for happens in a *different* request, so a
+	 * request-cached read cannot see it by construction and the check would pass for
+	 * ever while being worthless.
+	 *
+	 * This is a read and then a delete, not a compare-and-delete, and does not claim
+	 * to be: a grant landing between the two is freed anyway. What it removes is the
+	 * decision taken on information that was already stale when it was taken, which
+	 * is the wide part. Making it atomic means a conditional DELETE against
+	 * `option_value`, which goes behind the options API and leaves a persistent
+	 * object cache holding a value the database no longer has — the exact failure
+	 * {@see still_held()} exists to work around.
+	 *
+	 * @param int    $op_id      Operation releasing the lock.
+	 * @param string $generation The hold the caller was granted or judged, when it
+	 *                           has one.
 	 */
-	public function release( int $op_id ): void {
+	public function release( int $op_id, string $generation = '' ): void {
+		if ( '' !== $generation && ! $this->still_held( $generation ) ) {
+			return;
+		}
+
 		if ( $this->holder() === $op_id ) {
 			delete_option( self::OPTION );
 			update_option( self::WATCH_OPTION, 0, true );
 		}
+	}
+
+	/**
+	 * When the current hold was granted, or 0 when the stored value does not say.
+	 *
+	 * The third field of the lock value, and it exists for one reader.
+	 * {@see Recovery} finds the writer flag pointing at an operation whose row is not
+	 * active, and has to decide whether that is a flag which outlived its run or a
+	 * hand-off caught in the middle. The row cannot tell it apart, because being
+	 * briefly out of date is precisely what the row is doing in that window:
+	 * {@see Operation_Service::resume()} takes the lock and only then moves the row
+	 * off `failed`, so for those statements a deliberate, live resume reads exactly
+	 * like a corpse. The age of the hold is the one fact that separates them, and
+	 * until now nothing recorded it.
+	 *
+	 * It rides in {@see OPTION} because it describes the hold rather than the
+	 * operation — a fact whose whole life is one grant — and because here it is free:
+	 * the only caller is already inside the branch that reads this option in order to
+	 * release it, so the read is served from the request cache. A column would want a
+	 * migration for a value that never outlives a request; a second option would be a
+	 * second write on every grant and a value free to drift from the hold it
+	 * describes. The autoloaded mirror was considered and rejected for the opposite
+	 * reason: the two facts would then be torn apart by a death between
+	 * {@see acquire()}'s two writes, and every request already parses that one.
+	 *
+	 * Nothing else is disturbed. {@see holder()}'s leading `(int)` cast still yields
+	 * the id, {@see generation()} still compares the stored string whole, and the
+	 * value is written once per grant and never edited afterwards, so a worker's
+	 * captured copy stays comparable for the life of its chunk. `uniqid( '', true )`
+	 * spends a dot and never a colon, so the third field is unambiguous.
+	 *
+	 * A hold minted by the release before this one has no third field and reads as 0
+	 * — "granted long enough ago that nobody is waiting on it", which is true of every
+	 * such hold but one, and which leaves it tidied exactly as it is today. Stamping
+	 * an unstamped hold with the current time on sight was designed and rejected: it
+	 * rewrites the option, and a chunk still running the old code compares the value
+	 * whole, so it would surrender work it was entitled to finish — a certain cost to
+	 * remove a coincidental one.
+	 */
+	public function granted_at(): int {
+		$parts = explode( ':', $this->generation() );
+
+		return isset( $parts[2] ) ? (int) $parts[2] : 0;
 	}
 
 	/**

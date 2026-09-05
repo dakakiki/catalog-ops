@@ -738,8 +738,17 @@ final class Operation_Service {
 
 			$this->operations->set_target_count( $op_id, $target );
 			$this->operations->set_batch_size( $op_id, self::DEFAULT_BATCH );
-			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
+
+			// The heartbeat before the status, for the reason spelled out in
+			// {@see resume()} — and here it is not a two-statement hazard but a certain
+			// precondition. A draft has no heartbeat, so {@see Recovery::is_cold()}
+			// falls back to `created_at`, and the freeze this row has just come through
+			// takes minutes on a real catalogue. So the row went active already older
+			// than {@see Recovery::COLD_AFTER}, and any request landing between these
+			// two statements handed a run that had never executed a single chunk to a
+			// second worker, beside the chunk enqueued three lines below.
 			$this->operations->touch( $op_id );
+			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
 
 			$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
 
@@ -941,10 +950,24 @@ final class Operation_Service {
 		$handed_off = false;
 
 		try {
-			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
-			// A fresh heartbeat, or the watchdog would find a ten-minute-old stamp
-			// on a run that has only just restarted and fail it a second time.
+			// The heartbeat before the status, and the order is the fix rather than a
+			// tidy-up. A run becomes visible to {@see Recovery} the instant its status
+			// is written, and from that instant recovery judges it by its heartbeat —
+			// which, on a run the watchdog failed, is ten minutes old by construction,
+			// because ten minutes of silence is what failed it. Writing the status
+			// first therefore published, for the width of one statement, a run that is
+			// alive and reads long dead. A request landing there did not merely free a
+			// lock: it took the whole hand-off path — released the stuck chunks, minted
+			// a new generation, enqueued a chunk of its own — beside the chunk this
+			// method is about to enqueue, and both workers then carry the same
+			// generation, so neither fence ever fires and both write the catalogue.
+			//
+			// Touched first, the row is warm before it is active and there is no
+			// instant at which recovery can read it as cold. It is also still here for
+			// its original reason: without it the watchdog would find a ten-minute-old
+			// stamp on a run that has only just restarted and fail it a second time.
 			$this->operations->touch( $op_id );
+			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
 
 			$batch = $operation->batch_size > 0 ? $operation->batch_size : self::DEFAULT_BATCH;
 

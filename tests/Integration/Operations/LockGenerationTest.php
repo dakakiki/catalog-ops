@@ -133,6 +133,68 @@ final class LockGenerationTest extends Operations_Database_Case {
 	}
 
 	/**
+	 * The grant time rides in the lock value as a third field, and neither reader
+	 * that predates it may notice.
+	 */
+	public function test_a_grant_records_when_it_happened_and_stays_a_plain_id(): void {
+		$before = time();
+		$this->lock->acquire( 41 );
+
+		$this->assertGreaterThanOrEqual( $before, $this->lock->granted_at() );
+		$this->assertLessThanOrEqual( time(), $this->lock->granted_at() );
+
+		$this->assertSame( 41, $this->lock->holder() );
+		$this->assertStringStartsWith( '41:', $this->lock->generation() );
+	}
+
+	/**
+	 * A hold written by the release before this one has no third field. It must read
+	 * as granted long ago rather than as granted now — "absent" means the hold is old
+	 * enough that nobody is waiting on it, which is true of every such hold but the
+	 * one in flight at upgrade time. Reading it as fresh would protect every
+	 * pre-upgrade hold for ever and leave a dead flag costing a row read per request.
+	 */
+	public function test_a_hold_from_the_previous_release_reads_as_granted_long_ago(): void {
+		update_option( 'catalogops_active_operation', '41:' . uniqid( '', true ), false );
+
+		$this->assertSame( 0, $this->lock->granted_at() );
+		$this->assertSame( 41, $this->lock->holder() );
+	}
+
+	/**
+	 * The credential half. A caller that arrives to release on the strength of
+	 * something it read a moment ago must not free a hold granted after it looked —
+	 * which is recovery's housekeeping against a resume that has just taken the lock.
+	 */
+	public function test_a_release_that_names_a_hold_it_no_longer_owns_frees_nothing(): void {
+		$this->lock->acquire( 41 );
+		$stale = $this->lock->generation();
+
+		// Recovery re-granting the same operation to a new worker, or a resume taking
+		// its lock back: same id, new turn.
+		$this->lock->acquire( 41 );
+		$current = $this->lock->generation();
+
+		$this->lock->release( 41, $stale );
+
+		$this->assertSame( 41, $this->lock->holder() );
+		$this->assertTrue( $this->lock->still_held( $current ) );
+	}
+
+	/**
+	 * Most callers are not giving back a hold they took — they are taking a run down,
+	 * and freeing whatever it holds is the act being asked for. `cancel()`,
+	 * `take_over()`, `delete()` and the watchdog all rely on the id-only match.
+	 */
+	public function test_a_release_that_names_no_hold_still_frees_the_operation(): void {
+		$this->lock->acquire( 41 );
+
+		$this->lock->release( 41 );
+
+		$this->assertSame( 0, $this->lock->holder() );
+	}
+
+	/**
 	 * The fence itself, end to end: a run is taken from its worker mid-chunk, and the
 	 * worker stops rather than writing beside its replacement. It must also leave the
 	 * chain alone — enqueueing would put it back in a sequence it has been removed

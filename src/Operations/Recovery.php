@@ -63,6 +63,43 @@ final class Recovery {
 	public const COLD_AFTER = 2 * MINUTE_IN_SECONDS;
 
 	/**
+	 * How long a hold whose row has not yet spoken for it is left alone.
+	 *
+	 * A lock is taken before the row it names can be moved, and it has to be:
+	 * {@see Operation_Service::resume()} acquires and only then writes `queued`, so
+	 * for those statements the flag points at a row that still reads `failed` or
+	 * `paused` while a live request is very much inside it. Reading "not active" as
+	 * "settled" freed that hold out from under the request — the same mistake as the
+	 * DRAFT one below, in miniature, and it ends worse than the DRAFT one did: the
+	 * chunk that follows captures whatever generation is there next, and if a second
+	 * operation took the free lock in between, that worker passes its own fence for
+	 * ever and writes beside it. An {@see \CatalogOps\Operations\Actions\Adjust}
+	 * reads the field it writes, so "add 15" landing twice is a wrong number, not a
+	 * repeated change.
+	 *
+	 * The wait is what the branch below can afford, and only that branch. Releasing
+	 * a settled holder's flag is housekeeping: {@see Lock::acquire()} already steals
+	 * a hold whose holder is gone or settled, so a flag left standing wedges nothing
+	 * — all it costs is one row read per request until somebody clears it. Being late
+	 * is a query; being early is a second writer.
+	 *
+	 * That asymmetry is also why the wait lives here and nowhere near
+	 * {@see Lock::acquire()}. A grace that could refuse a *grant* was designed and
+	 * rejected: a preparation killed half way would leave a hold nothing could take,
+	 * and the site would decline every operation until it expired — permanently, if
+	 * the clock that stamped it runs ahead of the one that reads it. Refusing to tidy
+	 * up has no such failure.
+	 *
+	 * A minute against a window of two statements is four orders of magnitude of
+	 * headroom, and the price of the headroom is a minute of that row read. It is
+	 * deliberately its own number rather than {@see COLD_AFTER}: that one measures a
+	 * *worker's* silence against a heartbeat it owes, it shrank from ten minutes to
+	 * two once the heartbeat moved inside the object loop, and it is under standing
+	 * pressure to shrink again. A hand-off window has no business shrinking with it.
+	 */
+	public const FRESH_HOLD_GRACE = MINUTE_IN_SECONDS;
+
+	/**
 	 * Operations repository.
 	 *
 	 * @var Operations
@@ -118,9 +155,16 @@ final class Recovery {
 			return false;
 		}
 
+		$now       = $now ?? time();
 		$operation = $this->operations->find( $op_id );
 
 		if ( null === $operation ) {
+			// No grace here, and the absence is deliberate. Nothing can be
+			// mid-transition on a row that does not exist: every path that deletes one
+			// frees the lock first ({@see Operation_Service::delete()}), and the one
+			// that deletes a row while still holding the lock —
+			// {@see Operation_Service::discard_draft()}, on a queue that threw — is
+			// exactly the flag this should clear.
 			$this->lock->release( $op_id );
 
 			return false;
@@ -137,19 +181,44 @@ final class Recovery {
 		// chunk that followed captured an empty generation, failed its own fence on
 		// the first pulse, and abandoned the chain after a few dozen objects with no
 		// error anywhere.
+		//
+		// This stays even though the grace below is the general rule, because the
+		// grace cannot be stretched to cover it. Freezing 18,583 products outruns any
+		// number this class could pick, and a number long enough for it would leave a
+		// genuinely dead flag standing for the same minutes. A draft is the one hold
+		// whose length is bounded by the catalogue rather than by two statements.
 		if ( Operation_Status::DRAFT === $operation->status ) {
 			return false;
 		}
 
 		if ( ! $operation->status->is_active() ) {
+			// Either the flag has outlived its run, or a hand-off is caught in the
+			// middle, and the row alone cannot say which — a lock is taken before the
+			// row it names can be moved, so a live {@see Operation_Service::resume()}
+			// reads exactly like a corpse for as long as it takes to write one status.
+			// Ask the hold how old it is instead. {@see FRESH_HOLD_GRACE} says why this
+			// branch is allowed the patience, and why nothing else is.
+			//
+			// The hold is read before its age is judged and named when it is freed, so
+			// that a grant landing while this request is deciding is not freed on the
+			// strength of a decision that predates it. Both reads are served from the
+			// request cache the release below was going to pay for anyway, so the gate
+			// costs nothing; {@see Lock::release()} busts that cache on the way out,
+			// which is the point.
+			$hold = $this->lock->generation();
+
+			if ( $this->lock->granted_at() > $now - self::FRESH_HOLD_GRACE ) {
+				return false;
+			}
+
 			// Genuinely settled without saying so — the flag outlived its run. Clear it
 			// rather than reading this row on every request for ever.
-			$this->lock->release( $op_id );
+			$this->lock->release( $op_id, $hold );
 
 			return false;
 		}
 
-		if ( ! $this->is_cold( $operation, $now ?? time() ) ) {
+		if ( ! $this->is_cold( $operation, $now ) ) {
 			return false;
 		}
 
