@@ -195,6 +195,13 @@ final class Chunk_Runner {
 		$processed   = 0;
 		$failed      = 0;
 
+		// How much of the above has reached the row, so each flush sends only what
+		// has happened since the last one. {@see Operations::record_progress()} adds
+		// to the stored counters rather than setting them, so sending the running
+		// total on every beat would count the early objects once per beat.
+		$flushed_processed = 0;
+		$flushed_failed    = 0;
+
 		// The pulse starts with the chunk: the touch above is this loop's first beat.
 		$pulsed_at = microtime( true );
 
@@ -243,7 +250,33 @@ final class Chunk_Runner {
 			}
 
 			if ( microtime( true ) - $pulsed_at >= $pulse ) {
-				$this->operations->touch( $op_id );
+				// The beat carries the count, rather than only saying "still alive".
+				//
+				// The count used to be written once, after the loop, so a process killed
+				// mid-chunk lost every object it had already saved: the change rows were
+				// right and the number was not. Measured on the live catalogue —
+				// 21,058 reported against 21,366 actually applied, every row `applied`
+				// and none failed.
+				//
+				// That used to be a transient wrong number on a run that was over
+				// anyway. It stopped being transient when {@see Recovery} made mid-chunk
+				// death survivable: the run comes back and finishes, and the counter it
+				// carries for the rest of its life is short by whatever the dead worker
+				// had done since its last chunk boundary. A progress bar that never
+				// reaches its target on a run that completed is worse than no bar.
+				//
+				// It costs nothing. This beat already spent one UPDATE on the heartbeat,
+				// and {@see Operations::record_progress()} writes `last_progress_at`
+				// itself — so this is the same single statement, carrying more.
+				$this->operations->record_progress(
+					$op_id,
+					$processed - $flushed_processed,
+					$failed - $flushed_failed
+				);
+
+				$flushed_processed = $processed;
+				$flushed_failed    = $failed;
+
 				$pulsed_at = microtime( true );
 
 				// Checked on the pulse rather than per object: the same cadence that
@@ -264,10 +297,17 @@ final class Chunk_Runner {
 			}
 		}
 
+		// Whatever the beats have not carried yet — the objects saved since the last
+		// one, and on a chunk shorter than a single pulse that is all of them.
 		// Recorded either way: what this worker wrote before it let go really was
 		// written, and the counters have to describe the catalogue rather than the
-		// worker's fate.
-		$this->operations->record_progress( $op_id, $processed, $failed );
+		// worker's fate. It runs even when the remainder is zero, so the chunk still
+		// ends on a fresh heartbeat.
+		$this->operations->record_progress(
+			$op_id,
+			$processed - $flushed_processed,
+			$failed - $flushed_failed
+		);
 
 		if ( $surrendered ) {
 			// Everything below belongs to whoever holds the lock now. Enqueueing would

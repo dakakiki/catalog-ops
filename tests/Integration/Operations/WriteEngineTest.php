@@ -230,6 +230,62 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$this->assertSame( 6, $this->operations->find( $op_id )->processed );
 	}
 
+	/**
+	 * The counter has to describe the catalogue at every beat, not only at the end
+	 * of a chunk.
+	 *
+	 * It was written once, after the loop, so a process killed mid-chunk lost every
+	 * object it had already saved — the change rows were right and the number was
+	 * not. Measured live: 21,058 reported against 21,366 actually applied, every row
+	 * `applied` and none failed.
+	 *
+	 * That was a transient wrong number on a run that was over anyway, until
+	 * {@see \CatalogOps\Operations\Recovery} made mid-chunk death survivable. Now the
+	 * run comes back and finishes, and carries the short count for the rest of its
+	 * life: a bar that never reaches its target on a run that completed.
+	 */
+	public function test_progress_is_recorded_as_the_chunk_runs_not_only_at_its_end(): void {
+		for ( $i = 0; $i < 6; $i++ ) {
+			$this->make_product( 50 );
+		}
+
+		$op_id = $this->queue_price_change( 'price', Operator::GREATER_THAN, 20, '2.00' );
+
+		// Beat on every object, so the test does not wait five seconds for one.
+		$pulse_every_object = static fn(): float => 0.0;
+
+		$operations = $this->operations;
+		$seen       = array();
+
+		// Read the stored counter from inside the loop — what a supervisor, or the
+		// operations list polling every couple of seconds, would see mid-chunk.
+		$watch = static function () use ( $operations, $op_id, &$seen ): void {
+			$seen[] = $operations->find( $op_id )->processed;
+		};
+
+		add_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+		add_action( 'woocommerce_update_product', $watch );
+
+		try {
+			$this->runner->run( $op_id, 6 );
+		} finally {
+			remove_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+			remove_action( 'woocommerce_update_product', $watch );
+		}
+
+		$this->assertNotEmpty( $seen, 'nothing was saved, so nothing was tested' );
+
+		// It moved while the chunk was still running. Before, every one of these
+		// reads was nought until the loop ended.
+		$this->assertGreaterThan( 0, max( $seen ) );
+
+		// And each object still counted exactly once: the beat sends what has
+		// happened since the last one, not the running total.
+		$operation = $this->operations->find( $op_id );
+		$this->assertSame( 6, $operation->processed );
+		$this->assertSame( 0, $operation->failed );
+	}
+
 	public function test_second_operation_is_blocked_while_one_is_active(): void {
 		$this->make_product( 50 );
 
