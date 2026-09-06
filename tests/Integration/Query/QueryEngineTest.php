@@ -359,6 +359,117 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertNotContains( $hooli, $ids );
 	}
 
+	/**
+	 * The shape, not the answer — because the answer is identical either way and
+	 * that is exactly how this went unnoticed.
+	 *
+	 * The rule this engine is built around is that positive set membership is
+	 * JOINed, never tested as `l.product_id IN (SELECT …)`, because every one of
+	 * those invites MySQL to re-plan the whole query. It was applied to categories
+	 * and tags and never carried across to meta — so brand, the one meta field the
+	 * UI offers, kept writing the hazardous form. Measured on the live catalogue on
+	 * 2026-09-06, with each brand on ~10,000 products: four brands with nothing else
+	 * selected did not finish inside 45 seconds, and took 4.4s once joined. The user
+	 * met it as a filter that stopped responding.
+	 *
+	 * A results assertion cannot catch that — both shapes return the same rows —
+	 * so this reads the SQL the engine actually emits.
+	 */
+	public function test_positive_meta_membership_is_joined_rather_than_tested(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+
+		$seen = $this->capture_sql(
+			function (): void {
+				$this->engine->count(
+					new Filter(
+						array(
+							new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+							new Condition( 'meta:_brand', Operator::IN, array( 'Acme', 'Globex' ) ),
+						)
+					)
+				);
+			}
+		);
+
+		$this->assertNotSame( '', $seen, 'no query was captured, so nothing was tested' );
+		$this->assertStringContainsString( 'co_meta1', $seen, 'the meta condition did not become a join' );
+		$this->assertMatchesRegularExpression( '/INNER JOIN \(\s*SELECT DISTINCT pm\.post_id/', $seen );
+		$this->assertStringNotContainsString( 'l.product_id IN (', $seen );
+	}
+
+	/**
+	 * Negation keeps the tested form on purpose: an anti-join gives the optimiser no
+	 * join order to re-plan around, and a join would silently drop every product
+	 * that has no such meta row — which is precisely the set an exclusion must keep.
+	 */
+	public function test_meta_exclusion_stays_out_of_the_join(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+
+		$seen = $this->capture_sql(
+			function (): void {
+				$this->engine->count(
+					new Filter( array( new Condition( 'meta:_brand', Operator::NOT_IN, array( 'Acme' ) ) ) )
+				);
+			}
+		);
+
+		$this->assertStringContainsString( 'l.product_id NOT IN (', $seen );
+		$this->assertStringNotContainsString( 'co_meta', $seen );
+	}
+
+	/**
+	 * A join is an AND, so under OR the condition has to stay in the WHERE or it
+	 * would quietly narrow the filter instead of widening it.
+	 */
+	public function test_meta_membership_under_or_is_not_joined(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+
+		$seen = $this->capture_sql(
+			function (): void {
+				$this->engine->count(
+					new Filter(
+						array(
+							new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+							new Condition( 'meta:_brand', Operator::IN, array( 'Acme' ) ),
+						),
+						Filter::RELATION_OR
+					)
+				);
+			}
+		);
+
+		$this->assertStringContainsString( 'l.product_id IN (', $seen );
+		$this->assertStringNotContainsString( 'co_meta', $seen );
+	}
+
+	/**
+	 * Run something and return the longest statement it sent to MySQL — the engine's
+	 * own, rather than the small lookups around it.
+	 *
+	 * @param callable $run What to run.
+	 */
+	private function capture_sql( callable $run ): string {
+		$seen = '';
+
+		$watch = static function ( $query ) use ( &$seen ) {
+			if ( str_contains( $query, 'wc_product_meta_lookup' ) && strlen( $query ) > strlen( $seen ) ) {
+				$seen = $query;
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $watch );
+
+		try {
+			$run();
+		} finally {
+			remove_filter( 'query', $watch );
+		}
+
+		return $seen;
+	}
+
 	public function test_sku_contains_search(): void {
 		$alpha = $this->make_product( array( 'sku' => 'COPS-ALPHA-1' ) );
 		$beta  = $this->make_product( array( 'sku' => 'COPS-BETA-2' ) );

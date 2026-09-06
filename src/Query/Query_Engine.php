@@ -277,7 +277,7 @@ final class Query_Engine {
 		}
 
 		if ( str_starts_with( $field, 'meta:' ) ) {
-			return $this->meta_clause( substr( $field, strlen( 'meta:' ) ), $condition );
+			return $this->meta_clause( substr( $field, strlen( 'meta:' ) ), $condition, $join_slot );
 		}
 
 		// Unreachable while assert_field() stands guard above. Kept as a throw and
@@ -672,11 +672,32 @@ final class Query_Engine {
 	 * in one statement measured 800ms with a category and tag joined (CONTEXT §3
 	 * — the four-minute plan needed positive `IN (SELECT …)` semi-joins).
 	 *
+	 * **Positive membership is joined under AND, exactly as taxonomy already is,
+	 * and the omission was expensive.** The rule this class is built around was
+	 * applied to categories and tags and then never carried across to meta, so a
+	 * brand — the one meta field the UI actually offers — kept writing the very
+	 * `l.product_id IN (SELECT …)` the comment at the top of {@see sql_for()}
+	 * warns about. Measured on the live catalogue on 2026-09-06, brands being
+	 * ~10,000 products each: four brands with nothing else selected **did not
+	 * finish inside 45 seconds** as a tested `IN`, and took **4.4s** joined; with
+	 * five categories alongside, 9.1s against 3.8s. Same answers, 3,830 both ways.
+	 * The user met it as a filter that simply stopped responding.
+	 *
+	 * DISTINCT for the same reason the taxonomy join needs it: postmeta does not
+	 * stop a product carrying the key twice, and two matching rows would otherwise
+	 * count it twice.
+	 *
+	 * Under OR there is no join to be had — a join is an AND — so that path keeps
+	 * the tested form, and so does every negation, which {@see taxonomy_clause()}
+	 * and the paragraphs above explain is the shape negation actually wants.
+	 *
 	 * @param string    $meta_key  The meta key to test.
 	 * @param Condition $condition The condition.
-	 * @return array{0: string, 1: list<mixed>}
+	 * @param int|null  $join_slot Alias number for a join, or null if the clause
+	 *                             must stay in the WHERE (an OR filter).
+	 * @return array{0: string, 1: list<mixed>, 2?: string, 3?: list<mixed>}
 	 */
-	private function meta_clause( string $meta_key, Condition $condition ): array {
+	private function meta_clause( string $meta_key, Condition $condition, ?int $join_slot = null ): array {
 		if ( '' === $meta_key ) {
 			// Unreachable: `meta:` on its own names no key.
 			return $this->refuse( $condition, 'it names no meta key.' );
@@ -697,14 +718,24 @@ final class Query_Engine {
 		// negation may not be pushed in beside the value.
 		list( $value_test, $value_args ) = $this->meta_value_test( $operator->positive_twin(), $condition );
 
-		$keyword = $operator->is_negative() ? 'NOT IN' : 'IN';
+		if ( $operator->is_negative() || null === $join_slot ) {
+			$keyword = $operator->is_negative() ? 'NOT IN' : 'IN';
 
-		$fragment = "l.product_id {$keyword} (
-			SELECT pm.post_id FROM {$postmeta} pm
+			$fragment = "l.product_id {$keyword} (
+				SELECT pm.post_id FROM {$postmeta} pm
+				WHERE pm.meta_key = %s{$value_test}
+			)";
+
+			return array( $fragment, array( $meta_key, ...$value_args ) );
+		}
+
+		$alias = 'co_meta' . $join_slot;
+		$join  = "INNER JOIN (
+			SELECT DISTINCT pm.post_id FROM {$postmeta} pm
 			WHERE pm.meta_key = %s{$value_test}
-		)";
+		) {$alias} ON {$alias}.post_id = l.product_id";
 
-		return array( $fragment, array( $meta_key, ...$value_args ) );
+		return array( '', array(), $join, array( $meta_key, ...$value_args ) );
 	}
 
 	/**
