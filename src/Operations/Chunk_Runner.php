@@ -426,6 +426,22 @@ final class Chunk_Runner {
 	 * @param Operation $operation The operation that has finished.
 	 */
 	private function finalize( Operation $operation ): void {
+		// The last word on what this run did, taken from the rows rather than from
+		// the running total. Beating the count out on every pulse narrowed the loss a
+		// violent death causes; it cannot abolish it, because whatever a worker did
+		// between its last beat and being killed was never reported by anyone. That
+		// remainder used to survive to the end and be read for ever after: measured
+		// on the live catalogue after a host was stopped mid-run — 581 rows applied,
+		// 581 objects, every one of them written, and a completed operation whose bar
+		// read 523 of 581.
+		//
+		// Here it can simply be asked. The rows are the record, they are complete the
+		// moment nothing is pending, and one query buys a number that no longer
+		// depends on which process happened to survive. See
+		// {@see Changes::settled_counts()} for why the unit is the operation's own.
+		$settled = $this->changes->settled_counts( $operation->id, $operation->is_undo() );
+		$this->operations->set_progress( $operation->id, $settled['processed'], $settled['failed'] );
+
 		$this->operations->set_status( $operation->id, Operation_Status::COMPLETED, true );
 
 		if ( $operation->is_undo() && null !== $operation->parent_op_id ) {

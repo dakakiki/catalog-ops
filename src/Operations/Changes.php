@@ -472,6 +472,91 @@ final class Changes {
 	}
 
 	/**
+	 * What actually became of a settled operation's frozen list, in the unit that
+	 * operation's own counters speak.
+	 *
+	 * The truth of a run lives in these rows: every one of them was written by the
+	 * worker that owned it, under the guarded flip, so nothing here can be lost to a
+	 * process dying. The counters on the operation cannot say the same — they are
+	 * accumulated by the worker as it goes, so a worker killed between two beats
+	 * takes the count of everything it did since the last one with it. Measured on
+	 * the live catalogue after a host was stopped mid-run: 581 rows applied, 581
+	 * objects, and a counter reading 523. The rows were right; the number was not.
+	 *
+	 * A run that has settled is the one moment the two can be reconciled exactly,
+	 * and it is worth one query: from here the number is read for the rest of the
+	 * operation's life — by the history, the progress bar, and the report the
+	 * notifier mails — and a bar that stops short on a run that finished everything
+	 * is the plainest possible way of saying the plugin lost something, about the
+	 * one thing it must never lose.
+	 *
+	 * The unit is the caller's, for the reason {@see Chunk_Runner::run()} sets out
+	 * at length: an edit's target is a count of *objects*, because that is the number
+	 * its preview promised, while an undo's is a count of the parent's applied
+	 * *rows*. Reconciling in the wrong one would put the bar past its own target.
+	 *
+	 * Failure wins over success within one object, so an object whose save threw
+	 * after some of its fields had been recorded counts once, as failed — never in
+	 * both halves, which would push the total above the target.
+	 *
+	 * @param int  $operation_id Operation id.
+	 * @param bool $by_rows      Count rows (an undo) rather than objects (an edit).
+	 * @return array{processed: int, failed: int} Settled counts, pending ignored.
+	 */
+	public function settled_counts( int $operation_id, bool $by_rows ): array {
+		$table = $this->schema->changes_table();
+
+		$applied = Change_Status::APPLIED->value;
+		$failed  = Change_Status::FAILED->value;
+		$skipped = Change_Status::SKIPPED->value;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		if ( $by_rows ) {
+			$row = $this->wpdb->get_row(
+				$this->wpdb->prepare(
+					"SELECT
+						SUM( CASE WHEN status IN ( %d, %d ) THEN 1 ELSE 0 END ) AS processed,
+						SUM( CASE WHEN status = %d THEN 1 ELSE 0 END ) AS failed
+					FROM {$table} WHERE operation_id = %d",
+					$applied,
+					$skipped,
+					$failed,
+					$operation_id
+				),
+				ARRAY_A
+			);
+		} else {
+			// One row per object, so an object with several fields counts once —
+			// as failed if any of its fields failed, and as processed otherwise.
+			$row = $this->wpdb->get_row(
+				$this->wpdb->prepare(
+					"SELECT
+						SUM( 1 - object_failed ) AS processed,
+						SUM( object_failed ) AS failed
+					FROM (
+						SELECT MAX( CASE WHEN status = %d THEN 1 ELSE 0 END ) AS object_failed
+						FROM {$table}
+						WHERE operation_id = %d AND status IN ( %d, %d, %d )
+						GROUP BY object_id
+					) AS per_object",
+					$failed,
+					$operation_id,
+					$applied,
+					$failed,
+					$skipped
+				),
+				ARRAY_A
+			);
+		}
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return array(
+			'processed' => (int) ( $row['processed'] ?? 0 ),
+			'failed'    => (int) ( $row['failed'] ?? 0 ),
+		);
+	}
+
+	/**
 	 * Row counts grouped by status for an operation.
 	 *
 	 * @param int $operation_id Operation id.

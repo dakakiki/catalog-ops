@@ -286,6 +286,44 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$this->assertSame( 0, $operation->failed );
 	}
 
+	/**
+	 * A finished run reports what its rows say, not what happened to survive.
+	 *
+	 * Beating the count out on every pulse narrows what a violent death costs, but
+	 * cannot abolish it: whatever a worker did between its last beat and being killed
+	 * was never reported by anyone. That remainder used to outlive the run and be
+	 * read for ever after. Measured on the live catalogue on 2026-09-06, after the
+	 * host was stopped mid-run and recovery finished the job: 581 rows applied, 581
+	 * objects, every one of them written — and a *completed* operation whose bar read
+	 * 523 of 581.
+	 *
+	 * Here the loss is made deliberate, because a killed process cannot be staged in
+	 * a test: the counter is knocked back to nought after real work has landed, which
+	 * is the same state a dead worker leaves behind.
+	 */
+	public function test_a_completed_run_reports_what_its_rows_say_not_what_survived(): void {
+		for ( $i = 0; $i < 4; $i++ ) {
+			$this->make_product( 50 );
+		}
+
+		$op_id = $this->queue_price_change( 'price', Operator::GREATER_THAN, 20, '2.00' );
+
+		// Two objects written, and then the count of them lost.
+		$this->runner->run( $op_id, 2 );
+		$this->assertGreaterThan( 0, $this->operations->find( $op_id )->processed );
+		$this->operations->set_progress( $op_id, 0, 0 );
+
+		$this->drive( $op_id );
+
+		$operation = $this->operations->find( $op_id );
+		$this->assertSame( Operation_Status::COMPLETED, $operation->status );
+
+		// Four objects were written, so four is what a finished run must say —
+		// not the two the surviving worker happened to report.
+		$this->assertSame( 4, $operation->processed );
+		$this->assertSame( 0, $operation->failed );
+	}
+
 	public function test_second_operation_is_blocked_while_one_is_active(): void {
 		$this->make_product( 50 );
 

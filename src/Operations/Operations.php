@@ -326,6 +326,33 @@ final class Operations {
 	}
 
 	/**
+	 * Set the counters outright, rather than adding to them.
+	 *
+	 * The counterpart to {@see record_progress()}, and the only caller is the one
+	 * moment the true figures are knowable: a run that has settled, reconciled
+	 * against its own change rows by {@see Chunk_Runner::finalize()}. Adding is right
+	 * while work is in flight, because each worker knows only what it has just done;
+	 * it is wrong at the end, because what a worker never got to report is exactly
+	 * what a violent death takes with it.
+	 *
+	 * @param int $id        Operation id.
+	 * @param int $processed Objects, or rows for an undo, that were dealt with.
+	 * @param int $failed    Of those, the ones that failed.
+	 */
+	public function set_progress( int $id, int $processed, int $failed ): void {
+		$this->wpdb->update(
+			$this->schema->operations_table(),
+			array(
+				'processed' => $processed,
+				'failed'    => $failed,
+			),
+			array( 'id' => $id ),
+			array( '%d', '%d' ),
+			array( '%d' )
+		);
+	}
+
+	/**
 	 * Refresh only the heartbeat (used when a chunk starts, before it has
 	 * processed anything, so a slow first chunk does not look stalled).
 	 *
