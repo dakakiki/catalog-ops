@@ -3825,7 +3825,7 @@ function OperationRow( { op, onChanged, offline = false } ) {
 								: sprintf(
 										/* translators: %s: how long it has been quiet, e.g. "1m 20s". */
 										__(
-											'No progress for %s. If it does not carry on by itself, it is picked up automatically.',
+											'No progress for %s. A pause between chunks is normal; if the run has stopped, it is restarted automatically.',
 											'catalogops'
 										),
 										quietFor( op.quiet_seconds )
