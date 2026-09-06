@@ -470,6 +470,44 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		return $seen;
 	}
 
+	/**
+	 * "Without tag" in the filter, which asks about the taxonomy rather than about
+	 * which terms — the shape behind the tag list's one entry that is not a tag.
+	 */
+	public function test_tag_not_exists_matches_only_untagged_products(): void {
+		$tag = $this->ensure_term( 'QE Tag A', 'product_tag' );
+
+		$tagged   = $this->make_product( array( 'price' => 10 ) );
+		$untagged = $this->make_product( array( 'price' => 20 ) );
+		wp_set_object_terms( $tagged, array( $tag ), 'product_tag' );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'tag', Operator::NOT_EXISTS ) ) )
+		);
+
+		$this->assertContains( $untagged, $ids );
+		$this->assertNotContains( $tagged, $ids );
+	}
+
+	/**
+	 * Its opposite, which the same control produces in "is not" mode: excluding the
+	 * untagged leaves exactly the products that carry a tag.
+	 */
+	public function test_tag_exists_matches_only_tagged_products(): void {
+		$tag = $this->ensure_term( 'QE Tag B', 'product_tag' );
+
+		$tagged   = $this->make_product( array( 'price' => 10 ) );
+		$untagged = $this->make_product( array( 'price' => 20 ) );
+		wp_set_object_terms( $tagged, array( $tag ), 'product_tag' );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'tag', Operator::EXISTS ) ) )
+		);
+
+		$this->assertContains( $tagged, $ids );
+		$this->assertNotContains( $untagged, $ids );
+	}
+
 	public function test_sku_contains_search(): void {
 		$alpha = $this->make_product( array( 'sku' => 'COPS-ALPHA-1' ) );
 		$beta  = $this->make_product( array( 'sku' => 'COPS-BETA-2' ) );

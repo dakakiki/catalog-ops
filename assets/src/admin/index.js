@@ -1060,6 +1060,43 @@ function operatorFor( value ) {
  * @return {Object} Filter in the API's shape (scope included, so the same filter
  * drives the query, the preview, and the operation).
  */
+/**
+ * The tag list's one entry that is not a tag: "has none at all".
+ *
+ * A string, so it cannot collide with a term id — those are numbers, and the
+ * real ones go through `Number()` on the way into a condition while this never
+ * does.
+ */
+const NO_TAG = 'none';
+
+/**
+ * Reconcile a tag selection with the "Without tag" entry, which cannot coexist
+ * with a real one: no product both carries a tag and carries none, so a filter
+ * saying both would always match nothing.
+ *
+ * Rather than refuse the combination and make the user undo it, whichever was
+ * chosen last wins — picking "Without tag" clears the tags, and picking a tag
+ * clears "Without tag".
+ *
+ * @param {Array} previous The selection before this change.
+ * @param {Array} next     The selection the control is proposing.
+ * @return {Array} The selection to keep.
+ */
+function reconcileTagSelection( previous, next ) {
+	const had = previous.map( String ).includes( NO_TAG );
+	const has = next.map( String ).includes( NO_TAG );
+
+	if ( has && ! had ) {
+		return [ NO_TAG ];
+	}
+
+	if ( has && next.length > 1 ) {
+		return next.filter( ( id ) => String( id ) !== NO_TAG );
+	}
+
+	return next;
+}
+
 function buildFilter( form, scope, brandField ) {
 	const conditions = [];
 
@@ -1104,11 +1141,23 @@ function buildFilter( form, scope, brandField ) {
 		} );
 	}
 	if ( form.tag && form.tag.length ) {
-		conditions.push( {
-			field: 'tag',
-			operator: operatorFor( form.tagMode ),
-			value: form.tag.map( Number ),
-		} );
+		if ( form.tag.map( String ).includes( NO_TAG ) ) {
+			// "Without tag" asks about the taxonomy rather than about which terms,
+			// so it carries no value — the same shape the attribute pair below uses
+			// when no value is picked. The mode still governs, and reads the way the
+			// rest of the row does: the selection is what to keep, so excluding the
+			// untagged leaves exactly the products that do carry a tag.
+			conditions.push( {
+				field: 'tag',
+				operator: 'not_in' === form.tagMode ? 'exists' : 'not_exists',
+			} );
+		} else {
+			conditions.push( {
+				field: 'tag',
+				operator: operatorFor( form.tagMode ),
+				value: form.tag.map( Number ),
+			} );
+		}
 	}
 	if ( form.brand.length && brandField ) {
 		conditions.push( {
@@ -5474,12 +5523,24 @@ function App() {
 									<div className="catalogops-field catalogops-field--multi">
 										<MultiSelect
 											label={ __( 'Tag', 'catalogops' ) }
-											options={ tags }
+											options={ [
+												{
+													id: NO_TAG,
+													name: __(
+														'Without tag',
+														'catalogops'
+													),
+												},
+												...tags,
+											] }
 											value={ form.tag }
 											onChange={ ( ids ) =>
 												setForm( {
 													...form,
-													tag: ids,
+													tag: reconcileTagSelection(
+														form.tag,
+														ids
+													),
 												} )
 											}
 											mode={ form.tagMode }
