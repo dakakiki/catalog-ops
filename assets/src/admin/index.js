@@ -150,6 +150,24 @@ const HISTORY_POLL_IDLE_MS = 8000;
 const POLL_DUE_MS = 2000;
 
 /**
+ * How often the panel above the button asks about the run it just started.
+ *
+ * Faster than either list, because this is the one a user is watching on purpose:
+ * they pressed Apply and are waiting for the bar to move.
+ */
+const OPERATION_POLL_MS = 1500;
+
+/**
+ * How soon it asks again after a request that never answered.
+ *
+ * Slower than the ordinary cadence, because a poll fails when the server is not
+ * there — a host being restarted, a laptop that lost its network — and hammering
+ * something that is down helps nobody. Still far shorter than a run, so the panel
+ * catches up within seconds of the server coming back.
+ */
+const OPERATION_RETRY_MS = 4000;
+
+/**
  * How long a run may go without reporting before the history mentions it.
  *
  * Chunks land seconds apart, so a minute of silence is already out of the
@@ -1135,6 +1153,24 @@ function buildFilter( form, scope, brandField ) {
 function useOperationPoll( operation, setOperation, onDone ) {
 	const timer = useRef( null );
 
+	// Counts polls that never answered. It exists to restart the chain, because the
+	// chain is driven by `operation` changing: each answer replaces the snapshot,
+	// which re-runs this effect, which asks again. A request that fails replaces
+	// nothing, so before this it scheduled no successor and the panel stopped asking
+	// for the rest of the session — however long the run went on.
+	//
+	// Reported live on 2026-09-06: the host was stopped mid-run and started again
+	// fifteen minutes later, the operation recovered by itself and finished all
+	// 1,596 objects, and this panel still read 300 while the history a few
+	// centimetres below it had moved on to 1,200 and then to done. Neither the run
+	// nor the stored counter was wrong. The only thing that had died was this timer,
+	// killed by the one dropped request at the moment the server went away.
+	//
+	// The list below had this same defect and was rewritten for it; this hook was
+	// left behind. Counting the failures rather than swallowing them is what makes
+	// the retry a state change, which is the only thing this effect responds to.
+	const [ missed, setMissed ] = useState( 0 );
+
 	useEffect( () => {
 		if ( ! operation ) {
 			return undefined;
@@ -1144,16 +1180,39 @@ function useOperationPoll( operation, setOperation, onDone ) {
 			return undefined;
 		}
 
-		timer.current = setTimeout( () => {
-			apiFetch( {
-				path: `/catalogops/v1/operations/${ operation.id }`,
-			} )
-				.then( setOperation )
-				.catch( () => {} );
-		}, 1500 );
+		let cancelled = false;
 
-		return () => clearTimeout( timer.current );
-	}, [ operation, setOperation, onDone ] );
+		timer.current = setTimeout(
+			() => {
+				apiFetch( {
+					path: `/catalogops/v1/operations/${ operation.id }`,
+				} )
+					.then( ( next ) => {
+						if ( cancelled ) {
+							return;
+						}
+						// Both setters, and the order does not matter: React batches
+						// them into one re-render, so the effect re-runs once and
+						// schedules one successor. Resetting to nought when it is
+						// already nought is a no-op, so an uninterrupted run pays
+						// nothing for this.
+						setOperation( next );
+						setMissed( 0 );
+					} )
+					.catch( () => {
+						if ( ! cancelled ) {
+							setMissed( ( n ) => n + 1 );
+						}
+					} );
+			},
+			missed > 0 ? OPERATION_RETRY_MS : OPERATION_POLL_MS
+		);
+
+		return () => {
+			cancelled = true;
+			clearTimeout( timer.current );
+		};
+	}, [ operation, setOperation, onDone, missed ] );
 }
 
 /**
