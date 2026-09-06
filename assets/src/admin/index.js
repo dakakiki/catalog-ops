@@ -1372,7 +1372,8 @@ function useWaitingSeconds( active ) {
 const SLOW_START_SECONDS = 20;
 
 /**
- * A labelled progress bar for an in-flight or finished operation.
+ * A labelled progress bar for an operation that is still running, and the report
+ * for one that finished with something to explain.
  *
  * Applying does not start the work — it queues it, and the background runner
  * picks it up on its own schedule. On a site where WP-Cron only fires on the
@@ -1380,6 +1381,9 @@ const SLOW_START_SECONDS = 20;
  * indistinguishable from a stuck one. So an operation that has processed nothing
  * yet gets an explicitly indeterminate bar and a spinner: something is happening,
  * it just is not measurable yet. If the wait runs long, the bar says why.
+ *
+ * It renders nothing at all once a run has finished cleanly — see the guard
+ * below.
  *
  * @param {Object} props    Component props.
  * @param {Object} props.op The operation to render.
@@ -1389,6 +1393,19 @@ function ProgressBar( { op } ) {
 	const waiting = ! settled && op.processed === 0;
 	const waited = useWaitingSeconds( waiting );
 	const skipped = ( op.skip_reasons || [] ).filter( ( r ) => r.count > 0 );
+
+	// A run that finished cleanly has nothing left to say here. The bar exists to
+	// answer "is it moving?", and once the answer is "it is done" it is a leftover
+	// sitting above a history row that carries the same figures and keeps them.
+	//
+	// A run that did not go through cleanly is the exception, and it keeps the whole
+	// panel — counter included. There the numbers are not a progress report but the
+	// context for the explanation underneath: "523 of 581" is what makes "the rest
+	// were not changed because…" mean anything, and sending the user to the history
+	// to reconstruct that would be a worse trade than a panel that lingers.
+	if ( settled && op.failed === 0 && skipped.length === 0 ) {
+		return null;
+	}
 
 	return (
 		<div
