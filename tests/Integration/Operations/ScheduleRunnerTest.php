@@ -361,6 +361,107 @@ final class ScheduleRunnerTest extends Operations_Database_Case {
 	}
 
 	/**
+	 * Two schedules overlapping on one product, which the owner ruled is the user's
+	 * own arrangement to make: each keeps its own history, so each changes the
+	 * product once — all of them on its first tick, and only newcomers after that.
+	 *
+	 * The consequence is that the effects stack, once per schedule, and that is the
+	 * intended reading rather than an oversight: a product in two schedules is in
+	 * two schedules. What must not happen is either of them applying twice.
+	 */
+	public function test_each_schedule_keeps_its_own_history_when_they_overlap(): void {
+		$product = $this->make_product( 100 );
+
+		$small = $this->overlapping_schedule( 'Adds ten', 10 );
+		$large = $this->overlapping_schedule( 'Adds a hundred', 100 );
+
+		// First tick: both are due, and both apply once. The lock lets one run at a
+		// time, so this fires and drains them in turn.
+		$this->assertSame( 2, $this->fire_and_drive_all_due( '2026-08-10 10:00:00' ) );
+
+		$this->assertSame( '210', wc_get_product( $product )->get_regular_price() );
+
+		// Second tick, with nothing new in the catalogue: neither has anything left
+		// to do, and the price must not move again.
+		$this->fire_and_drive_all_due( '2026-08-10 11:00:00' );
+
+		$this->assertSame( '210', wc_get_product( $product )->get_regular_price() );
+
+		// Each froze its one object on the first tick and nothing on the second.
+		foreach ( array( $small, $large ) as $schedule_id ) {
+			$targets = array_map(
+				static fn( $row ): int => (int) $row,
+				$this->targets_of( $schedule_id )
+			);
+
+			$this->assertSame( array( 1, 0 ), $targets );
+		}
+	}
+
+	/**
+	 * An hourly schedule matching everything priced, adding a fixed amount.
+	 *
+	 * @param string $name   Schedule name.
+	 * @param float  $amount What to add to the regular price.
+	 */
+	private function overlapping_schedule( string $name, float $amount ): int {
+		return $this->schedules->create(
+			$name,
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Adjust( 'regular_price', $amount ) ),
+			Operation_Mode::SAFE,
+			Recurrence::HOURLY,
+			'2026-08-10 10:00:00',
+			'',
+			1
+		);
+	}
+
+	/**
+	 * Every run a schedule has spawned, oldest first, as frozen target counts.
+	 *
+	 * @param int $schedule_id The schedule to report on.
+	 * @return string[] Target counts in run order.
+	 */
+	private function targets_of( int $schedule_id ): array {
+		global $wpdb;
+
+		return $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT target_count FROM {$this->schema->operations_table()}
+				 WHERE schedule_id = %d ORDER BY id ASC",
+				$schedule_id
+			)
+		);
+	}
+
+	/**
+	 * Fire everything due at a moment and run each operation to completion.
+	 *
+	 * The single-writer lock allows one run at a time, so a tick with two due
+	 * schedules needs draining between fires — which is also what the live queue
+	 * does, one chunk chain after another.
+	 *
+	 * @param string $now The moment to fire at (GMT MySQL datetime).
+	 * @return int How many schedules fired.
+	 */
+	private function fire_and_drive_all_due( string $now ): int {
+		$fired  = 0;
+		$safety = 0;
+
+		while ( $this->runner->run_due( $now ) > 0 && $safety++ < 10 ) {
+			++$fired;
+
+			$guard = 0;
+			while ( null !== ( $active = $this->operations->active_excluding( 0 ) ) && $guard++ < 200 ) {
+				$this->chunks->run( $active->id, 50 );
+			}
+		}
+
+		return $fired;
+	}
+
+	/**
 	 * Run the chunks of whatever operation a schedule last spawned, to completion.
 	 *
 	 * @param int $schedule_id The schedule whose newest run to drive.
