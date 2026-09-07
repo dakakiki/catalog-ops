@@ -6,7 +6,7 @@ Tested up to: 7.1
 Requires PHP: 8.1
 WC requires at least: 9.0
 WC tested up to: 11.0
-Stable tag: 0.7.2
+Stable tag: 0.7.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -79,6 +79,21 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 3. Operation history with one-click undo.
 
 == Changelog ==
+
+= 0.7.3 =
+* Added: every operation that finishes now emails a report, whatever started it and whether or not anything was skipped. Until now a run that changed everything it promised said nothing, on the reasoning that an hourly schedule sending two dozen cheerful reports a day teaches its reader to delete them unopened. What outweighed that is that silence cannot be read: a clean run, a schedule that never fired, cron not reaching the site and a host quietly dropping outgoing mail all produce exactly the same no mail at all, and telling them apart meant opening a screen the report exists to spare you. A report that always arrives is also the only one whose absence means something. Sites that want the old quiet can silence any one source through the `catalogops_send_notifications` filter.
+* Changed: reports are now formatted, with the changed, skipped and failed figures in the same green, amber and red the admin screens use, and a plain-text copy sent alongside for text-only clients and spam filters. A figure of zero is left uncoloured, so colour in a report always means something.
+* Changed: reports print times on the shop's own clock, like the history does, instead of GMT.
+* Added: a run whose worker disappears — a restarted host, a killed PHP process — is picked up and carried on automatically, without anyone at the screen. A machine failure never pauses a schedule; only a person stopping or undoing a run does that.
+* Added: the history says when a run has stopped answering, counting up from a minute of silence, and offers to take it over. A run's controls are held back while the page itself cannot reach the site, so nothing is decided on a stale screen.
+* Fixed: an interrupted run's counter now settles on the truth. The count was written once per chunk, so a process killed mid-chunk lost everything it had already saved — a live run finished 581 changes and reported 523. The count now rides the heartbeat, and at the end it is reconciled from the change rows themselves, which are the record.
+* Fixed: the progress panel no longer freezes for the rest of the session after a single request that never answered. One dropped poll used to end polling entirely, so a run that recovered and finished showed a panel stuck at its old number beside a history that had moved on.
+* Changed: the progress panel goes away once a run is over, instead of leaving a full green bar on the screen.
+* Fixed: filtering by brand returned the wrong set. A positive brand membership was tested in the WHERE clause rather than joined, which on a large catalogue is both slow and wrong; it is now the same shape the category filter uses.
+* Added: the tag filter can ask for products that have no tag at all.
+* Fixed: a repeating schedule with a relative action no longer compounds. A percentage or formula schedule re-resolved its filter every run and applied itself again to everything matching, so a nightly "-5%" cut five percent off the already-cut price, night after night. A schedule now changes each product at most once: everything on its first run, and only what has newly entered the filter after that.
+* Fixed: a schedule pauses itself, with the reason recorded and emailed, when one of its runs is stopped or undone.
+* Added: HPOS (High-Performance Order Storage) compatibility is declared, so CatalogOps no longer counts as an undeclared plugin holding the feature back, and the supported WooCommerce range is stated in the plugin header.
 
 = 0.7.2 =
 * Fixed: a filter condition naming a field CatalogOps does not recognize is now refused, naming the field, instead of being ignored. An ignored condition removed a constraint, so "category X and brand Y" quietly became "category X" — a larger set of products, previewed and applied identically, so nothing downstream noticed. The same now applies to a comparison a field cannot make (a price "contains", a SKU "greater than") and to a "between" filter missing one end.

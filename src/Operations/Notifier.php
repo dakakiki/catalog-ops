@@ -17,24 +17,60 @@ namespace CatalogOps\Operations;
  * somebody who set a nightly job and went to bed, that is precisely backwards:
  * the plugin spoke when there was nothing to do and fell silent when there was.
  *
- * So there are three messages now, and one rule behind which of them are sent:
+ * So there are four messages, and one rule behind which of them are sent:
  *
- *   - **A run finished with something skipped or failed.** A run that changed
- *     everything it promised says nothing at all, because an hourly schedule
- *     sending twenty-four cheerful reports a day teaches its reader to delete
- *     them unopened — including the one that mattered.
+ *   - **A run completed.** Every operation that reaches {@see
+ *     Chunk_Runner::finalize()} reports, whatever its source and whether or not
+ *     anything was skipped.
+ *   - **A run finished with something skipped or failed** — the same message,
+ *     carrying the breakdown that explains the difference.
  *   - **A run was given up on** ({@see Watchdog}). Downstream of {@see Recovery},
  *     so this means the work really stopped, not that a process hiccuped.
  *   - **A schedule stopped itself** ({@see Schedule_Runner::pause()}). Worse than
  *     a failed run, because there is no row in the history to notice: it simply
  *     never happens again.
  *
- * Only scheduled work notifies: a UI operation is watched live, an undo is a
- * manual step, and a schedule the user paused themselves needs no announcement.
+ * **Success used to be silent, and the reason it no longer is.** The old rule was
+ * that a run which changed everything it promised said nothing, on the argument
+ * that an hourly schedule sending twenty-four cheerful reports a day teaches its
+ * reader to delete the twenty-fifth unopened. That argument is real and it is not
+ * wrong; it was simply outweighed by what silence actually costs. **Silence is
+ * ambiguous.** "No mail arrived" means the run was clean, *or* the schedule never
+ * fired, *or* cron is not reaching the site, *or* the host is dropping outgoing
+ * mail — four very different situations that the reader cannot tell apart without
+ * opening a screen they had no reason to open, which is the exact thing this class
+ * exists to spare them. That ambiguity is not hypothetical: it cost a live
+ * afternoon on a fresh server, where a working schedule and a broken mail
+ * transport produced identical evidence. A report that always arrives is also the
+ * only one whose *absence* means something.
+ *
+ * Every source notifies now, not just scheduled work. A UI operation is watched
+ * live in the browser, so its report is redundant to whoever started it — and it
+ * is not redundant to the colleague who did not, or to the same person tomorrow.
+ * The volume this creates is the honest cost of the change; `catalogops_send_notifications`
+ * is the opt-out, and it is handed the operation so a site can silence one source
+ * and keep the rest.
+ *
  * The recipient is the address on the schedule, falling back to the site admin;
  * both it and whether to send at all stay filterable.
  */
 final class Notifier {
+
+	/**
+	 * The colour a figure is printed in, matching the admin screens.
+	 *
+	 * The same three the operation history uses, and they are the whole reason the
+	 * report is HTML rather than text: a reader scanning a phone at seven in the
+	 * morning takes in "is there any red in this" long before they read a number.
+	 * Amber is the shop's own `#d97706`, deliberately not a second red — a skip is
+	 * a decision the plugin made and explains, not a failure.
+	 */
+	private const COLOR_APPLIED = '#15803d';
+	private const COLOR_SKIPPED = '#d97706';
+	private const COLOR_FAILED  = '#b91c1c';
+	private const COLOR_TEXT    = '#111827';
+	private const COLOR_MUTED   = '#6b7280';
+	private const COLOR_RULE    = '#e5e7eb';
 
 	/**
 	 * Operations repository.
@@ -71,42 +107,31 @@ final class Notifier {
 	}
 
 	/**
-	 * Send the completion report for an operation, if it is a scheduled one.
+	 * Send the completion report for an operation that finished.
+	 *
+	 * Reached from `catalogops_operation_completed`, which {@see
+	 * Chunk_Runner::finalize()} fires only after the status has settled as
+	 * COMPLETED and the counters have been reconciled from the change rows. So
+	 * every mail this method sends is about work that really finished, and the
+	 * figures in it are the settled ones rather than whatever the last surviving
+	 * worker happened to have filed — a run stopped or given up on never arrives
+	 * here at all, and has {@see notify_failed()} instead.
+	 *
+	 * No outcome is filtered out and no source is filtered out; see the class
+	 * docblock for why silence on a clean run was withdrawn.
 	 *
 	 * @param int $op_id The completed operation's id.
 	 */
 	public function notify( int $op_id ): void {
 		$operation = $this->operations->find( $op_id );
 
-		if ( null === $operation || Operation_Source::SCHEDULE !== $operation->source ) {
+		if ( null === $operation ) {
 			return;
 		}
 
-		$counts = $this->changes->counts( $op_id );
+		$report = $this->build_report( $operation, $this->schedule_for( $operation ) );
 
-		// A run that changed everything it promised has nothing to tell anyone. An
-		// hourly schedule was sending twenty-four of these a day, which is the surest
-		// way to teach someone to ignore the twenty-fifth — and the twenty-fifth is
-		// now the one that says something went wrong. Silence on success is what buys
-		// the failure messages their meaning.
-		if ( 0 === (int) $counts['skipped'] && 0 === (int) $counts['failed'] ) {
-			return;
-		}
-
-		$schedule = $this->schedule_for( $operation );
-		$report   = $this->build_report( $operation, $schedule );
-
-		/**
-		 * Filters whether a completion notification is sent.
-		 *
-		 * @param bool      $send      Whether to send (default true).
-		 * @param Operation $operation The completed operation.
-		 */
-		if ( ! apply_filters( 'catalogops_send_notifications', true, $operation ) ) {
-			return;
-		}
-
-		wp_mail( $report['recipient'], $report['subject'], $report['body'] );
+		$this->send( $operation, $report['recipient'], $report['subject'], $report['html'], $report['body'] );
 	}
 
 	/**
@@ -135,21 +160,34 @@ final class Notifier {
 		$label    = $this->label( $operation, $schedule );
 		$pending  = $this->changes->pending_count( $op_id );
 
-		$lines = array(
-			sprintf(
-				/* translators: %s: schedule or operation label. */
-				__( 'The scheduled operation "%s" stopped before it finished, and could not be carried on.', 'catalogops' ),
-				$label
-			),
-			'',
-			__( 'Changed before it stopped:', 'catalogops' ) . '  ' . $operation->processed,
-			__( 'Still waiting:', 'catalogops' ) . '  ' . $pending,
-			'',
-			// The one sentence that turns a report into something the reader can act
-			// on: the work is not lost, and finishing it is not the same as running
-			// the whole thing again over a catalogue that has moved on.
-			__( 'Nothing was lost. The items still waiting are the ones this run had already frozen, and Resume in the operation history finishes exactly those.', 'catalogops' ),
+		$opening = sprintf(
+			/* translators: %s: schedule or operation label. */
+			__( 'The scheduled operation "%s" stopped before it finished, and could not be carried on.', 'catalogops' ),
+			$label
 		);
+
+		$done    = __( 'Changed before it stopped:', 'catalogops' );
+		$waiting = __( 'Still waiting:', 'catalogops' );
+
+		// The one sentence that turns a report into something the reader can act
+		// on: the work is not lost, and finishing it is not the same as running
+		// the whole thing again over a catalogue that has moved on.
+		$reassurance = __( 'Nothing was lost. The items still waiting are the ones this run had already frozen, and Resume in the operation history finishes exactly those.', 'catalogops' );
+
+		$lines = array(
+			$opening,
+			'',
+			$done . '  ' . $operation->processed,
+			$waiting . '  ' . $pending,
+			'',
+			$reassurance,
+		);
+
+		// What is still waiting is the figure this message exists to deliver, so it
+		// carries the alarming colour; what was already done is green because it is
+		// genuinely done and stays done.
+		$rows = $this->figure( $done, (string) $operation->processed, $operation->processed > 0 ? self::COLOR_APPLIED : '' )
+			. $this->figure( $waiting, (string) $pending, $pending > 0 ? self::COLOR_FAILED : '' );
 
 		$this->send(
 			$operation,
@@ -160,6 +198,7 @@ final class Notifier {
 				$this->site(),
 				$label
 			),
+			$this->shell( esc_html( $opening ), $this->figures( $rows ), $this->note( $reassurance ) ),
 			implode( "\n", $lines )
 		);
 	}
@@ -209,31 +248,42 @@ final class Notifier {
 			$reason = __( 'not recorded', 'catalogops' );
 		}
 
+		$opening = sprintf(
+			/* translators: %s: schedule name. */
+			__( 'The schedule "%s" stopped itself and will not run again until it is resumed.', 'catalogops' ),
+			$label
+		);
+
+		$because = __( 'Reason:', 'catalogops' );
+		$advice  = __( 'Resume it from the Schedules list once whatever stopped it has been put right. Resuming without fixing it will simply stop it again on the next run.', 'catalogops' );
+
 		$lines = array(
-			sprintf(
-				/* translators: %s: schedule name. */
-				__( 'The schedule "%s" stopped itself and will not run again until it is resumed.', 'catalogops' ),
-				$label
-			),
+			$opening,
 			'',
-			__( 'Reason:', 'catalogops' ) . '  ' . $reason,
+			$because . '  ' . $reason,
 			'',
-			__( 'Resume it from the Schedules list once whatever stopped it has been put right. Resuming without fixing it will simply stop it again on the next run.', 'catalogops' ),
+			$advice,
 		);
 
 		$recipient = $this->recipient( $schedule, null );
 
+		/** This filter is documented in src/Operations/Notifier.php */
 		if ( ! apply_filters( 'catalogops_send_notifications', true, null ) ) {
 			return;
 		}
 
-		wp_mail(
+		$this->mail(
 			$recipient,
 			sprintf(
 				/* translators: 1: site name, 2: schedule name. */
 				__( '[%1$s] Schedule stopped: %2$s', 'catalogops' ),
 				$this->site(),
 				$label
+			),
+			$this->shell(
+				esc_html( $opening ),
+				$this->figures( $this->figure( $because, $reason, self::COLOR_FAILED ) ),
+				$this->note( $advice )
 			),
 			implode( "\n", $lines )
 		);
@@ -274,6 +324,228 @@ final class Notifier {
 	}
 
 	/**
+	 * The subject line's format string, chosen by what kind of run this was.
+	 *
+	 * Three whole sentences rather than one sentence with an interchangeable noun
+	 * dropped into it. A translator handed "%1$s completed: %2$s" and the word
+	 * "Undo" separately cannot make either agree with the other in a language that
+	 * inflects — which is most of them, including the one this plugin is being
+	 * built in. The duplication is the price of translatable output.
+	 *
+	 * The scheduled wording is unchanged from when it was the only wording, so a
+	 * mail rule somebody already filed on the old subject keeps matching.
+	 *
+	 * @param Operation $operation The completed operation.
+	 */
+	private function subject_format( Operation $operation ): string {
+		if ( $operation->is_undo() ) {
+			/* translators: 1: site name, 2: operation label. */
+			return __( '[%1$s] Undo completed: %2$s', 'catalogops' );
+		}
+
+		if ( Operation_Source::SCHEDULE === $operation->source ) {
+			/* translators: 1: site name, 2: schedule or operation label. */
+			return __( '[%1$s] Scheduled operation completed: %2$s', 'catalogops' );
+		}
+
+		/* translators: 1: site name, 2: operation label. */
+		return __( '[%1$s] Operation completed: %2$s', 'catalogops' );
+	}
+
+	/**
+	 * The report's first line, matching the subject.
+	 *
+	 * @param Operation $operation The completed operation.
+	 * @param string    $label     What to call it.
+	 */
+	private function opening( Operation $operation, string $label ): string {
+		if ( $operation->is_undo() ) {
+			return sprintf(
+				/* translators: %s: operation label. */
+				__( 'The undo "%s" has completed.', 'catalogops' ),
+				$label
+			);
+		}
+
+		if ( Operation_Source::SCHEDULE === $operation->source ) {
+			return sprintf(
+				/* translators: %s: schedule or operation label. */
+				__( 'The scheduled operation "%s" has completed.', 'catalogops' ),
+				$label
+			);
+		}
+
+		return sprintf(
+			/* translators: %s: operation label. */
+			__( 'The operation "%s" has completed.', 'catalogops' ),
+			$label
+		);
+	}
+
+	/**
+	 * Wrap a message in the shared shell: a ruled header, the content, a ruled
+	 * footer.
+	 *
+	 * Deliberately old-fashioned HTML — one table, every style inline, no class
+	 * attributes, no external stylesheet, no web font, nothing that needs to be
+	 * fetched. Mail clients strip `<style>` blocks, rewrite classes and block remote
+	 * assets by default, so anything cleverer degrades into unstyled text at exactly
+	 * the moment somebody needs to read it. The layout survives that anyway: with
+	 * every rule and colour removed it is still a heading, a list of labelled
+	 * figures and a footer.
+	 *
+	 * @param string $lead  The opening sentence, already escaped.
+	 * @param string $rows  The figures table, or '' when the message carries none.
+	 * @param string $notes Paragraphs after the figures, already escaped markup.
+	 */
+	private function shell( string $lead, string $rows, string $notes ): string {
+		$font = 'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif';
+
+		return '<div style="margin:0;padding:24px 12px;background:#f3f4f6;' . $font . '">'
+			. '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid ' . self::COLOR_RULE . ';border-radius:8px">'
+			. '<tr><td style="padding:18px 24px;border-bottom:1px solid ' . self::COLOR_RULE . '">' . $this->header() . '</td></tr>'
+			. '<tr><td style="padding:22px 24px;color:' . self::COLOR_TEXT . ';font-size:15px;line-height:1.5">'
+			. '<p style="margin:0 0 16px">' . $lead . '</p>'
+			. $rows
+			. $notes
+			. '</td></tr>'
+			. '<tr><td style="padding:14px 24px;border-top:1px solid ' . self::COLOR_RULE . ';color:' . self::COLOR_MUTED . ';font-size:12px;line-height:1.5">' . $this->footer() . '</td></tr>'
+			. '</table></div>';
+	}
+
+	/**
+	 * The header: the plugin's mark, and the shop this is about.
+	 *
+	 * The bundled `assets/menu-icon.svg` is **not** used, and that is not an
+	 * oversight. Gmail, Outlook and Yahoo all strip SVG, inline or linked, so an
+	 * `<img>` pointing at it renders as a broken-image icon in most inboxes —
+	 * strictly worse than the wordmark it would replace. A site with a raster logo
+	 * can supply one through the filter; nothing ships a URL by default, because a
+	 * default that is broken three times out of four is not a default.
+	 */
+	private function header(): string {
+		/**
+		 * Filters the logo shown at the top of a notification.
+		 *
+		 * Must be a PNG, JPEG or GIF reachable without authentication — a mail client
+		 * fetches it as an anonymous visitor, and many will not fetch it at all until
+		 * the reader allows images. Return '' (the default) for the text wordmark.
+		 *
+		 * @param string $url Absolute image URL, or '' for none.
+		 */
+		$logo = (string) apply_filters( 'catalogops_notification_logo', '' );
+
+		$mark = '' !== $logo
+			? '<img src="' . esc_url( $logo ) . '" alt="' . esc_attr( $this->site() ) . '" height="28" style="height:28px;width:auto;border:0;display:block" />'
+			: '<span style="font-size:17px;font-weight:700;color:' . self::COLOR_TEXT . '">CatalogOps</span>';
+
+		return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>'
+			. '<td align="left" style="vertical-align:middle">' . $mark . '</td>'
+			. '<td align="right" style="vertical-align:middle;color:' . self::COLOR_MUTED . ';font-size:13px">' . esc_html( $this->site() ) . '</td>'
+			. '</tr></table>';
+	}
+
+	/**
+	 * The footer: who to talk to about what this message says.
+	 *
+	 * Defaults to the shop's own identity rather than the plugin author's, because
+	 * the reader of a scheduled-run report is usually not the person who installed
+	 * the plugin — they are a colleague who needs to know whose shop this was and
+	 * where to reply. An agency running this for a client replaces the lot through
+	 * the filter.
+	 */
+	private function footer(): string {
+		$home  = home_url( '/' );
+		$admin = (string) get_option( 'admin_email' );
+
+		$lines = array(
+			'<strong style="color:' . self::COLOR_TEXT . '">' . esc_html( $this->site() ) . '</strong>'
+				. ' &middot; <a href="' . esc_url( $home ) . '" style="color:' . self::COLOR_MUTED . '">' . esc_html( (string) wp_parse_url( $home, PHP_URL_HOST ) ) . '</a>',
+		);
+
+		if ( '' !== $admin ) {
+			$lines[] = '<a href="mailto:' . esc_attr( $admin ) . '" style="color:' . self::COLOR_MUTED . '">' . esc_html( $admin ) . '</a>';
+		}
+
+		$lines[] = esc_html__( 'Sent automatically by CatalogOps. Reply to this address if something here looks wrong.', 'catalogops' );
+
+		/**
+		 * Filters the notification footer's HTML.
+		 *
+		 * @param string $footer The assembled footer markup.
+		 */
+		return (string) apply_filters( 'catalogops_notification_footer', implode( '<br />', $lines ) );
+	}
+
+	/**
+	 * One labelled figure: a bold label, and a value in whatever colour it earns.
+	 *
+	 * @param string $label Row label, already translated.
+	 * @param string $value The figure.
+	 * @param string $color Value colour, or '' for the body colour.
+	 * @param array  $notes Sub-lines under the figure — a skip breakdown.
+	 */
+	private function figure( string $label, string $value, string $color = '', array $notes = array() ): string {
+		$html = '<tr>'
+			. '<td style="padding:3px 14px 3px 0;font-weight:700;color:' . self::COLOR_TEXT . ';white-space:nowrap">' . esc_html( $label ) . '</td>'
+			. '<td style="padding:3px 0;font-weight:700;color:' . ( '' !== $color ? $color : self::COLOR_TEXT ) . '">' . esc_html( $value ) . '</td>'
+			. '</tr>';
+
+		foreach ( $notes as $note ) {
+			$html .= '<tr><td></td><td style="padding:0 0 3px;color:' . self::COLOR_MUTED . ';font-size:13px;font-weight:400">'
+				. esc_html( $note ) . '</td></tr>';
+		}
+
+		return $html;
+	}
+
+	/**
+	 * Wrap figure rows in their table.
+	 *
+	 * @param string $rows Rows from {@see figure()}.
+	 */
+	private function figures( string $rows ): string {
+		return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px;font-size:15px">' . $rows . '</table>';
+	}
+
+	/**
+	 * A closing paragraph.
+	 *
+	 * @param string $text Plain text; escaped here.
+	 */
+	private function note( string $text ): string {
+		return '<p style="margin:0;color:' . self::COLOR_MUTED . ';font-size:14px;line-height:1.5">' . esc_html( $text ) . '</p>';
+	}
+
+	/**
+	 * Render a GMT MySQL datetime on the shop's own clock.
+	 *
+	 * The report used to print the stored GMT value and label it "(GMT)", which was
+	 * honest and still wrong for the reader: the history screen beside it prints
+	 * local time, and a five-hour gap between two views of the same run was once
+	 * reported as a schedule firing five hours early. Being consistently local
+	 * across every surface is worth more than being explicit on one of them.
+	 *
+	 * Falls back to the raw stored value rather than an empty string — an
+	 * unparseable timestamp is a curiosity, and a report that silently loses its
+	 * only time is worse than one that shows an odd one.
+	 *
+	 * @param string $gmt GMT MySQL datetime.
+	 */
+	private function to_local( string $gmt ): string {
+		$timestamp = strtotime( $gmt . ' UTC' );
+
+		if ( false === $timestamp ) {
+			return $gmt;
+		}
+
+		return wp_date(
+			get_option( 'date_format', 'Y-m-d' ) . ' ' . get_option( 'time_format', 'H:i' ),
+			$timestamp
+		);
+	}
+
+	/**
 	 * Who hears about this: the address on the schedule, or the site admin.
 	 *
 	 * One resolution for every message this class sends. Two would drift, and a
@@ -302,15 +574,64 @@ final class Notifier {
 	 * @param Operation $operation The operation being reported on.
 	 * @param string    $recipient Where to send it.
 	 * @param string    $subject   Subject line.
-	 * @param string    $body      Message body.
+	 * @param string    $html      HTML body.
+	 * @param string    $text      Plain-text alternative.
 	 */
-	private function send( Operation $operation, string $recipient, string $subject, string $body ): void {
-		/** This filter is documented in src/Operations/Notifier.php */
+	private function send( Operation $operation, string $recipient, string $subject, string $html, string $text ): void {
+		/**
+		 * Filters whether a notification is sent.
+		 *
+		 * The operation is passed so a site can silence one kind of message and keep
+		 * the rest — most usefully, quieten the completion report for interactive
+		 * work (`Operation_Source::UI`) while leaving scheduled runs, failures and
+		 * self-pausing schedules audible. Returning false for everything turns the
+		 * plugin silent, which is a choice a site is entitled to make and which this
+		 * class will not second-guess.
+		 *
+		 * @param bool           $send      Whether to send (default true).
+		 * @param Operation|null $operation The operation being reported on, or null
+		 *                                  for a message about a schedule rather than
+		 *                                  a run.
+		 */
 		if ( ! apply_filters( 'catalogops_send_notifications', true, $operation ) ) {
 			return;
 		}
 
-		wp_mail( $recipient, $subject, $body );
+		$this->mail( $recipient, $subject, $html, $text );
+	}
+
+	/**
+	 * Send one message as HTML with a plain-text alternative beside it.
+	 *
+	 * The alternative is not politeness. An HTML-only message with no text part is
+	 * one of the oldest and cheapest spam signals there is, and this plugin's mail
+	 * is being sent by shops that have just wired up an SMTP relay for the first
+	 * time and have no reputation to spend — the one message that must not land in
+	 * a junk folder is the one saying a nightly schedule stopped. It also means a
+	 * watch, a terminal client or a screen reader gets the same figures rather than
+	 * a page of markup.
+	 *
+	 * `phpmailer_init` is the only seam WordPress offers for a multipart body, so
+	 * the listener is added immediately before the send and removed immediately
+	 * after: leaving it registered would staple this operation's report onto the
+	 * next mail any plugin on the site happens to send.
+	 *
+	 * @param string $recipient Where to send it.
+	 * @param string $subject   Subject line.
+	 * @param string $html      HTML body.
+	 * @param string $text      Plain-text alternative.
+	 */
+	private function mail( string $recipient, string $subject, string $html, string $text ): void {
+		$alternative = static function ( $phpmailer ) use ( $text ): void {
+			// phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- PHPMailer's own property name.
+			$phpmailer->AltBody = $text;
+		};
+
+		add_action( 'phpmailer_init', $alternative );
+
+		wp_mail( $recipient, $subject, $html, array( 'Content-Type: text/html; charset=UTF-8' ) );
+
+		remove_action( 'phpmailer_init', $alternative );
 	}
 
 	/**
@@ -334,52 +655,76 @@ final class Notifier {
 		 */
 		$recipient = $this->recipient( $schedule, $operation );
 
-		$subject = sprintf(
-			/* translators: 1: site name, 2: schedule or operation label. */
-			__( '[%1$s] Scheduled operation completed: %2$s', 'catalogops' ),
-			$site,
-			$label
-		);
+		$subject = sprintf( $this->subject_format( $operation ), $site, $label );
+
+		// An undo counts in rows, an edit in distinct objects — the same distinction
+		// {@see Changes::settled_counts()} makes, and getting it wrong here would put
+		// the report's own arithmetic at odds with the bar the user watched.
+		$targets = $operation->is_undo()
+			? __( 'Changes to revert:', 'catalogops' )
+			: __( 'Targets:', 'catalogops' );
+		$changed = $operation->is_undo()
+			? __( 'Reverted:', 'catalogops' )
+			: __( 'Changed:', 'catalogops' );
+
+		$opening = $this->opening( $operation, $label );
 
 		$lines = array(
-			sprintf(
-				/* translators: %s: schedule or operation label. */
-				__( 'The scheduled operation "%s" has completed.', 'catalogops' ),
-				$label
-			),
+			$opening,
 			'',
-			__( 'Targets:', 'catalogops' ) . '  ' . $operation->target_count,
-			__( 'Changed:', 'catalogops' ) . '  ' . $counts['applied'],
+			$targets . '  ' . $operation->target_count,
+			$changed . '  ' . $counts['applied'],
 			__( 'Skipped:', 'catalogops' ) . '  ' . $counts['skipped'],
 		);
 
 		// A bare skipped count leaves the reader guessing at exactly the moment they
 		// cannot come and look; the breakdown is the point of the report.
+		$breakdown = array();
+
 		foreach ( $this->changes->skip_reasons( $operation->id ) as $reason ) {
 			$explanation = Skip_Reason::tryFrom( $reason['reason'] );
 
-			$lines[] = '  - ' . $reason['count'] . ': ' . (
+			$breakdown[] = $reason['count'] . ': ' . (
 				null === $explanation
 					? __( 'no reason recorded', 'catalogops' )
 					: $explanation->label()
 			);
 		}
 
+		foreach ( $breakdown as $entry ) {
+			$lines[] = '  - ' . $entry;
+		}
+
+		$completed = sprintf(
+			/* translators: %s: completion time, on the shop's own clock. */
+			__( 'Completed at %s.', 'catalogops' ),
+			$this->to_local( (string) $operation->completed_at )
+		);
+
 		$lines = array(
 			...$lines,
 			__( 'Failed:', 'catalogops' ) . '   ' . $counts['failed'],
 			'',
-			sprintf(
-				/* translators: %s: completion time. */
-				__( 'Completed at %s (GMT).', 'catalogops' ),
-				(string) $operation->completed_at
-			),
+			$completed,
 		);
+
+		// Zero is printed in the body colour, not in green, orange or red. A row of
+		// coloured noughts trains the eye to ignore the colour, which is the one thing
+		// it is here to do; a figure earns its colour by being non-zero.
+		$rows = $this->figure( $targets, (string) $operation->target_count )
+			. $this->figure( $changed, (string) $counts['applied'], $counts['applied'] > 0 ? self::COLOR_APPLIED : '' )
+			. $this->figure( __( 'Skipped:', 'catalogops' ), (string) $counts['skipped'], $counts['skipped'] > 0 ? self::COLOR_SKIPPED : '', $breakdown )
+			. $this->figure( __( 'Failed:', 'catalogops' ), (string) $counts['failed'], $counts['failed'] > 0 ? self::COLOR_FAILED : '' );
 
 		return array(
 			'recipient' => $recipient,
 			'subject'   => $subject,
 			'body'      => implode( "\n", $lines ),
+			'html'      => $this->shell(
+				esc_html( $opening ),
+				$this->figures( $rows ),
+				$this->note( $completed )
+			),
 		);
 	}
 }
