@@ -143,6 +143,16 @@ final class Operations {
 	}
 
 	/**
+	 * The operations table's name.
+	 *
+	 * Exposed for the one caller that has to name it in SQL it does not itself run —
+	 * see {@see Changes::table()} for the reasoning.
+	 */
+	public function table(): string {
+		return $this->schema->operations_table();
+	}
+
+	/**
 	 * Find an operation by id.
 	 *
 	 * @param int $id Operation id.

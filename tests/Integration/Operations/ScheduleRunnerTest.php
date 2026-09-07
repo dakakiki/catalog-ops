@@ -30,7 +30,9 @@ use CatalogOps\Operations\Recurrence;
 use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedule_Status;
 use CatalogOps\Operations\Schedules;
+use CatalogOps\Operations\Actions\Adjust;
 use CatalogOps\Operations\Changes;
+use CatalogOps\Operations\Chunk_Runner;
 use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Operator;
@@ -46,6 +48,8 @@ final class ScheduleRunnerTest extends Operations_Database_Case {
 
 	private Schedules $schedules;
 	private Operations $operations;
+	private Changes $changes;
+	private Chunk_Runner $chunks;
 	private Operation_Service $service;
 	private Schedule_Runner $runner;
 
@@ -67,12 +71,13 @@ final class ScheduleRunnerTest extends Operations_Database_Case {
 		$engine           = new Query_Engine( $wpdb );
 		$this->operations = new Operations( $wpdb, $this->schema );
 		$this->schedules  = new Schedules( $wpdb, $this->schema );
-		$changes          = new Changes( $wpdb, $this->schema );
+		$this->changes    = new Changes( $wpdb, $this->schema );
 		$providers        = new Field_Providers( new Core_Fields(), new Meta_Fields() );
 		$lock             = new Lock( $this->operations );
 		$scheduler        = new Recording_Scheduler();
 
-		$this->service = new Operation_Service( $engine, $this->operations, $changes, $providers, $lock, $scheduler );
+		$this->service = new Operation_Service( $engine, $this->operations, $this->changes, $providers, $lock, $scheduler );
+		$this->chunks  = new Chunk_Runner( $this->operations, $this->changes, $providers, $scheduler, $lock );
 		$this->runner  = new Schedule_Runner( $this->schedules, $this->service, $this->operations );
 	}
 
@@ -304,6 +309,71 @@ final class ScheduleRunnerTest extends Operations_Database_Case {
 	 * @param Recurrence $recurrence How often it fires.
 	 * @param string     $next_run   First fire time (GMT MySQL datetime).
 	 */
+	/**
+	 * A repeat is for what has since entered the segment — not for doing the same
+	 * thing again to what this schedule has already changed.
+	 *
+	 * The action here is deliberately *relative*, because that is the case where
+	 * getting this wrong is not merely redundant but ruinous: it reads the value it
+	 * is about to replace, so a second pass compounds against the first. Reported
+	 * live on 2026-09-07 with an hourly `regular_price * 0.95`, where one product
+	 * went 430.14 → 408.63 → 388.20 over three ticks.
+	 */
+	public function test_a_repeat_changes_only_what_has_since_entered_the_segment(): void {
+		$first  = $this->make_product( 100 );
+		$second = $this->make_product( 200 );
+
+		$schedule_id = $this->schedules->create(
+			'Hourly rise',
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 0 ) ) ),
+			array( new Adjust( 'regular_price', 10 ) ),
+			Operation_Mode::SAFE,
+			Recurrence::HOURLY,
+			'2026-08-10 10:00:00',
+			'',
+			1
+		);
+
+		$this->assertSame( 1, $this->runner->run_due( '2026-08-10 10:00:00' ) );
+		$this->drive_last_run_of( $schedule_id );
+
+		$this->assertSame( '110', wc_get_product( $first )->get_regular_price() );
+		$this->assertSame( '210', wc_get_product( $second )->get_regular_price() );
+
+		// A product that appears between the two ticks — the only thing a repeat is
+		// supposed to catch.
+		$late = $this->make_product( 50 );
+
+		$this->assertSame( 1, $this->runner->run_due( '2026-08-10 11:00:00' ) );
+		$op_id = $this->operations->find( $this->schedules->find( $schedule_id )->last_op_id )->id;
+
+		// Only the newcomer was frozen: the two it had already changed are not its
+		// business a second time.
+		$this->assertSame( 1, $this->operations->find( $op_id )->target_count );
+
+		$this->drive_last_run_of( $schedule_id );
+
+		$this->assertSame( '60', wc_get_product( $late )->get_regular_price() );
+
+		// And the first two are untouched by the second tick — 110, not 120.
+		$this->assertSame( '110', wc_get_product( $first )->get_regular_price() );
+		$this->assertSame( '210', wc_get_product( $second )->get_regular_price() );
+	}
+
+	/**
+	 * Run the chunks of whatever operation a schedule last spawned, to completion.
+	 *
+	 * @param int $schedule_id The schedule whose newest run to drive.
+	 */
+	private function drive_last_run_of( int $schedule_id ): void {
+		$op_id  = (int) $this->schedules->find( $schedule_id )->last_op_id;
+		$safety = 0;
+
+		while ( $this->operations->find( $op_id )->status->is_active() && $safety++ < 200 ) {
+			$this->chunks->run( $op_id, 50 );
+		}
+	}
+
 	private function create_schedule( Recurrence $recurrence, string $next_run ): int {
 		return $this->schedules->create(
 			'Nightly cut',

@@ -53,6 +53,17 @@ final class Changes {
 	}
 
 	/**
+	 * The changes table's name.
+	 *
+	 * Exposed for the one caller that has to name it in SQL it does not itself run:
+	 * {@see \CatalogOps\Query\Requirements\Untouched_By_Schedule} is handed to the
+	 * query engine, which knows nothing of {@see Schema} and should not.
+	 */
+	public function table(): string {
+		return $this->schema->changes_table();
+	}
+
+	/**
 	 * Seed pending change rows for an operation, in bulk.
 	 *
 	 * @param int                                                                                            $operation_id Owning operation id.

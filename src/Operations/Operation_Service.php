@@ -17,6 +17,7 @@ use CatalogOps\Query\Filter_Field_Unavailable;
 use CatalogOps\Query\Filter_Fields;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
+use CatalogOps\Query\Requirements\Untouched_By_Schedule;
 use InvalidArgumentException;
 use Throwable;
 use WC_Product;
@@ -875,7 +876,32 @@ final class Operation_Service {
 		// undo later reverts — so progress never disagrees with the outcome. These
 		// are the same requirements {@see preview()} counted, so the number the user
 		// was shown is the number that runs.
-		$ids = $this->engine->resolve( $filter, $this->rules->requirements( $actions ) );
+		$requirements = $this->rules->requirements( $actions );
+
+		// A repeat is for what has since entered the segment, not for doing the same
+		// thing again to what this schedule has already changed. Without this a
+		// relative action compounds against its own last result: measured on the test
+		// catalogue with an hourly `regular_price * 0.95`, one product went 430.14 →
+		// 408.63 → 388.20 over three ticks, each reading the price the tick before
+		// had written. An overnight schedule would take a catalogue to nothing.
+		//
+		// It goes in as a requirement rather than a filter condition because that is
+		// the seam that already narrows a run to what it can actually change, and
+		// because the objects are then never frozen at all — seeding them only to
+		// skip each one at write time would be the same answer paid for in rows.
+		//
+		// Per schedule, deliberately. Two schedules overlapping on one product is the
+		// user's own arrangement to make, and each still drives its own values.
+		if ( null !== $operation->schedule_id ) {
+			$requirements[] = new Untouched_By_Schedule(
+				(int) $operation->schedule_id,
+				$this->changes->table(),
+				$this->operations->table(),
+				Skip_Reason::ALREADY_CHANGED_BY_SCHEDULE->value
+			);
+		}
+
+		$ids = $this->engine->resolve( $filter, $requirements );
 
 		if ( array() === $ids ) {
 			return 0;
