@@ -150,6 +150,41 @@ register_activation_hook(
 );
 
 /*
+ * Declare compatibility with WooCommerce's High-Performance Order Storage.
+ *
+ * The declaration is about orders, and this plugin does not have any: it filters
+ * and writes products and variations, and never reads or touches an order, an
+ * order item, or the tables either lives in. So the compatibility is real rather
+ * than optimistic — there is no code here that could care which storage
+ * WooCommerce chose.
+ *
+ * Saying so is still necessary, because silence is not neutral. WooCommerce lists
+ * every plugin that has not declared itself as *incompatible* on its HPOS screen,
+ * and a store with an undeclared plugin active is warned off enabling the feature
+ * altogether. An undeclared plugin therefore does not merely look untidy; it holds
+ * back a setting that has nothing to do with it.
+ *
+ * On `before_woocommerce_init`, which is the only hook early enough for the
+ * declaration to be counted, and guarded on the class because the plugin must
+ * still load when WooCommerce is absent — the test suite requires this file with
+ * no WooCommerce at all in the unit run.
+ */
+add_action(
+	'before_woocommerce_init',
+	static function (): void {
+		if ( ! class_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class ) ) {
+			return;
+		}
+
+		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+			'custom_order_tables',
+			CATALOGOPS_FILE,
+			true
+		);
+	}
+);
+
+/*
  * Boot on `plugins_loaded` so WooCommerce, translations, and other
  * dependencies are already available.
  */
