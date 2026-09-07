@@ -1443,17 +1443,46 @@ function ProgressBar( { op } ) {
 	const waited = useWaitingSeconds( waiting );
 	const skipped = ( op.skip_reasons || [] ).filter( ( r ) => r.count > 0 );
 
-	// A run that finished cleanly has nothing left to say here. The bar exists to
-	// answer "is it moving?", and once the answer is "it is done" it is a leftover
-	// sitting above a history row that carries the same figures and keeps them.
+	// Once a run is over the bar has answered its question and every part of it that
+	// measures progress is a leftover, sitting above a history row that carries the
+	// same figures and keeps them. So the counter and the bar both go.
 	//
-	// A run that did not go through cleanly is the exception, and it keeps the whole
-	// panel — counter included. There the numbers are not a progress report but the
-	// context for the explanation underneath: "523 of 581" is what makes "the rest
-	// were not changed because…" mean anything, and sending the user to the history
-	// to reconstruct that would be a worse trade than a panel that lingers.
-	if ( settled && op.failed === 0 && skipped.length === 0 ) {
-		return null;
+	// What can outlive the run is what it could not do. That is not progress, it is
+	// an outcome, and it is the one thing the history row does not say on its face.
+	// It was tried the other way first — keeping the whole panel whenever anything
+	// was skipped, on the grounds that the counter gives the explanation its scale —
+	// and a real run settled the argument: 3,042 items changed and 4 left alone
+	// because they already held the value, which is a footnote, and it held a full
+	// green completed bar on the screen to say so.
+	if ( settled ) {
+		if ( op.failed === 0 && skipped.length === 0 ) {
+			return null;
+		}
+
+		return (
+			<div className="catalogops-progress">
+				{ op.failed > 0 && (
+					<p>
+						{ sprintf(
+							/* translators: %d: number of items that could not be changed. */
+							_n(
+								'%d item could not be changed.',
+								'%d items could not be changed.',
+								op.failed,
+								'catalogops'
+							),
+							op.failed
+						) }
+					</p>
+				) }
+				{ skipped.length > 0 && (
+					<div className="catalogops-progress__note">
+						<p>{ __( 'Not changed:', 'catalogops' ) }</p>
+						<ReasonList items={ skipped } />
+					</div>
+				) }
+			</div>
+		);
 	}
 
 	return (
@@ -1521,12 +1550,6 @@ function ProgressBar( { op } ) {
 						'catalogops'
 					) }
 				</p>
-			) }
-			{ settled && skipped.length > 0 && (
-				<div className="catalogops-progress__note">
-					<p>{ __( 'Not changed:', 'catalogops' ) }</p>
-					<ReasonList items={ skipped } />
-				</div>
 			) }
 		</div>
 	);
