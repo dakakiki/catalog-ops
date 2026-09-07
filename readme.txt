@@ -2,8 +2,10 @@
 Contributors: dakakiki
 Tags: woocommerce, bulk edit, products, variations, undo
 Requires at least: 6.0
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 8.1
+WC requires at least: 9.0
+WC tested up to: 11.0
 Stable tag: 0.7.2
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html

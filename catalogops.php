@@ -7,6 +7,8 @@
  * Requires PHP:      8.1
  * Requires at least: 6.0
  * Requires Plugins:  woocommerce
+ * WC requires at least: 9.0
+ * WC tested up to:   11.0
  * Text Domain:       catalogops
  * Domain Path:       /languages
  * License:           GPL-2.0-or-later
