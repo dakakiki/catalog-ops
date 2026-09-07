@@ -33,4 +33,24 @@ use InvalidArgumentException;
  * {@see \CatalogOps\Licensing\License_Limited} so the client can still answer 402
  * and offer the upgrade rather than a dead end.
  */
-final class Filter_Field_Unavailable extends InvalidArgumentException {}
+final class Filter_Field_Unavailable extends InvalidArgumentException {
+
+	/**
+	 * Which field could not answer, when the thrower knows.
+	 *
+	 * The message already names it, and prose is not something a client can act on.
+	 * The recovery path this exception is meant to enable — "remove this condition
+	 * and preview again", offered as an explicit action rather than done silently,
+	 * because the rewritten filter matches a *larger* set — needs the key itself.
+	 *
+	 * Optional, and defaulted, so every existing single-argument throw is unchanged.
+	 *
+	 * @param string $message Why the field cannot answer.
+	 * @param string $field   The filter key, or '' when the fault is not one field's
+	 *                        (a placeholder/argument mismatch over a whole
+	 *                        statement, say).
+	 */
+	public function __construct( string $message, public readonly string $field = '' ) {
+		parent::__construct( $message );
+	}
+}
