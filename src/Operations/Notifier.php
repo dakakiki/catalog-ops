@@ -414,30 +414,118 @@ final class Notifier {
 	}
 
 	/**
-	 * The header: the plugin's mark, and the shop this is about.
-	 *
-	 * The bundled `assets/menu-icon.svg` is **not** used, and that is not an
-	 * oversight. Gmail, Outlook and Yahoo all strip SVG, inline or linked, so an
-	 * `<img>` pointing at it renders as a broken-image icon in most inboxes —
-	 * strictly worse than the wordmark it would replace. A site with a raster logo
-	 * can supply one through the filter; nothing ships a URL by default, because a
-	 * default that is broken three times out of four is not a default.
+	 * The CID a bundled logo is embedded under.
 	 */
-	private function header(): string {
+	private const LOGO_CID = 'catalogops-logo';
+
+	/**
+	 * Where the notification logo comes from, and how it gets into the message.
+	 *
+	 * Three outcomes, in order: a URL a site supplied through the filter; the
+	 * bundled `assets/email-logo.png`, embedded in the message itself; or nothing,
+	 * in which case the header falls back to a text wordmark.
+	 *
+	 * The bundled file is a PNG and the admin header's mark is an SVG, which is
+	 * the whole reason `bin/make-email-logo.php` exists: Gmail, Outlook and Yahoo
+	 * all strip SVG, inline or linked, so the header's own markup would arrive as a
+	 * broken-image icon. The PNG carries the entire lockup — tile, wordmark and
+	 * tagline — rather than the tile alone beside HTML text, because the two-tone
+	 * name and letterspaced tagline depend on a font stack no mail client
+	 * guarantees; half the brand rendering in Times New Roman beside a
+	 * pixel-perfect tile is worse than either alone.
+	 *
+	 * Embedding beats linking for the same reason the plain-text alternative
+	 * exists. A linked image is remote content, and Outlook and Gmail both refuse
+	 * to fetch it until the reader says so, so the default experience of a linked
+	 * logo is a grey placeholder. It also assumes the shop is reachable from
+	 * wherever the reader is, which a staging site behind HTTP auth is not.
+	 *
+	 * @return array{mode: string, src: string, path: string, width: int, height: int}
+	 */
+	private function logo(): array {
+		$none = array(
+			'mode'   => 'none',
+			'src'    => '',
+			'path'   => '',
+			'width'  => 0,
+			'height' => 0,
+		);
+
 		/**
 		 * Filters the logo shown at the top of a notification.
 		 *
 		 * Must be a PNG, JPEG or GIF reachable without authentication — a mail client
 		 * fetches it as an anonymous visitor, and many will not fetch it at all until
-		 * the reader allows images. Return '' (the default) for the text wordmark.
+		 * the reader allows images, which is why the bundled default is embedded in
+		 * the message rather than linked. Return '' to keep the bundled logo.
 		 *
-		 * @param string $url Absolute image URL, or '' for none.
+		 * @param string $url Absolute image URL, or '' for the bundled one.
 		 */
-		$logo = (string) apply_filters( 'catalogops_notification_logo', '' );
+		$url = (string) apply_filters( 'catalogops_notification_logo', '' );
 
-		$mark = '' !== $logo
-			? '<img src="' . esc_url( $logo ) . '" alt="' . esc_attr( $this->site() ) . '" height="28" style="height:28px;width:auto;border:0;display:block" />'
-			: '<span style="font-size:17px;font-weight:700;color:' . self::COLOR_TEXT . '">CatalogOps</span>';
+		if ( '' !== $url ) {
+			return array(
+				'mode'   => 'url',
+				'src'    => $url,
+				'path'   => '',
+				'width'  => 0,
+				'height' => 0,
+			);
+		}
+
+		if ( ! defined( 'CATALOGOPS_PATH' ) ) {
+			return $none;
+		}
+
+		$path = CATALOGOPS_PATH . 'assets/email-logo.png';
+
+		if ( ! is_readable( $path ) ) {
+			return $none;
+		}
+
+		$size = getimagesize( $path );
+
+		if ( false === $size ) {
+			return $none;
+		}
+
+		// The file is drawn at twice its display size so it stays sharp on a phone.
+		// Reading the dimensions rather than hardcoding them means regenerating the
+		// logo at a different width needs no change here.
+		return array(
+			'mode'   => 'cid',
+			'src'    => 'cid:' . self::LOGO_CID,
+			'path'   => $path,
+			'width'  => (int) round( $size[0] / 2 ),
+			'height' => (int) round( $size[1] / 2 ),
+		);
+	}
+
+	/**
+	 * The header: the brand, and the shop this is about.
+	 */
+	private function header(): string {
+		$logo = $this->logo();
+
+		if ( 'none' === $logo['mode'] ) {
+			$mark = '<span style="font-size:17px;font-weight:700;color:' . self::COLOR_TEXT . '">CatalogOps</span>';
+		} else {
+			// The alt is the product's name and nothing else: it is what a reader with
+			// images off actually sees, so it has to read as a masthead rather than as
+			// a description of one.
+			// `esc_url()` cannot be used on the embedded case: `cid` is not in
+			// WordPress's allowed protocols, so it returns the empty string and the
+			// mark silently disappears. The value there is this class's own constant
+			// with no user input in it, so escaping it as an attribute is both
+			// sufficient and correct; a filtered URL still goes through `esc_url()`.
+			$src = 'cid' === $logo['mode'] ? esc_attr( $logo['src'] ) : esc_url( $logo['src'] );
+
+			$mark = '<img src="' . $src . '" alt="CatalogOps"'
+				. ( $logo['width'] > 0 ? ' width="' . $logo['width'] . '" height="' . $logo['height'] . '"' : ' height="28"' )
+				. ' style="'
+				. ( $logo['width'] > 0 ? 'width:' . $logo['width'] . 'px;height:' . $logo['height'] . 'px;' : 'height:28px;width:auto;' )
+				. 'border:0;display:block;font-size:17px;font-weight:700;color:' . self::COLOR_TEXT . '" />';
+		}
 
 		return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>'
 			. '<td align="left" style="vertical-align:middle">' . $mark . '</td>'
@@ -622,9 +710,19 @@ final class Notifier {
 	 * @param string $text      Plain-text alternative.
 	 */
 	private function mail( string $recipient, string $subject, string $html, string $text ): void {
-		$alternative = static function ( $phpmailer ) use ( $text ): void {
+		$logo = $this->logo();
+
+		$alternative = static function ( $phpmailer ) use ( $text, $logo ): void {
 			// phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- PHPMailer's own property name.
 			$phpmailer->AltBody = $text;
+
+			if ( 'cid' !== $logo['mode'] ) {
+				return;
+			}
+
+			// Attached inline under the CID the header's <img> names, so the mark
+			// renders without the reader having to allow remote images.
+			$phpmailer->addEmbeddedImage( $logo['path'], self::LOGO_CID, 'catalogops.png', 'base64', 'image/png' );
 		};
 
 		add_action( 'phpmailer_init', $alternative );

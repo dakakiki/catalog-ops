@@ -460,14 +460,16 @@ final class NotificationTest extends Operations_Database_Case {
 		$this->assertCount( 1, $this->mails );
 		$html = (string) $this->mails[0]['message'];
 
-		$this->assertStringContainsString( 'CatalogOps', $html, 'The header carries the mark.' );
 		$this->assertStringContainsString( 'border-bottom', $html, 'The header is ruled off from the content.' );
 		$this->assertStringContainsString( 'border-top', $html, 'The footer is ruled off from the content.' );
 		$this->assertStringContainsString( 'Sent automatically by CatalogOps', $this->body() );
 
-		// No logo is emitted by default: the bundled mark is an SVG, which the large
-		// mail clients strip, so the wordmark stands in until a site supplies a raster.
-		$this->assertStringNotContainsString( '<img', $html );
+		// The mark is the bundled PNG, attached inline rather than linked, so it
+		// renders without the reader having to allow remote images. Its alt is the
+		// product name, which is what somebody with images off actually reads.
+		$this->assertStringContainsString( 'src="cid:catalogops-logo"', $html );
+		$this->assertStringContainsString( 'alt="CatalogOps"', $html );
+		$this->assertStringNotContainsString( '.svg', $html, 'No mail client renders SVG.' );
 
 		$this->assertSame(
 			$before,
