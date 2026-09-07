@@ -265,6 +265,15 @@ final class Operation_Service {
 	 * @throws InvalidArgumentException When an action targets an unsupported field.
 	 */
 	public function preview( Filter $filter, array $actions, string $sku = '' ): array {
+		// The filter is checked here as well as in create(), and the duplication is
+		// the point: preview takes a filter straight off the request and never goes
+		// near create(), so this is the only place that can refuse it before a count
+		// is put in front of somebody. Without it an unanswerable field reached the
+		// engine and was refused there — the right outcome by luck, one layer deeper
+		// than the boundary that owns the decision, and only while every clause
+		// builder keeps refusing.
+		Filter_Fields::assert_answerable( $filter );
+
 		$this->assert_fields_supported( $actions );
 		$this->assert_values_writable( $actions );
 
@@ -867,6 +876,14 @@ final class Operation_Service {
 		$this->assert_fields_supported( $actions );
 
 		$filter = $operation->filter();
+
+		// And again at the freeze, which is the moment that matters most and the one
+		// furthest in time from create(). A schedule rehydrates a filter stored days
+		// or months ago, on a cron tick with nobody present; between then and now a
+		// module can have been deactivated or a field withdrawn, and the row this
+		// runs from was validated against a plugin set that no longer exists. Nothing
+		// else re-asks the question before the id set is frozen and written.
+		Filter_Fields::assert_answerable( $filter );
 
 		// The one-and-only filter resolution (CONTEXT §2), narrowed to the objects
 		// the edit can actually change: those carrying every field it reads, and

@@ -151,7 +151,13 @@ final class Query_Engine {
 				continue;
 			}
 
-			$sql .= ' AND ' . $fragment;
+			// Parenthesised for the same reason the condition fragments are, and this
+			// side is the one with a live precedent: {@see Requirements\Not} already
+			// wraps its inner fragment because it had to. A requirement that ever
+			// returns a top-level OR would otherwise widen the whole statement, and a
+			// requirement is the one thing here that may never widen — its entire
+			// purpose is to keep the previewed count equal to the applied one.
+			$sql .= ' AND ( ' . $fragment . ' )';
 			$args = array( ...$args, ...$fragment_args );
 		}
 
@@ -160,10 +166,81 @@ final class Query_Engine {
 			$args = array( ...$args, ...$where_args );
 		}
 
+		$this->assert_parity( $sql, $args );
+
 		// Identifiers ($projection, table names) are trusted; every value —
 		// including the post type — is a placeholder resolved here by prepare().
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		return $this->wpdb->prepare( $sql, ...$args );
+	}
+
+	/**
+	 * Refuse to run a statement whose placeholders and arguments do not match.
+	 *
+	 * The highest-value check available here, because both ways of getting it wrong
+	 * are silent. **Too few arguments** and `prepare()` returns the empty string;
+	 * `get_var('')` is null, `count()` casts null to 0, and the preview reports
+	 * "0 products match" — a wrong answer the user believes, adjusts their filter
+	 * around, and never reports as a bug. **Too many** and `vsprintf` binds the tail
+	 * one slot off: a statement that runs, succeeds, and answers a different
+	 * question than the one asked. Neither leaves a trace.
+	 *
+	 * It is stricter than wpdb on purpose. WordPress's escape pass accepts a space
+	 * as a printf padding character, so a stray `100% dry` inside a fragment parses
+	 * as a real placeholder there; here any percent sign that is not `%s`, `%d`,
+	 * `%f` or a doubled `%%` is refused outright. This engine writes every byte of
+	 * its own SQL and has no reason to contain one.
+	 *
+	 * The check covers the requirement path too, which is still hand-written SQL,
+	 * and it catches a mistake of the engine's own as readily as a provider's — the
+	 * reason it goes here rather than in any one clause builder.
+	 *
+	 * Refusing is right rather than merely safe: every one of these failures leaves
+	 * the id set the run would freeze possibly wrong in the widening direction, and
+	 * there is no narrower thing to substitute. As a {@see Filter_Field_Unavailable}
+	 * it maps to 400 at the REST boundary and pauses a schedule with a recorded
+	 * reason on the unattended path, rather than starving every later schedule.
+	 *
+	 * @param string  $sql  The assembled statement, before prepare().
+	 * @param mixed[] $args The argument vector.
+	 *
+	 * @throws Filter_Field_Unavailable When they do not match.
+	 */
+	private function assert_parity( string $sql, array $args ): void {
+		// Doubled percents are literals, not placeholders, and must not be counted
+		// as either a placeholder or a stray.
+		$stripped = str_replace( '%%', '', $sql );
+
+		$placeholders = preg_match_all( '/%[sdf]/', $stripped );
+		$strays       = substr_count( str_replace( array( '%s', '%d', '%f' ), '', $stripped ), '%' );
+
+		if ( $strays > 0 ) {
+			$this->refuse_statement(
+				sprintf(
+					'the query carries %d percent sign(s) that are not placeholders.',
+					$strays
+				)
+			);
+		}
+
+		if ( count( $args ) !== $placeholders ) {
+			$this->refuse_statement(
+				sprintf(
+					'the query has %1$d placeholder(s) and %2$d value(s).',
+					$placeholders,
+					count( $args )
+				)
+			);
+		}
+
+		foreach ( $args as $arg ) {
+			if ( ! is_scalar( $arg ) ) {
+				// wpdb replaces a non-scalar with '' after a _doing_it_wrong nobody
+				// sees, so a nested array arriving from the schemaless REST body would
+				// otherwise quietly become `= ''`.
+				$this->refuse_statement( 'one of its values is not a single value.' );
+			}
+		}
 	}
 
 	/**
@@ -202,7 +279,17 @@ final class Query_Engine {
 				continue;
 			}
 
-			$fragments[] = $fragment;
+			// Each fragment gets its own parentheses before it is glued to the next.
+			// Every clause this engine writes today is a single self-contained
+			// predicate, so this changes no statement it currently produces — and it
+			// is the difference between a filter that is right and one that is right
+			// by luck. A fragment carrying a top-level OR, glued with ' AND ', binds
+			// as `a AND b OR c`: the OR wins, and the filter matches everything c
+			// matches regardless of the other conditions. That is silent widening,
+			// which preview and run agree on perfectly, and the compiler M7 adds emits
+			// exactly one such fragment (a SERIALIZED_LIST probe over several
+			// operands). Two characters now, or a bug that cannot be seen later.
+			$fragments[] = '( ' . $fragment . ' )';
 			$args        = array( ...$args, ...$fragment_args );
 		}
 
@@ -311,6 +398,49 @@ final class Query_Engine {
 	}
 
 	/**
+	 * Refuse the whole statement, rather than one condition in it.
+	 *
+	 * The sibling of {@see refuse()} for a fault that belongs to the assembled
+	 * query and not to any single condition — a placeholder that has no value, a
+	 * value that has no placeholder. Same exception, so it maps to 400 and pauses a
+	 * schedule exactly as a refused condition does.
+	 *
+	 * @param string $reason What is wrong, one sentence, lower case.
+	 *
+	 * @throws Filter_Field_Unavailable Always.
+	 */
+	private function refuse_statement( string $reason ): never {
+		throw new Filter_Field_Unavailable(
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- UI-facing message, sanitized at the REST boundary.
+			'This filter cannot be run: ' . $reason
+		);
+	}
+
+	/**
+	 * The clause for a membership test whose operand set is empty.
+	 *
+	 * "Is one of nothing" matches nothing; "is not one of nothing" matches
+	 * everything. Both are real answers, and neither is the empty fragment these
+	 * sites used to return — {@see build_where()} skips an empty fragment, so under
+	 * AND the condition simply vanished and the filter matched a strictly larger
+	 * set than was asked for. That is the one direction that may never happen
+	 * quietly: preview and run resolve the same widened filter, agree perfectly,
+	 * and both report success.
+	 *
+	 * It is deliberately not a refusal. An empty list reaches here from the UI as
+	 * an ordinary state — a term select cleared, a saved filter whose terms were
+	 * all deleted — and refusing would turn "you have chosen nothing yet" into a
+	 * dead end. The convention is the one {@see taxonomy_clause()} already used for
+	 * terms that no longer exist, applied everywhere it was missing.
+	 *
+	 * @param Operator $operator The operator, positive or negative.
+	 * @return array{0: string, 1: list<mixed>}
+	 */
+	private function empty_set( Operator $operator ): array {
+		return array( $operator->is_negative() ? '1 = 1' : '1 = 0', array() );
+	}
+
+	/**
 	 * Numeric comparison against a lookup column.
 	 *
 	 * @param string    $column    Trusted column expression, e.g. `l.min_price`.
@@ -346,7 +476,7 @@ final class Query_Engine {
 		if ( Operator::IN === $operator || Operator::NOT_IN === $operator ) {
 			$values = array_values( (array) $condition->value );
 			if ( array() === $values ) {
-				return array( '', array() );
+				return $this->empty_set( $operator );
 			}
 
 			$placeholders = implode( ', ', array_fill( 0, count( $values ), $format ) );
@@ -385,7 +515,7 @@ final class Query_Engine {
 		if ( Operator::IN === $operator || Operator::NOT_IN === $operator ) {
 			$values = array_map( 'strval', array_values( (array) $condition->value ) );
 			if ( array() === $values ) {
-				return array( '', array() );
+				return $this->empty_set( $operator );
 			}
 
 			$placeholders = implode( ', ', array_fill( 0, count( $values ), '%s' ) );
@@ -462,7 +592,7 @@ final class Query_Engine {
 			: array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
 
 		if ( ! $any_term && array() === $term_ids ) {
-			return array( '', array() );
+			return $this->empty_set( $operator );
 		}
 
 		$tt_ids = $this->term_taxonomy_ids( $taxonomy, $term_ids );
@@ -589,7 +719,7 @@ final class Query_Engine {
 		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
 
 		if ( array() === $term_ids ) {
-			return array( '', array() );
+			return $this->empty_set( $condition->operator );
 		}
 
 		$slugs = $this->term_slugs( $term_ids );
@@ -710,7 +840,7 @@ final class Query_Engine {
 			&& array() === array_values( (array) $condition->value ) ) {
 			// An empty list is not a question: asked positively it would decay into
 			// "has this key at all", and negatively into "has it not".
-			return array( '', array() );
+			return $this->empty_set( $operator );
 		}
 
 		// A negative operator is asked as its positive twin and negated by the
@@ -796,7 +926,12 @@ final class Query_Engine {
 		if ( Operator::IN === $operator ) {
 			$values = array_map( 'strval', array_values( (array) $value ) );
 			if ( array() === $values ) {
-				return array( '', array() );
+				// Unreachable: meta_clause() answers an empty list before it gets
+				// here. Kept as a refusal rather than the empty test it used to
+				// return, because an empty test here is the widening this method's
+				// own docblock exists to forbid — it leaves the subquery standing and
+				// decays the condition into "has this meta key at all".
+				return $this->refuse( $condition, 'an "is one of" filter needs at least one value.' );
 			}
 
 			$placeholders = implode( ', ', array_fill( 0, count( $values ), '%s' ) );

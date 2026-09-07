@@ -25,7 +25,10 @@ use CatalogOps\Operations\Write_Rules;
 use CatalogOps\Operations\Fields\Core_Fields;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Operations\Fields\Meta_Fields;
+use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Filter_Field_Unavailable;
+use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Scope;
 use WC_Product_Simple;
 use WC_Product_Variable;
@@ -258,6 +261,83 @@ final class ApplicabilityTest extends Operations_Database_Case {
 
 		$this->assertSame( 1, $preview['matched'] );
 		$this->assertSame( 1, $preview['applicable'] );
+	}
+
+	/**
+	 * The preview refuses a filter it cannot answer, instead of counting without it.
+	 *
+	 * `create()` already asserted this, and `preview()` never goes near `create()` —
+	 * it takes a filter straight off the request. So this was reaching the engine
+	 * and being refused one layer deeper than the boundary that owns the decision,
+	 * which is the right outcome by luck rather than by design: it holds only while
+	 * every clause builder keeps refusing, and the whole point of the M7 provider
+	 * seam is that a stranger's builder will not.
+	 */
+	public function test_the_preview_refuses_a_filter_naming_a_field_that_cannot_be_answered(): void {
+		$this->make_product( 100 );
+
+		$filter = new Filter( array( new Condition( 'acf:gone', Operator::EQUALS, 'x' ) ) );
+
+		$this->expectException( Filter_Field_Unavailable::class );
+		$this->expectExceptionMessageMatches( '/acf:gone/' );
+
+		$this->service->preview( $filter, array( new Set_Value( 'regular_price', '9.99' ) ) );
+	}
+
+	/**
+	 * And the freeze refuses it too — the moment that matters most, and the one
+	 * furthest in time from `create()`.
+	 *
+	 * The filter is written straight into the draft row here, because that is the
+	 * only honest way to reproduce what really happens: a schedule stores a filter
+	 * that was valid when it was saved, and fires it days or months later on a cron
+	 * tick with nobody present, after a module has been deactivated or a field
+	 * withdrawn. `create()`'s check ran against a plugin set that no longer exists.
+	 */
+	public function test_the_freeze_refuses_a_filter_that_stopped_being_answerable(): void {
+		$this->make_product( 100 );
+
+		$op_id = $this->service->create(
+			$this->all_products(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::SCHEDULE,
+			1
+		);
+
+		// The field goes away between create() and queue().
+		global $wpdb;
+		$wpdb->update(
+			$this->schema->operations_table(),
+			array(
+				'filter_json' => (string) wp_json_encode(
+					array(
+						'relation'   => 'AND',
+						'scope'      => 'product',
+						'conditions' => array(
+							array(
+								'field'    => 'acf:gone',
+								'operator' => '=',
+								'value'    => 'x',
+							),
+						),
+					)
+				),
+			),
+			array( 'id' => $op_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		try {
+			$this->service->queue( $op_id );
+			$this->fail( 'queue() should refuse a filter that can no longer be answered.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'acf:gone', $e->getMessage() );
+		}
+
+		// And nothing was frozen on the way out.
+		$this->assertSame( 0, $this->changes->pending_count( $op_id ) );
 	}
 
 	/**
