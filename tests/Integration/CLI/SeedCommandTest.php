@@ -86,7 +86,16 @@ final class SeedCommandTest extends WP_UnitTestCase {
 		$this->assertNotSame( '', $product->get_regular_price() );
 		$this->assertNotEmpty( $product->get_category_ids() );
 		$this->assertNotEmpty( wp_get_object_terms( $ids[0], 'pa_color', array( 'fields' => 'ids' ) ) );
-		$this->assertNotEmpty( $product->get_meta( '_catalogops_brand' ) );
+
+		// A brand TERM, not a meta value. The seeder used to invent a
+		// `_catalogops_brand` key, and the admin app was then built over it —
+		// which is how the plugin ended up unable to see the brands of any shop
+		// using WooCommerce's own. A seeded catalogue that does not look like a
+		// real one is what the rest of the product gets designed against.
+		$this->assertNotEmpty(
+			wp_get_object_terms( $ids[0], 'product_brand', array( 'fields' => 'ids' ) )
+		);
+		$this->assertSame( '', (string) $product->get_meta( '_catalogops_brand' ) );
 		$this->assertSame( CATALOGOPS_VERSION, $product->get_meta( '_catalogops_seeded' ) );
 	}
 

@@ -1028,6 +1028,21 @@ function MultiSelect( {
  * @param {Function} props.onChange Called with the next row.
  */
 function ModuleField( { field, row, onChange } ) {
+	const [ options, setOptions ] = useState( [] );
+
+	// Fetched from the route the DESCRIPTOR names, not from a path this file
+	// knows. That is the whole point of `options_route`: a module can serve its
+	// own options without the client learning anything about it.
+	useEffect( () => {
+		if ( ! field.options_route || ! field.available ) {
+			return;
+		}
+
+		apiFetch( { path: field.options_route } )
+			.then( ( res ) => setOptions( res.terms || res.options || [] ) )
+			.catch( () => {} );
+	}, [ field.options_route, field.available ] );
+
 	const value = row ? row.value : '';
 	const mode = row ? row.mode : 'in';
 	const id = `catalogops-module-${ field.key.replace( /[^a-z0-9]/gi, '-' ) }`;
@@ -1051,6 +1066,26 @@ function ModuleField( { field, row, onChange } ) {
 	}
 
 	const presence = ( field.operators || [] ).includes( 'exists' );
+
+	// A set control gets the same picker the built-in category and tag rows use,
+	// so a module field looks and behaves like a first-party one. It carries its
+	// own include/exclude toggle, which is why the mode select below is hidden
+	// for it rather than shown twice.
+	if ( 'term_set' === field.control || 'value_set' === field.control ) {
+		return (
+			<div className="catalogops-field">
+				<MultiSelect
+					label={ field.label }
+					options={ options }
+					value={ Array.isArray( value ) ? value : [] }
+					placeholder={ __( 'Any', 'catalogops' ) }
+					mode={ 'not_in' === mode ? 'not_in' : 'in' }
+					onChange={ ( next ) => set( { value: next } ) }
+					onModeChange={ ( next ) => set( { mode: next } ) }
+				/>
+			</div>
+		);
+	}
 
 	return (
 		<div className="catalogops-field">
@@ -5140,12 +5175,10 @@ function App() {
 	// Bumped after an operation settles or a schedule is created, to clear the
 	// filter, bulk-edit, and schedule inputs for a fresh start.
 	const [ resetKey, setResetKey ] = useState( 0 );
-	// Discovery data for the category and brand dropdowns. brandField is the
-	// filter field a brand maps to (catalog-specific; supplied by the API).
+	// Discovery data for the category and brand dropdowns.
 	const [ categories, setCategories ] = useState( [] );
 	const [ tags, setTags ] = useState( [] );
 	const [ brands, setBrands ] = useState( [] );
-	const [ brandField, setBrandField ] = useState( '' );
 	const [ moduleFields, setModuleFields ] = useState( [] );
 	const [ attributes, setAttributes ] = useState( [] );
 	// Bumped whenever a schedule is created or acted on, to reload the list.
@@ -5161,7 +5194,7 @@ function App() {
 	// The filter that was actually applied to the table (frozen on Apply), so
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
-		buildFilter( emptyForm(), 'product', '' )
+		buildFilter( emptyForm(), 'product' )
 	);
 
 	// First-run onboarding + the mandatory backup acknowledgement (CONTEXT §9).
@@ -5189,10 +5222,7 @@ function App() {
 			.then( ( res ) => setTags( res.tags || [] ) )
 			.catch( () => {} );
 		apiFetch( { path: '/catalogops/v1/fields/brands' } )
-			.then( ( res ) => {
-				setBrands( res.brands || [] );
-				setBrandField( res.field || '' );
-			} )
+			.then( ( res ) => setBrands( res.brands || [] ) )
 			.catch( () => {} );
 		apiFetch( { path: '/catalogops/v1/fields/attributes' } )
 			.then( ( res ) => setAttributes( res.attributes || [] ) )
@@ -5212,7 +5242,7 @@ function App() {
 
 	const run = useCallback(
 		( toPage ) => {
-			const filter = buildFilter( form, scope, brandField, moduleFields );
+			const filter = buildFilter( form, scope, moduleFields );
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
@@ -5241,7 +5271,7 @@ function App() {
 				)
 				.finally( () => setLoading( false ) );
 		},
-		[ form, scope, brandField, moduleFields ]
+		[ form, scope, moduleFields ]
 	);
 
 	useEffect( () => {
@@ -5268,15 +5298,13 @@ function App() {
 	const resetAll = useCallback( () => {
 		const empty = emptyForm();
 		setForm( empty );
-		setAppliedFilter(
-			buildFilter( empty, scope, brandField, moduleFields )
-		);
+		setAppliedFilter( buildFilter( empty, scope, moduleFields ) );
 		setItems( [] );
 		setTotal( 0 );
 		setOtherScope( null );
 		setPage( 1 );
 		setResetKey( ( k ) => k + 1 );
-	}, [ scope, brandField, moduleFields ] );
+	}, [ scope, moduleFields ] );
 
 	// Apply: reset only once the operation has settled (its ProgressBar stays).
 	const onApplyDone = useCallback( () => {
@@ -5448,10 +5476,7 @@ function App() {
 												'Brand',
 												'catalogops'
 											) }
-											options={ brands.map( ( b ) => ( {
-												id: b,
-												name: b,
-											} ) ) }
+											options={ brands }
 											value={ form.brand }
 											onChange={ ( ids ) =>
 												setForm( {

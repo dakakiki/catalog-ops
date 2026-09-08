@@ -170,7 +170,7 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$response = $this->post(
 			'/catalogops/v1/operations',
 			array(
-				'filter'  => array( 'conditions' => array( array( 'field' => 'brand', 'operator' => '=', 'value' => 'Acme' ) ) ),
+				'filter'  => array( 'conditions' => array( array( 'field' => 'colour', 'operator' => '=', 'value' => 'red' ) ) ),
 				'actions' => array( array( 'type' => 'set', 'field' => 'regular_price', 'value' => '5.00' ) ),
 			)
 		);
@@ -196,7 +196,7 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$response = $this->post(
 			'/catalogops/v1/operations/preview',
 			array(
-				'filter'  => array( 'conditions' => array( array( 'field' => 'brand', 'operator' => '=', 'value' => 'Acme' ) ) ),
+				'filter'  => array( 'conditions' => array( array( 'field' => 'colour', 'operator' => '=', 'value' => 'red' ) ) ),
 				'actions' => array( array( 'type' => 'set', 'field' => 'regular_price', 'value' => '9.99' ) ),
 			)
 		);

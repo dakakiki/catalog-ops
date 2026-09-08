@@ -431,6 +431,22 @@ final class Query_Engine {
 			return $this->taxonomy_clause( 'product_tag', $condition, $scope, $join_slot );
 		}
 
+		if ( 'brand' === $field ) {
+			// WooCommerce's own brand taxonomy, core since 9.6 — the same shape as
+			// category and tag, and first-party for the same reason.
+			//
+			// It used to be a meta key. The seed command invented
+			// `_catalogops_brand` for its fake catalogue on 2026-08-07, the brand
+			// dropdown was built over that key two days later, and the filter
+			// `catalogops_brand_meta_key` existed so a real shop could point the
+			// plugin at wherever its brands actually were. Which meant that on a
+			// shop using WooCommerce's brands — the overwhelming majority — the
+			// brand filter found nothing until somebody wrote PHP. Nobody had
+			// looked at where brands live; the UI simply followed the data the
+			// seeder had left behind.
+			return $this->taxonomy_clause( 'product_brand', $condition, $scope, $join_slot );
+		}
+
 		if ( str_starts_with( $field, 'attribute:' ) ) {
 			$taxonomy = substr( $field, strlen( 'attribute:' ) );
 

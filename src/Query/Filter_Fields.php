@@ -48,6 +48,7 @@ final class Filter_Fields {
 		'sku',
 		'category',
 		'tag',
+		'brand',
 	);
 
 	/**

@@ -365,19 +365,16 @@ final class Query_Controller {
 			$cost_key = Variables::DEFAULT_COST_META_KEY;
 		}
 
-		/** This filter is documented in src/Rest/Fields_Controller.php */
-		$brand_key = (string) apply_filters( 'catalogops_brand_meta_key', '_catalogops_brand' );
-
 		$postmeta     = $this->wpdb->postmeta;
 		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
-		$args         = array( ...$ids, '_sale_price', $cost_key, $brand_key );
+		$args         = array( ...$ids, '_sale_price', $cost_key );
 
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
 				"SELECT post_id, meta_key, meta_value
 				FROM {$postmeta}
-				WHERE post_id IN ( {$placeholders} ) AND meta_key IN ( %s, %s, %s )",
+				WHERE post_id IN ( {$placeholders} ) AND meta_key IN ( %s, %s )",
 				...$args
 			),
 			ARRAY_A
@@ -401,12 +398,76 @@ final class Query_Controller {
 				$out[ $id ]['sale_price'] = $value;
 			} elseif ( $cost_key === $row['meta_key'] ) {
 				$out[ $id ]['cost'] = $value;
-			} elseif ( $brand_key === $row['meta_key'] ) {
-				$out[ $id ]['brand'] = $value;
 			}
 		}
 
+		// Brands come from WooCommerce's taxonomy, not from post meta, so they are
+		// a second read rather than another meta_key in the one above. Filtering by
+		// something the results do not show was a defect fixed in 0.7.1; showing a
+		// column read from somewhere the filter no longer looks would be the same
+		// defect wearing the opposite face.
+		foreach ( $this->brand_names( $ids ) as $id => $name ) {
+			if ( ! isset( $out[ $id ] ) ) {
+				$out[ $id ] = array(
+					'sale_price' => null,
+					'cost'       => null,
+					'brand'      => null,
+				);
+			}
+
+			$out[ $id ]['brand'] = $name;
+		}
+
 		return $out;
+	}
+
+	/**
+	 * The brand names for a page of objects, joined when an object has several.
+	 *
+	 * One indexed read over term_relationships rather than get_the_terms() per
+	 * row: the results table renders up to a hundred objects, and a per-row term
+	 * lookup is a hundred queries for one column.
+	 *
+	 * @param int[] $ids Object ids for this page.
+	 * @return array<int, string> Object id => brand name(s).
+	 */
+	private function brand_names( array $ids ): array {
+		if ( array() === $ids || ! taxonomy_exists( 'product_brand' ) ) {
+			return array();
+		}
+
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT tr.object_id, t.name
+				FROM {$this->wpdb->term_relationships} tr
+				INNER JOIN {$this->wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+				INNER JOIN {$this->wpdb->terms} t ON t.term_id = tt.term_id
+				WHERE tr.object_id IN ( {$placeholders} ) AND tt.taxonomy = %s
+				ORDER BY t.name ASC",
+				...array( ...$ids, 'product_brand' )
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$names = array();
+
+		foreach ( (array) $rows as $row ) {
+			$id = (int) $row['object_id'];
+
+			// Decoded for the same reason the picker's names are: a stored term
+			// name is HTML-encoded, and "Marks &amp;amp; Spencer" in a table cell
+			// is the 0.7.2 category defect in a different column.
+			$names[ $id ][] = html_entity_decode( (string) $row['name'], ENT_QUOTES, 'UTF-8' );
+		}
+
+		return array_map(
+			static fn( array $names ): string => implode( ', ', $names ),
+			$names
+		);
 	}
 
 	/**

@@ -65,9 +65,8 @@ export function operatorFor( value ) {
 /**
  * Build the filter payload from the form state and target scope.
  *
- * @param {Object} form       Form values.
- * @param {string} scope      'product' or 'variation'.
- * @param {string} brandField The filter field a brand maps to (from the API).
+ * @param {Object} form  Form values.
+ * @param {string} scope 'product' or 'variation'.
  * @return {Object} Filter in the API's shape (scope included, so the same filter
  * drives the query, the preview, and the operation).
  */
@@ -250,11 +249,10 @@ export function moduleConditions( modules, fields, scope ) {
  *
  * @param {Object} form         Form values.
  * @param {string} scope        'product' or 'variation'.
- * @param {string} brandField   The filter field a brand maps to (from the API).
  * @param {Array}  moduleFields Descriptors from /fields/filterable.
  * @return {Object} Filter in the API's shape.
  */
-export function buildFilter( form, scope, brandField, moduleFields = [] ) {
+export function buildFilter( form, scope, moduleFields = [] ) {
 	const conditions = [];
 
 	if ( form.priceMin !== '' ) {
@@ -316,11 +314,16 @@ export function buildFilter( form, scope, brandField, moduleFields = [] ) {
 			} );
 		}
 	}
-	if ( form.brand.length && brandField ) {
+	if ( form.brand.length ) {
+		// Term ids, like category and tag — brand is WooCommerce's own taxonomy.
+		// It used to be a meta key whose name arrived from the API, and its values
+		// were strings, because the seed command had invented one and the UI
+		// followed it. On a shop using WooCommerce's brands the control listed
+		// nothing at all.
 		conditions.push( {
-			field: brandField,
+			field: 'brand',
 			operator: operatorFor( form.brandMode ),
-			value: form.brand,
+			value: form.brand.map( Number ),
 		} );
 	}
 	if ( 'variation' === scope && form.attribute ) {

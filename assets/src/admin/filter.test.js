@@ -40,7 +40,7 @@ const conditionFor = ( filter, field ) =>
 
 describe( 'buildFilter', () => {
 	it( 'builds nothing from an empty form', () => {
-		const filter = buildFilter( emptyForm(), 'product', '' );
+		const filter = buildFilter( emptyForm(), 'product' );
 
 		expect( filter ).toEqual( {
 			relation: 'AND',
@@ -52,15 +52,14 @@ describe( 'buildFilter', () => {
 	it( 'always ANDs, because an exclusion must narrow and never widen', () => {
 		const filter = buildFilter(
 			form( { priceMin: '10', category: [ 5 ], categoryMode: 'not_in' } ),
-			'product',
-			''
+			'product'
 		);
 
 		expect( filter.relation ).toBe( 'AND' );
 	} );
 
 	it( 'carries the scope, so one filter drives the query, the preview and the run', () => {
-		expect( buildFilter( emptyForm(), 'variation', '' ).scope ).toBe(
+		expect( buildFilter( emptyForm(), 'variation' ).scope ).toBe(
 			'variation'
 		);
 	} );
@@ -69,8 +68,7 @@ describe( 'buildFilter', () => {
 		it( 'sends prices as numbers, not as the strings the inputs hold', () => {
 			const filter = buildFilter(
 				form( { priceMin: '10', priceMax: '250' } ),
-				'product',
-				''
+				'product'
 			);
 
 			expect( filter.conditions ).toEqual( [
@@ -80,11 +78,7 @@ describe( 'buildFilter', () => {
 		} );
 
 		it( 'keeps a zero, which is a real price and not an empty field', () => {
-			const filter = buildFilter(
-				form( { priceMin: '0' } ),
-				'product',
-				''
-			);
+			const filter = buildFilter( form( { priceMin: '0' } ), 'product' );
 
 			expect( conditionFor( filter, 'price' ) ).toEqual( {
 				field: 'price',
@@ -96,18 +90,14 @@ describe( 'buildFilter', () => {
 
 	describe( 'text', () => {
 		it( 'trims a SKU, so a stray space does not become part of the search', () => {
-			const filter = buildFilter(
-				form( { sku: '  ABC ' } ),
-				'product',
-				''
-			);
+			const filter = buildFilter( form( { sku: '  ABC ' } ), 'product' );
 
 			expect( conditionFor( filter, 'sku' ).value ).toBe( 'ABC' );
 		} );
 
 		it( 'drops a SKU that is only whitespace', () => {
 			expect(
-				buildFilter( form( { sku: '   ' } ), 'product', '' ).conditions
+				buildFilter( form( { sku: '   ' } ), 'product' ).conditions
 			).toHaveLength( 0 );
 		} );
 	} );
@@ -116,8 +106,7 @@ describe( 'buildFilter', () => {
 		it( 'sends term ids as numbers', () => {
 			const filter = buildFilter(
 				form( { category: [ '5', '9' ] } ),
-				'product',
-				''
+				'product'
 			);
 
 			expect( conditionFor( filter, 'category' ).value ).toEqual( [
@@ -128,8 +117,7 @@ describe( 'buildFilter', () => {
 		it( 'maps the exclude mode to not_in', () => {
 			const filter = buildFilter(
 				form( { category: [ 5 ], categoryMode: 'not_in' } ),
-				'product',
-				''
+				'product'
 			);
 
 			expect( conditionFor( filter, 'category' ).operator ).toBe(
@@ -146,35 +134,46 @@ describe( 'buildFilter', () => {
 			expect(
 				buildFilter(
 					form( { category: [], categoryMode: 'not_in' } ),
-					'product',
-					''
+					'product'
 				).conditions
 			).toHaveLength( 0 );
 		} );
 
 		/**
-		 * The brand field's key comes from the API rather than being hardcoded,
-		 * because a site can move brands to a different meta key. Without a key
-		 * there is no condition to build — and building one against '' would be a
-		 * condition the engine cannot answer.
+		 * Brand is WooCommerce's own taxonomy, so it behaves exactly like category
+		 * and tag: a fixed key and numeric term ids.
+		 *
+		 * It used to be neither. The seed command invented a `_catalogops_brand`
+		 * meta key for its fake catalogue, the UI was built over whichever key the
+		 * API named, and the values travelled as strings — so on a shop using
+		 * WooCommerce's brands the control listed nothing and matched nothing.
 		 */
-		it( 'skips brands when the API gave no brand field', () => {
-			expect(
-				buildFilter( form( { brand: [ 'acme' ] } ), 'product', '' )
-					.conditions
-			).toHaveLength( 0 );
-		} );
-
-		it( 'sends brand values as given, since they are not term ids', () => {
+		it( 'sends brands as numeric term ids under a fixed key', () => {
 			const filter = buildFilter(
-				form( { brand: [ 'acme' ] } ),
-				'product',
-				'meta:_brand'
+				form( { brand: [ '7', 9 ] } ),
+				'product'
 			);
 
-			expect( conditionFor( filter, 'meta:_brand' ).value ).toEqual( [
-				'acme',
-			] );
+			expect( conditionFor( filter, 'brand' ) ).toEqual( {
+				field: 'brand',
+				operator: 'in',
+				value: [ 7, 9 ],
+			} );
+		} );
+
+		it( 'excludes brands with not_in', () => {
+			const filter = buildFilter(
+				form( { brand: [ 7 ], brandMode: 'not_in' } ),
+				'product'
+			);
+
+			expect( conditionFor( filter, 'brand' ).operator ).toBe( 'not_in' );
+		} );
+
+		it( 'omits an empty brand selection', () => {
+			expect(
+				buildFilter( form( { brand: [] } ), 'product' ).conditions
+			).toHaveLength( 0 );
 		} );
 	} );
 
@@ -188,8 +187,7 @@ describe( 'buildFilter', () => {
 		it( 'asks about the taxonomy rather than about terms, and carries no value', () => {
 			const filter = buildFilter(
 				form( { tag: [ NO_TAG ] } ),
-				'product',
-				''
+				'product'
 			);
 
 			expect( conditionFor( filter, 'tag' ) ).toEqual( {
@@ -206,8 +204,7 @@ describe( 'buildFilter', () => {
 		it( 'inverts to exists when the row is set to exclude', () => {
 			const filter = buildFilter(
 				form( { tag: [ NO_TAG ], tagMode: 'not_in' } ),
-				'product',
-				''
+				'product'
 			);
 
 			expect( conditionFor( filter, 'tag' ).operator ).toBe( 'exists' );
@@ -216,8 +213,7 @@ describe( 'buildFilter', () => {
 		it( 'still sends real tags as numeric ids', () => {
 			const filter = buildFilter(
 				form( { tag: [ '3', '4' ] } ),
-				'product',
-				''
+				'product'
 			);
 
 			expect( conditionFor( filter, 'tag' ).value ).toEqual( [ 3, 4 ] );
@@ -238,8 +234,7 @@ describe( 'buildFilter', () => {
 						attribute: 'attribute:pa_size',
 						attributeValues: [ 7 ],
 					} ),
-					'product',
-					''
+					'product'
 				).conditions
 			).toHaveLength( 0 );
 		} );
@@ -250,8 +245,7 @@ describe( 'buildFilter', () => {
 					attribute: 'attribute:pa_size',
 					attributeValues: [ '7' ],
 				} ),
-				'variation',
-				''
+				'variation'
 			);
 
 			expect( conditionFor( filter, 'attribute:pa_size' ) ).toEqual( {
@@ -264,8 +258,7 @@ describe( 'buildFilter', () => {
 		it( 'asks about the attribute itself when no value is chosen', () => {
 			const filter = buildFilter(
 				form( { attribute: 'attribute:pa_size' } ),
-				'variation',
-				''
+				'variation'
 			);
 
 			expect( conditionFor( filter, 'attribute:pa_size' ) ).toEqual( {
@@ -280,8 +273,7 @@ describe( 'buildFilter', () => {
 					attribute: 'attribute:pa_size',
 					attributeMode: 'not_in',
 				} ),
-				'variation',
-				''
+				'variation'
 			);
 
 			expect( conditionFor( filter, 'attribute:pa_size' ).operator ).toBe(
@@ -344,8 +336,7 @@ describe( 'module fields', () => {
 	};
 
 	const conditions = ( modules, fields = [ supplier ], scope = 'product' ) =>
-		buildFilter( { ...emptyForm(), modules }, scope, '', fields )
-			.conditions;
+		buildFilter( { ...emptyForm(), modules }, scope, fields ).conditions;
 
 	it( 'adds a condition for a filled row', () => {
 		expect(
@@ -435,7 +426,6 @@ describe( 'module fields', () => {
 				modules: { 'acf:supplier': { value: 'Globex', mode: 'in' } },
 			},
 			'product',
-			'',
 			[ supplier ]
 		);
 
@@ -447,9 +437,9 @@ describe( 'module fields', () => {
 	} );
 
 	it( 'is a no-op when no descriptors have arrived yet', () => {
-		expect(
-			buildFilter( emptyForm(), 'product', '' ).conditions
-		).toHaveLength( 0 );
+		expect( buildFilter( emptyForm(), 'product' ).conditions ).toHaveLength(
+			0
+		);
 	} );
 } );
 
