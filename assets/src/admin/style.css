@@ -12,6 +12,10 @@
 	--co-border: #dcdcde;
 	--co-border-strong: #c3c4c7;
 	--co-muted: #646970;
+	/* A hovered surface. wp-admin's own list-table row hover, so a CatalogOps
+	   control that lights up feels like the rest of the admin rather than like
+	   this plugin inventing a shade. */
+	--co-hover: #f0f0f1;
 	--co-ink: #1d2327;
 	/* Brand accent — indigo. */
 	--co-accent: #4338ca;        /* indigo-700 */
@@ -282,6 +286,7 @@
 .catalogops-field input[type='number'],
 .catalogops-field input[type='text'],
 .catalogops-field input[type='email'],
+.catalogops-field input[type='date'],
 .catalogops-field input[type='datetime-local'] {
 	height: var(--co-control-h);
 	min-height: var(--co-control-h);
@@ -1875,22 +1880,151 @@ vocabulary. Scoped and class+class deep for the same reason as
    where the plugin's own filter stopped and a third party's began, which is
    exactly the question a shop owner asks when a field does not behave the way
    the others do. */
+/* Ruled top and bottom, so the block is visibly closed rather than trailing off
+   into whatever follows it. Two modules stack into a list of banded sections
+   rather than one long run of controls. */
 .catalogops-module-group {
 	border-top: 1px solid var(--co-border);
+	border-bottom: 1px solid var(--co-border);
 	padding-top: 14px;
+	padding-bottom: 14px;
+}
+
+/* Folded, the block is only its heading, so the space under it closes up — and
+   the heading's own bottom margin goes with it, or the rule sits ten pixels
+   below a line of text with nothing in between. */
+.catalogops-module-group.is-closed {
+	padding-bottom: 10px;
+}
+
+.catalogops-module-group.is-closed button.catalogops-module-heading {
+	/* Mirrors the negative top margin: the padding still has to be cancelled at
+	   this end, or a folded heading sits 6px lower than an open one. */
+	margin-bottom: -6px;
+}
+
+/* Hidden, not unmounted — see ModuleGroup. The rule is here rather than in the
+   markup because it has to beat the grid a few rules above. */
+.catalogops-module-group.is-closed .catalogops-filter-row {
+	display: none;
+}
+
+/* The row that acts on the filter needs its own air after a module block. The
+   block ends in a rule, and a primary button sitting one row-gap under a
+   hairline reads as belonging to that block rather than to the whole filter. */
+.catalogops-module-group + .catalogops-filter-row {
+	margin-top: 8px;
 }
 
 /* Same type as a field label — this is a heading for a band of controls, not a
    section title competing with the page's own headings. Slightly stronger
    colour, because it names a source rather than a value. */
-.catalogops-module-heading {
-	margin: 0 0 10px;
+.catalogops button.catalogops-module-heading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	/* 20px of air under the heading, not the 10px a label would take: this is a
+	   heading with a control in it, and the gap is what stops the first row of
+	   fields reading as part of the heading's own line.
+	   
+	   The vertical padding is what the hover band fills, and the negative top
+	   margin cancels it so the text does not move: 6px of padding pulled back by
+	   6px of margin leaves the heading exactly where it was, with a band that is
+	   12px taller than the words. Padding on the SIDES would do the same thing
+	   horizontally and must not — the band has to stop where the rules above and
+	   below it stop, and the rules run the full width of the block. */
+	margin: -6px 0 14px;
+	padding: 6px 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	color: var(--co-ink);
 	font-size: 11px;
 	font-weight: 700;
 	line-height: 1.4;
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
-	color: var(--co-ink);
+	text-align: left;
+	cursor: pointer;
+}
+
+/* The whole row lights up, not just the words. The heading spans the full width
+   and its two ends — the name and the chevron — are the better part of a screen
+   apart; tinting the band between them is what says they are one control.
+   
+   Done with a spread box-shadow rather than padding: the band needs to reach
+   past the text on every side, and padding would move the heading's baseline
+   away from the fields below it, which line up with it deliberately. A shadow
+   paints outside the border box and changes no geometry at all. */
+.catalogops button.catalogops-module-heading:hover {
+	background: var(--co-hover);
+}
+
+.catalogops button.catalogops-module-heading:focus-visible {
+	outline: 1px solid var(--co-accent);
+	outline-offset: 2px;
+}
+
+/* Pushes the chevron to the far edge; the count sits between the two. */
+.catalogops-module-heading__text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* What a folded section still says about itself. The rest of this filter is
+   built on the rule that a condition the user cannot see is one they cannot
+   remove — folding hides conditions, and this is what keeps that promise. */
+.catalogops-module-count {
+	flex: none;
+	padding: 0 6px;
+	border-radius: 9px;
+	background: var(--co-accent-tint);
+	color: var(--co-accent);
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 15px;
+	letter-spacing: 0.02em;
+	text-transform: none;
+}
+
+/* A chevron drawn from two borders rather than an icon font: it inherits the
+   heading's colour on hover for nothing, and there is no glyph to fail to load. */
+.catalogops-module-chevron {
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+}
+
+.catalogops-module-chevron::before {
+	content: '';
+	width: 7px;
+	height: 7px;
+	border-right: 2px solid currentColor;
+	border-bottom: 2px solid currentColor;
+	/* Open: pointing up, because the next click puts the section away.
+	   The translate is an optical correction, not a nudge: two borders rotated
+	   into a chevron put their apex outside the box's centre, so centring the
+	   BOX leaves the mark looking half a pixel adrift of the heading's text. */
+	transform: translateY( 2px ) rotate( -135deg );
+	transition: transform 0.15s ease;
+}
+
+.catalogops-module-group.is-closed .catalogops-module-chevron::before {
+	/* Closed: pointing down, at the fields it would reveal. */
+	transform: translateY( -2px ) rotate( 45deg );
+}
+
+@media ( prefers-reduced-motion: reduce ) {
+	.catalogops-module-chevron::before {
+		transition: none;
+	}
 }
 
 /* Four across at most, and never a ragged last line.
@@ -2004,4 +2138,41 @@ vocabulary. Scoped and class+class deep for the same reason as
 .catalogops-field__range input {
 	flex: 1 1 0;
 	min-width: 0;
+}
+
+/* A set control still fetching its own options.
+
+   The placeholder already says "Loading…", and this is the other half of the
+   same sentence: the control is dimmed and refuses the pointer, because opening
+   a picker mid-fetch shows an empty list, and an empty list is what a module
+   with nothing to offer looks like. The two states want opposite things from the
+   reader — one is worth waiting for, the other is worth giving up on — so they
+   must not look alike. */
+.catalogops-field.is-loading .catalogops-ms__control {
+	opacity: 0.55;
+	pointer-events: none;
+	background-image: linear-gradient(
+		90deg,
+		transparent 0%,
+		var(--co-hover) 50%,
+		transparent 100%
+	);
+	background-size: 200% 100%;
+	animation: catalogops-loading 1.1s ease-in-out infinite;
+}
+
+@keyframes catalogops-loading {
+	from {
+		background-position: 150% 0;
+	}
+	to {
+		background-position: -50% 0;
+	}
+}
+
+/* Motion is decoration here; the dimming and the word carry the meaning. */
+@media ( prefers-reduced-motion: reduce ) {
+	.catalogops-field.is-loading .catalogops-ms__control {
+		animation: none;
+	}
 }

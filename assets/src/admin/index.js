@@ -30,11 +30,13 @@ import {
 	defaultModuleOperator,
 	emptyForm,
 	groupModuleFields,
+	moduleConditions,
 	moduleOperators,
 	NO_TAG,
 	NO_VALUE,
 	operatorTakesRange,
 	operatorTakesValue,
+	reconcileAbsence,
 	reconcileTagSelection,
 } from './filter';
 import './style.css';
@@ -223,6 +225,19 @@ const CAPABILITIES =
  */
 const CURRENCY =
 	( window.catalogopsConfig && window.catalogopsConfig.currency ) || '';
+
+/**
+ * Whether this site has any module registered, answered by the server at page
+ * load so the filter knows a section is coming before it has asked for one.
+ *
+ * Defaults to false, and that direction matters: an unknown answer must not draw
+ * a placeholder for a section that will never arrive. A site that does have
+ * modules simply gets its section without a placeholder, which is what happened
+ * before this existed.
+ */
+const MODULES_EXPECTED = Boolean(
+	window.catalogopsConfig && window.catalogopsConfig.hasModules
+);
 
 /**
  * Whether the current plan permits a capability. Unknown flags default to true
@@ -1036,17 +1051,42 @@ function MultiSelect( {
 function ModuleField( { field, row, onChange } ) {
 	const [ options, setOptions ] = useState( [] );
 
+	// Whether this field's own options are still on their way. A set control with
+	// nothing in it looks exactly like a set control whose module has no values to
+	// offer, and the two want opposite things from the reader — one is worth
+	// waiting for, the other is worth giving up on.
+	const [ loadingOptions, setLoadingOptions ] = useState( false );
+
 	// Fetched from the route the DESCRIPTOR names, not from a path this file
 	// knows. That is the whole point of `options_route`: a module can serve its
 	// own options without the client learning anything about it.
 	useEffect( () => {
 		if ( ! field.options_route || ! field.available ) {
-			return;
+			return undefined;
 		}
 
+		// Guards the two setState calls below against an answer that arrives after
+		// this field is gone — a scope switch drops every module row at once.
+		let live = true;
+
+		setLoadingOptions( true );
+
 		apiFetch( { path: field.options_route } )
-			.then( ( res ) => setOptions( res.terms || res.options || [] ) )
-			.catch( () => {} );
+			.then( ( res ) => {
+				if ( live ) {
+					setOptions( res.terms || res.options || [] );
+				}
+			} )
+			.catch( () => {} )
+			.finally( () => {
+				if ( live ) {
+					setLoadingOptions( false );
+				}
+			} );
+
+		return () => {
+			live = false;
+		};
 	}, [ field.options_route, field.available ] );
 
 	const value = row && undefined !== row.value ? row.value : '';
@@ -1085,6 +1125,7 @@ function ModuleField( { field, row, onChange } ) {
 		// option already answers to the sentinel — an ACF choice key is a string
 		// and could in principle collide.
 		const offersPresence =
+			! loadingOptions &&
 			( field.operators || [] ).includes( 'not_exists' ) &&
 			! options.some( ( one ) => String( one.id ) === NO_VALUE );
 
@@ -1099,14 +1140,35 @@ function ModuleField( { field, row, onChange } ) {
 			: options;
 
 		return (
-			<div className="catalogops-field">
+			<div
+				className={ `catalogops-field${
+					loadingOptions ? ' is-loading' : ''
+				}` }
+			>
 				<MultiSelect
 					label={ field.label }
 					options={ withPresence }
 					value={ Array.isArray( value ) ? value : [] }
-					placeholder={ __( 'Any', 'catalogops' ) }
+					placeholder={
+						loadingOptions
+							? __( 'Loading…', 'catalogops' )
+							: __( 'Any', 'catalogops' )
+					}
 					mode={ 'not_in' === mode ? 'not_in' : 'in' }
-					onChange={ ( next ) => set( { value: next } ) }
+					// "Without a value" and a real choice cannot both be
+					// meaningful: nothing carries a badge and carries none. The
+					// tag row has always reconciled the two rather than letting
+					// the pair be built and then quietly dropping one; this is the
+					// same rule, so the two set controls behave the same way.
+					onChange={ ( next ) =>
+						set( {
+							value: reconcileAbsence(
+								Array.isArray( value ) ? value : [],
+								next,
+								NO_VALUE
+							),
+						} )
+					}
 					onModeChange={ ( next ) => set( { mode: next } ) }
 				/>
 			</div>
@@ -1212,6 +1274,122 @@ function ModuleField( { field, row, onChange } ) {
 						onChange={ ( e ) => set( { value: e.target.value } ) }
 					/>
 				) ) }
+		</div>
+	);
+}
+
+/**
+ * One module's fields, under a heading that folds them away.
+ *
+ * A shop with a dozen ACF fields pushes the built-in controls — price, stock,
+ * category, the ones used on most days — off the top of the filter. Folding the
+ * section is what gives that space back, and the heading is the natural place to
+ * click because it is already the thing that says where these fields come from.
+ *
+ * **A closed section still says how many of its fields are filled in.** The rest
+ * of this filter is built on the rule that a condition the user cannot see is one
+ * they cannot remove — it is why an unlicensed field renders disabled rather than
+ * hidden. Folding hides conditions, so the count is what keeps that promise: the
+ * filter never silently narrows behind a closed panel. It is counted with
+ * `moduleConditions`, the same function that builds the payload, so the number is
+ * what would actually be sent rather than a second opinion about it.
+ *
+ * The open state is per session, not stored. Nothing else in this app persists UI
+ * state, and a filter that remembered a fold from last week would hide conditions
+ * on a screen the user had not touched yet.
+ *
+ * @param {Object}   props         Component props.
+ * @param {Object}   props.group   A group from `groupModuleFields`.
+ * @param {string}   props.scope   'product' or 'variation'.
+ * @param {Object}   props.form    The filter form.
+ * @param {Function} props.setForm Setter for the form.
+ */
+function ModuleGroup( { group, scope, form, setForm } ) {
+	// Closed to begin with: the point of the fold is the space it gives back to
+	// price, stock and category, and a section that opens expanded gives none of
+	// it until someone clicks. Nothing is hidden by this — a fresh form has no
+	// module conditions, and the moment one exists the heading counts it.
+	const [ open, setOpen ] = useState( false );
+
+	// Whether the fields have ever been on screen. Once they have, they stay
+	// mounted and CSS hides them, because `ModuleField` fetches its own options
+	// when it mounts: unmounting on every fold threw those away, so reopening the
+	// section put every set control back to "loading" and the values already
+	// chosen had nothing to render themselves against. The choices were never
+	// lost — they live in the form, not in the control — but a picker that goes
+	// blank and fills in a moment later is indistinguishable from one that
+	// forgot, and the user has no way to tell which happened.
+	//
+	// Not simply always-mounted: the section starts closed, and mounting it then
+	// would fire an options request for every set field on a panel nobody has
+	// opened. First open pays for the fetch, every fold after it is free.
+	const [ everOpened, setEverOpened ] = useState( false );
+
+	const toggle = () => {
+		if ( ! open ) {
+			setEverOpened( true );
+		}
+
+		setOpen( ! open );
+	};
+
+	const active = moduleConditions( form.modules, group.fields, scope ).length;
+
+	return (
+		<div
+			className={ `catalogops-module-group${ open ? '' : ' is-closed' }` }
+		>
+			<button
+				type="button"
+				className="catalogops-module-heading"
+				aria-expanded={ open }
+				onClick={ toggle }
+			>
+				<span className="catalogops-module-heading__text">
+					{ group.label || __( 'More fields', 'catalogops' ) }
+				</span>
+
+				{ ! open && active > 0 && (
+					<span className="catalogops-module-count">
+						{ sprintf(
+							/* translators: %d: how many of this section's fields are filtering. */
+							_n(
+								'%d filter selected',
+								'%d filters selected',
+								active,
+								'catalogops'
+							),
+							active
+						) }
+					</span>
+				) }
+
+				<span
+					className="catalogops-module-chevron"
+					aria-hidden="true"
+				/>
+			</button>
+
+			{ everOpened && (
+				<div className="catalogops-filter-row">
+					{ group.fields.map( ( f ) => (
+						<ModuleField
+							key={ f.key }
+							field={ f }
+							row={ form.modules[ f.key ] }
+							onChange={ ( next ) =>
+								setForm( {
+									...form,
+									modules: {
+										...form.modules,
+										[ f.key ]: next,
+									},
+								} )
+							}
+						/>
+					) ) }
+				</div>
+			) }
 		</div>
 	);
 }
@@ -5313,6 +5491,7 @@ function App() {
 	const [ tags, setTags ] = useState( [] );
 	const [ brands, setBrands ] = useState( [] );
 	const [ moduleFields, setModuleFields ] = useState( [] );
+	const [ moduleFieldsLoaded, setModuleFieldsLoaded ] = useState( false );
 	const [ attributes, setAttributes ] = useState( [] );
 	// Bumped whenever a schedule is created or acted on, to reload the list.
 	const [ schedulesKey, setSchedulesKey ] = useState( 0 );
@@ -5363,9 +5542,14 @@ function App() {
 		// The fields modules register. An installation with none answers an empty
 		// list, and the section below then renders nothing at all — which is what
 		// every site looks like until a module ships.
+		//
+		// The `finally` is what separates "not asked yet" from "asked, nothing
+		// came back". Both are an empty list, and they must not look alike: the
+		// first is worth holding a place for, the second is worth forgetting.
 		apiFetch( { path: '/catalogops/v1/fields/filterable' } )
 			.then( ( res ) => setModuleFields( res.fields || [] ) )
-			.catch( () => {} );
+			.catch( () => {} )
+			.finally( () => setModuleFieldsLoaded( true ) );
 	}, [] );
 
 	// The terms of the currently-selected attribute, for the value dropdown.
@@ -5828,41 +6012,33 @@ function App() {
 								     attribute row is hidden under the product
 								     scope: a control that cannot produce a
 								     condition is a control that lies. */ }
+								{ /* A module section is coming, so the filter holds
+								     its place rather than reflowing when the
+								     descriptors land. Only when the server said at
+								     page load that a module is registered: a site
+								     with none must never see a section appear and
+								     be taken away again, which is the whole reason
+								     `hasModules` is asked of the registry rather
+								     than guessed from an empty list. Same
+								     treatment the results table uses below, since
+								     it is the same kind of wait. */ }
+								{ ! moduleFieldsLoaded && MODULES_EXPECTED && (
+									<div className="catalogops-module-group">
+										<p className="catalogops-loading">
+											{ __( 'Loading…', 'catalogops' ) }
+										</p>
+									</div>
+								) }
+
 								{ groupModuleFields( moduleFields, scope ).map(
 									( group ) => (
-										<div
-											className="catalogops-module-group"
+										<ModuleGroup
 											key={ group.module }
-										>
-											{ group.label && (
-												<div className="catalogops-module-heading">
-													{ group.label }
-												</div>
-											) }
-											<div className="catalogops-filter-row">
-												{ group.fields.map( ( f ) => (
-													<ModuleField
-														key={ f.key }
-														field={ f }
-														row={
-															form.modules[
-																f.key
-															]
-														}
-														onChange={ ( next ) =>
-															setForm( {
-																...form,
-																modules: {
-																	...form.modules,
-																	[ f.key ]:
-																		next,
-																},
-															} )
-														}
-													/>
-												) ) }
-											</div>
-										</div>
+											group={ group }
+											scope={ scope }
+											form={ form }
+											setForm={ setForm }
+										/>
 									)
 								) }
 

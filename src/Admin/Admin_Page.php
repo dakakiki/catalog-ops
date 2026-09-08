@@ -8,6 +8,7 @@
 namespace CatalogOps\Admin;
 
 use CatalogOps\Licensing\License;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Operations\Scheduler;
 
 /**
@@ -36,15 +37,31 @@ final class Admin_Page {
 	private License $license;
 
 	/**
+	 * The filter-field registry, or null when none was wired.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $providers;
+
+	/**
 	 * Build the admin page.
 	 *
-	 * @param string       $plugin_file Absolute path to the main plugin file.
-	 * @param License|null $license     Plan gating; defaults to unlimited
-	 *                                  (unlicensed development and tests).
+	 * @param string                $plugin_file Absolute path to the main plugin file.
+	 * @param License|null          $license     Plan gating; defaults to unlimited
+	 *                                           (unlicensed development and tests).
+	 * @param Filter_Providers|null $providers   Module field registry, asked only
+	 *                                           whether it holds anything — so the
+	 *                                           filter knows at first paint that a
+	 *                                           module section is coming.
 	 */
-	public function __construct( string $plugin_file, ?License $license = null ) {
+	public function __construct(
+		string $plugin_file,
+		?License $license = null,
+		?Filter_Providers $providers = null
+	) {
 		$this->plugin_file = $plugin_file;
 		$this->license     = $license ?? License::unlimited();
+		$this->providers   = $providers;
 	}
 
 	/**
@@ -151,6 +168,14 @@ final class Admin_Page {
 					'maxObjectsPerOp' => $this->license->is_premium() ? null : $this->license->max_objects_per_op(),
 				),
 				'cron'         => $this->cron_config(),
+				// Whether a module section is coming, so the filter can hold its
+				// place while `/fields/filterable` is in flight. Asked of the
+				// registry rather than of the field list: the answer is needed at
+				// first paint, and counting actual fields would mean a database
+				// read on every admin page load to decide whether to draw a
+				// placeholder. A site with no modules never sees the section at
+				// all, which is the point.
+				'hasModules'   => null !== $this->providers && $this->providers->has_providers(),
 				// The shop's own currency symbol, so an amount field can be
 				// labelled in the unit it is counted in. A generic label would
 				// leave "By (amount)" indistinguishable from the percentage
