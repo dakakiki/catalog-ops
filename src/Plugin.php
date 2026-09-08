@@ -497,7 +497,8 @@ final class Plugin {
 					$container->get( Operations::class ),
 					$container->get( Changes::class ),
 					$wpdb,
-					$container->get( License::class )
+					$container->get( License::class ),
+					$container->get( Filter_Providers::class )
 				);
 			}
 		);

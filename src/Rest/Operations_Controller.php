@@ -21,6 +21,7 @@ use CatalogOps\Operations\Operations;
 use CatalogOps\Operations\Watchdog;
 use CatalogOps\Licensing\License;
 use CatalogOps\Licensing\License_Limited;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Query\Filter;
 use InvalidArgumentException;
 use Throwable;
@@ -82,21 +83,65 @@ final class Operations_Controller {
 	private License $license;
 
 	/**
+	 * Module field registry, for naming a module's fields in a run's summary.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $providers;
+
+	/**
 	 * Build the controller.
 	 *
-	 * @param Operation_Service $service    Operation service.
-	 * @param Operations        $operations Operations repository.
-	 * @param Changes           $changes    Changes repository.
-	 * @param wpdb              $wpdb       WordPress database handle.
-	 * @param License|null      $license    Plan gating; defaults to unlimited
-	 *                                      (unlicensed development and tests).
+	 * @param Operation_Service     $service    Operation service.
+	 * @param Operations            $operations Operations repository.
+	 * @param Changes               $changes    Changes repository.
+	 * @param wpdb                  $wpdb       WordPress database handle.
+	 * @param License|null          $license    Plan gating; defaults to unlimited
+	 *                                          (unlicensed development and tests).
+	 * @param Filter_Providers|null $providers  Module field registry, so a run's
+	 *                                          summary can name a module's fields.
 	 */
-	public function __construct( Operation_Service $service, Operations $operations, Changes $changes, wpdb $wpdb, ?License $license = null ) {
+	public function __construct(
+		Operation_Service $service,
+		Operations $operations,
+		Changes $changes,
+		wpdb $wpdb,
+		?License $license = null,
+		?Filter_Providers $providers = null
+	) {
 		$this->service    = $service;
 		$this->operations = $operations;
 		$this->changes    = $changes;
 		$this->wpdb       = $wpdb;
 		$this->license    = $license ?? License::unlimited();
+		$this->providers  = $providers;
+	}
+
+	/**
+	 * What one operation actually did: which objects it targeted, and what it
+	 * changed about them.
+	 *
+	 * The two `longtext` columns holding that have been written since the first
+	 * release and read by nothing — so the history could say a run touched 1,204
+	 * products and never what made them the 1,204, or what happened to them. The
+	 * filter is frozen at queue time, so this is a record of what ran rather than
+	 * a re-reading of what the same filter would match today.
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function summary( WP_REST_Request $request ) {
+		$operation = $this->operations->find( (int) $request->get_param( 'id' ) );
+
+		if ( null === $operation ) {
+			return $this->error( 'catalogops_not_found', 'Operation not found.', 404 );
+		}
+
+		$summary = new Operation_Summary( $this->wpdb, $this->providers );
+
+		return new WP_REST_Response(
+			$summary->describe( $operation->filter_data, $operation->actions_data )
+		);
 	}
 
 	/**
@@ -182,6 +227,20 @@ final class Operations_Controller {
 					'callback'            => array( $this, 'delete' ),
 					'permission_callback' => array( $this, 'can_manage' ),
 				),
+			)
+		);
+
+		// Its own route rather than a field on the operation, because the history
+		// list polls every few seconds and this is two `longtext` columns plus the
+		// term lookups to name what is in them. Read once, when somebody opens the
+		// panel and asks.
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/operations/(?P<id>\d+)/summary',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'summary' ),
+				'permission_callback' => array( $this, 'can_manage' ),
 			)
 		);
 
