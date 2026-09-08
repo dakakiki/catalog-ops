@@ -33,6 +33,36 @@ jobs:
       - name: PHPCS
         run: composer phpcs
 
+  # The admin app is half the plugin and CI had never so much as compiled it. A
+  # syntax error in the bundle would have reached a release with every PHP check
+  # green, because nothing outside a developer's own `npm run build` ever looked
+  # at it.
+  javascript:
+    name: JavaScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint:js
+
+      - name: Unit tests
+        run: npm run test:js
+
+      # Last, because a bundle that builds from code the tests reject is not
+      # evidence of anything.
+      - name: Build the bundle
+        run: npm run build
+
   unit:
     name: Unit tests (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
