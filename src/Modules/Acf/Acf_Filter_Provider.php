@@ -80,10 +80,24 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 * offered the closed bounds a date picker can produce rather than the strict ones
 	 * it cannot show the difference for.
 	 *
+	 * **Presence is on the set control and nowhere else, and that is the whole
+	 * decision.** Every value kind in the engine answers `EXISTS` / `NOT_EXISTS`, so
+	 * offering them on every field was the vocabulary's default rather than an answer
+	 * to "would a shop owner ask this" — and "Supplier is filled in" is not a set of
+	 * products anyone reprices.
+	 *
+	 * On a set field it is a different question entirely, and the only one of its
+	 * kind: "carries no promo badge at all" cannot be said any other way, because
+	 * `is not sale` deliberately keeps the products carrying nothing — they are,
+	 * definitively, not on sale. So `value_set` declares the two operators, and the
+	 * multiselect offers them the way the tag row already does: a "Without a value"
+	 * entry in the list rather than an operator beside it. The user picks a value
+	 * or picks its absence, in one control, with no vocabulary to learn.
+	 *
 	 * @var array<string, list<Operator>>
 	 */
 	private const OPERATORS = array(
-		'text'      => array( Operator::EQUALS, Operator::NOT_EQUALS, Operator::CONTAINS, Operator::EXISTS, Operator::NOT_EXISTS ),
+		'text'      => array( Operator::EQUALS, Operator::NOT_EQUALS, Operator::CONTAINS ),
 		'number'    => array(
 			Operator::EQUALS,
 			Operator::NOT_EQUALS,
@@ -92,18 +106,14 @@ final class Acf_Filter_Provider implements Filter_Provider {
 			Operator::LESS_THAN,
 			Operator::LESS_OR_EQUAL,
 			Operator::BETWEEN,
-			Operator::EXISTS,
-			Operator::NOT_EXISTS,
 		),
-		'toggle'    => array( Operator::EQUALS, Operator::EXISTS, Operator::NOT_EXISTS ),
+		'toggle'    => array( Operator::EQUALS ),
 		'value_set' => array( Operator::IN, Operator::NOT_IN, Operator::EXISTS, Operator::NOT_EXISTS ),
 		'date'      => array(
 			Operator::EQUALS,
 			Operator::GREATER_OR_EQUAL,
 			Operator::LESS_OR_EQUAL,
 			Operator::BETWEEN,
-			Operator::EXISTS,
-			Operator::NOT_EXISTS,
 		),
 	);
 
@@ -123,6 +133,17 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 */
 	public function module(): string {
 		return self::MODULE;
+	}
+
+	/**
+	 * The heading these fields sit under.
+	 *
+	 * "ACF fields" rather than "Advanced Custom Fields": the plugin's own admin menu,
+	 * its field-group screens and its documentation all say ACF, so that is the name
+	 * the person who built these fields knows them by.
+	 */
+	public function label(): string {
+		return __( 'ACF fields', 'catalogops' );
 	}
 
 	/**
@@ -271,20 +292,21 @@ final class Acf_Filter_Provider implements Filter_Provider {
 
 		return new Filter_Field(
 			self::PREFIX . (string) $definition['key'],
-			$this->label( $definition, $by_id ),
+			$this->field_label( $definition, $by_id ),
 			$control,
 			$operators,
 			$scopes,
 			Filter_Control::VALUE_SET === $control
 				? Acf_Options_Controller::ROUTE . '?field=' . rawurlencode( (string) $definition['key'] )
 				: '',
-			$this->label( $definition, $by_id ),
-			false
+			$this->field_label( $definition, $by_id ),
+			false,
+			$this->fields->storage_format( $definition )
 		);
 	}
 
 	/**
-	 * A label a user can tell apart from the other twenty.
+	 * A field label a user can tell apart from the other twenty.
 	 *
 	 * ACF labels are written per group and repeat freely — two groups each with a
 	 * "Value", a repeater whose sub-field is "Label". Prefixing the ancestor chain is
@@ -294,7 +316,7 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 * @param array<string, mixed>             $definition Hydrated definition.
 	 * @param array<int, array<string, mixed>> $by_id      Every acf-field row by id.
 	 */
-	private function label( array $definition, array $by_id ): string {
+	private function field_label( array $definition, array $by_id ): string {
 		$parts  = array();
 		$parent = (int) ( $definition['parent'] ?? 0 );
 

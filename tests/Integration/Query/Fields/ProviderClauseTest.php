@@ -208,6 +208,10 @@ final class ProviderClauseTest extends WP_UnitTestCase {
 				return '';
 			}
 
+			public function label(): string {
+				return 'Test module';
+			}
+
 			public function filter_fields(): array {
 				return array(
 					new Filter_Field(
@@ -340,6 +344,10 @@ final class ProviderClauseTest extends WP_UnitTestCase {
 				return '';
 			}
 
+			public function label(): string {
+				return 'Test module';
+			}
+
 			public function filter_fields(): array {
 				return array(
 					new Filter_Field(
@@ -388,6 +396,10 @@ final class ProviderClauseTest extends WP_UnitTestCase {
 
 			public function module(): string {
 				return 'acf';
+			}
+
+			public function label(): string {
+				return 'Test module';
 			}
 
 			public function filter_fields(): array {

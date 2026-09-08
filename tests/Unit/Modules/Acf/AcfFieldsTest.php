@@ -84,7 +84,6 @@ final class AcfFieldsTest extends TestCase {
 			'textarea' => array( 'textarea' ),
 			'email'    => array( 'email' ),
 			'url'      => array( 'url' ),
-			'wysiwyg'  => array( 'wysiwyg' ),
 		);
 	}
 
@@ -229,6 +228,10 @@ final class AcfFieldsTest extends TestCase {
 		return array(
 			// Its two flags invert the source of truth independently, and either can
 			// be switched after products are saved.
+			// The column holds HTML, so `contains` would match the markup as
+			// readily as the words, and the reader cannot tell which they got.
+			'wysiwyg'          => array( 'wysiwyg' ),
+
 			'taxonomy'         => array( 'taxonomy' ),
 
 			// Stored as a bare id or as a serialised list, decided per value at save

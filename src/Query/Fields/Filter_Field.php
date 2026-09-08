@@ -52,6 +52,19 @@ final class Filter_Field {
 	 * @param bool           $required_for_write True when an Adjust or Formula targeting this
 	 *                                           field needs a presence requirement to keep the
 	 *                                           preview exact.
+	 * @param string         $value_format       The PHP date format the value is STORED in, for a
+	 *                                           date control — `Ymd`, `Y-m-d H:i:s`. Empty for
+	 *                                           every other control.
+	 *
+	 *                                           A date control collects `YYYY-MM-DD`, which is
+	 *                                           what a browser's date input produces and the only
+	 *                                           thing it will produce. ACF stores `20240708`. The
+	 *                                           two never match, and the failure is silent: a
+	 *                                           filter that reads correctly returns nothing, and
+	 *                                           nothing is exactly what an over-narrow filter
+	 *                                           looks like. Naming the stored format is what lets
+	 *                                           the client send what the column actually holds
+	 *                                           without knowing anything about ACF.
 	 */
 	public function __construct(
 		public readonly string $key,
@@ -62,6 +75,7 @@ final class Filter_Field {
 		public readonly string $options_route = '',
 		public readonly ?string $column_label = null,
 		public readonly bool $required_for_write = false,
+		public readonly string $value_format = '',
 	) {}
 
 	/**

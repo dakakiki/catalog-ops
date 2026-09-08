@@ -40,7 +40,8 @@ export function emptyForm() {
 		attribute: '',
 		attributeValues: [],
 		attributeMode: 'in',
-		// Keyed by field key, each `{ value, mode }`. Empty rather than
+		// Keyed by field key, each `{ value, to, mode }` — `mode` holding the
+		// operator token and `to` the far end of a range. Empty rather than
 		// pre-populated from the descriptors: a form built before the field list
 		// arrives must still be a valid form, and a row nobody touched must not
 		// become a condition.
@@ -113,6 +114,22 @@ export function reconcileTagSelection( previous, next ) {
 const SET_CONTROLS = [ 'term_set', 'value_set' ];
 
 /**
+ * The entry a set control offers for "this field is empty".
+ *
+ * The same idea as {@see NO_TAG}, and it exists for the same reason: on a set
+ * field, "carries nothing at all" is a question no operator on the list can ask.
+ * `is not sale` deliberately KEEPS the products carrying nothing — they are,
+ * definitively, not on sale — so without this entry those products cannot be
+ * selected by any combination of choices.
+ *
+ * A distinctive string rather than something readable, because unlike a term id
+ * an ACF choice key is itself a string and could collide. The control only adds
+ * this entry when no real option already answers to it, so a shop that has
+ * somehow named a choice this still gets its own value rather than a sentinel.
+ */
+export const NO_VALUE = '__catalogops_no_value__';
+
+/**
  * Coerce a module field's value to the shape its control implies.
  *
  * Term sets send numeric ids and value sets send strings, and the difference is
@@ -156,26 +173,116 @@ export function moduleValue( control, value ) {
 }
 
 /**
- * The operator a module row sends, chosen from what the field actually declares.
+ * Every operator, in the order a menu should offer them.
  *
- * The descriptor is the authority, not this file. A field that does not declare
- * the operator its control would naturally use gets no condition rather than one
- * the engine will refuse — and returning nothing here is safe only because the
- * caller drops the row entirely, which narrows nothing and widens nothing.
+ * Value comparisons first, then the ordered ones, then the two that ask about
+ * presence and carry no value at all. Ordering here rather than at each call site
+ * means a field's menu reads the same wherever it appears, and a module that
+ * declares its operators in some other order does not get a shuffled menu.
+ *
+ * Labels are deliberately NOT here. Deciding *which* operators a field offers is
+ * a rule; saying them in the user's language is a view's job, and keeping the two
+ * apart is what lets this file stay free of i18n and be tested as plain data.
+ */
+export const MODULE_OPERATOR_ORDER = [
+	'=',
+	'!=',
+	'contains',
+	'in',
+	'not_in',
+	'>',
+	'>=',
+	'<',
+	'<=',
+	'between',
+	'exists',
+	'not_exists',
+];
+
+/**
+ * The operators a field offers, in menu order.
+ *
+ * **The descriptor is the authority.** Only what the field declares is offered,
+ * because an operator it does not declare is one `Filter_Providers` refuses
+ * before the provider is even asked — and a refusal stops the whole filter, not
+ * just that row.
+ *
+ * This is what the old `moduleOperator()` could not do. That function mapped an
+ * include/exclude mode onto one of `=`, `!=`, `in`, `not_in`, `contains`, so
+ * `>`, `>=`, `<`, `<=` and `between` were **unreachable from the UI** even though
+ * ACF's number and date fields declare them, the compiler emits them and the
+ * engine answers them. "Cost price is more than 100" could not be asked.
  *
  * @param {Object} field The descriptor.
- * @param {string} mode  'in' for include, 'not_in' for exclude.
- * @return {string|undefined} The operator token, or undefined.
+ * @return {string[]} Operator tokens, in menu order.
  */
-export function moduleOperator( field, mode ) {
-	const declared = field.operators || [];
-	const exclude = 'not_in' === mode;
+export function moduleOperators( field ) {
+	const declared = ( field && field.operators ) || [];
 
-	const wanted = SET_CONTROLS.includes( field.control )
-		? [ exclude ? 'not_in' : 'in' ]
-		: [ exclude ? '!=' : '=', exclude ? 'not_in' : 'in', 'contains' ];
+	return MODULE_OPERATOR_ORDER.filter( ( operator ) =>
+		declared.includes( operator )
+	);
+}
 
-	return wanted.find( ( operator ) => declared.includes( operator ) );
+/**
+ * Whether an operator compares against something the user types.
+ *
+ * `exists` and `not_exists` do not: they ask whether the field is filled in at
+ * all. The value box is REMOVED for them rather than disabled — a disabled box
+ * beside a chip reading "has no value" looks like something is broken, and it
+ * invites the reader to wonder what the greyed-out text would have done.
+ *
+ * @param {string} operator Operator token.
+ * @return {boolean} Whether a value is needed.
+ */
+export function operatorTakesValue( operator ) {
+	return 'exists' !== operator && 'not_exists' !== operator;
+}
+
+/**
+ * Whether an operator needs two values rather than one.
+ *
+ * @param {string} operator Operator token.
+ * @return {boolean} Whether a second box is needed.
+ */
+export function operatorTakesRange( operator ) {
+	return 'between' === operator;
+}
+
+/**
+ * The operator a field starts on.
+ *
+ * The first one that takes a value, so a field opens ready to be typed into
+ * rather than on "has any value" — which would be a condition the user never
+ * asked for the moment they touched the row. A presence-only field has nothing
+ * else to offer and starts there honestly.
+ *
+ * @param {Object} field The descriptor.
+ * @return {string} An operator token, or '' when the field declares none.
+ */
+export function defaultModuleOperator( field ) {
+	const offered = moduleOperators( field );
+
+	return offered.find( operatorTakesValue ) || offered[ 0 ] || '';
+}
+
+/**
+ * A row's raw value, converted to what the field's column holds.
+ *
+ * Only a date control has anything to convert; everything else is already in the
+ * shape the column stores.
+ *
+ * @param {Object}  field    The descriptor.
+ * @param {*}       value    Whatever the control is holding.
+ * @param {boolean} endOfDay Whether this is a range's upper bound.
+ * @return {*} The value to send on.
+ */
+function asStored( field, value, endOfDay ) {
+	if ( 'date' !== field.control || ! field.value_format ) {
+		return value;
+	}
+
+	return dateForStorage( value, field.value_format, endOfDay );
 }
 
 /**
@@ -211,28 +318,76 @@ export function moduleConditions( modules, fields, scope ) {
 			return;
 		}
 
-		// Presence is asked FIRST, and the order is load-bearing. It is the one
-		// question carrying no value, and its operator IS the mode — so resolving
-		// an include/exclude operator before getting here would drop a field that
-		// declares only `exists` and `not_exists`, which is exactly what a
-		// presence-only field is.
-		if ( 'exists' === row.mode || 'not_exists' === row.mode ) {
-			if ( ! ( field.operators || [] ).includes( row.mode ) ) {
+		// The row's mode IS the operator token now, not an include/exclude flag
+		// mapped onto one. It is still checked against the descriptor rather than
+		// trusted: the field list can change under a form that is already open —
+		// a licence lapses, an ACF field is deleted — and an operator the field
+		// does not declare is one the registry refuses, which stops the whole
+		// filter rather than just this row.
+		const operator = row.mode || defaultModuleOperator( field );
+
+		if ( ! operator || ! ( field.operators || [] ).includes( operator ) ) {
+			return;
+		}
+
+		// "Without a value" wins the row, the way "Without tag" does: it asks
+		// about the field rather than about which choices, so the choices beside
+		// it have nothing to add. The mode still governs and reads the way the
+		// rest of the row does — the selection is what to keep, so EXCLUDING the
+		// empty ones leaves exactly the products that do carry a value.
+		if (
+			SET_CONTROLS.includes( field.control ) &&
+			( row.value || [] ).map( String ).includes( NO_VALUE )
+		) {
+			const presence = 'not_in' === operator ? 'exists' : 'not_exists';
+
+			if ( ! ( field.operators || [] ).includes( presence ) ) {
 				return;
 			}
 
-			conditions.push( { field: field.key, operator: row.mode } );
+			conditions.push( { field: field.key, operator: presence } );
 
 			return;
 		}
 
-		const operator = moduleOperator( field, row.mode );
+		// Presence carries no value at all, so it is answered before anything
+		// asks the row what it holds.
+		if ( ! operatorTakesValue( operator ) ) {
+			conditions.push( { field: field.key, operator } );
 
-		if ( ! operator ) {
 			return;
 		}
 
-		const value = moduleValue( field.control, row.value );
+		if ( operatorTakesRange( operator ) ) {
+			const from = moduleValue(
+				field.control,
+				asStored( field, row.value, false )
+			);
+			const to = moduleValue(
+				field.control,
+				asStored( field, row.to, true )
+			);
+
+			// Both ends or nothing. Half a range is not a narrower range, it is a
+			// different question — and BETWEEN with one bound missing is a
+			// condition the engine would refuse.
+			if ( undefined === from || undefined === to ) {
+				return;
+			}
+
+			conditions.push( {
+				field: field.key,
+				operator,
+				value: [ from, to ],
+			} );
+
+			return;
+		}
+
+		const value = moduleValue(
+			field.control,
+			asStored( field, row.value, false )
+		);
 
 		if ( undefined === value ) {
 			return;
@@ -355,4 +510,98 @@ export function buildFilter( form, scope, moduleFields = [] ) {
 	conditions.push( ...moduleConditions( form.modules, moduleFields, scope ) );
 
 	return { relation: 'AND', scope, conditions };
+}
+
+/**
+ * Group the module fields that apply to a scope, ready to render.
+ *
+ * Three jobs, all of which were being done badly by not being done at all: drop
+ * the fields that mean nothing in this scope, gather what is left under one
+ * heading per module, and keep the order the server sent.
+ *
+ * **The heading comes from `module_label`, never from the module slug.** A client
+ * that maps `'acf'` to "ACF fields" has learned a module's name, and the next
+ * module has to be taught here too — the same coupling `options_route` exists to
+ * avoid. A provider that sends no label gets no heading rather than a made-up one.
+ *
+ * Insertion order is the server's order, which is ACF's own field order within a
+ * group. A shop owner arranged those fields; re-sorting them alphabetically here
+ * would throw that away for nothing.
+ *
+ * @param {Array}  fields Descriptors from /fields/filterable.
+ * @param {string} scope  'product' or 'variation'.
+ * @return {Array} Groups of { module, label, fields }, in server order.
+ */
+export function groupModuleFields( fields, scope ) {
+	const groups = [];
+	const byModule = new Map();
+
+	( fields || [] ).forEach( ( field ) => {
+		if ( ! field || ! ( field.scopes || [] ).includes( scope ) ) {
+			return;
+		}
+
+		// Keyed by module, not by label: two providers sharing a heading are still
+		// two modules, and the licence gate is per module.
+		const key = field.module || '';
+
+		if ( ! byModule.has( key ) ) {
+			const group = {
+				module: key,
+				label: field.module_label || '',
+				fields: [],
+			};
+			byModule.set( key, group );
+			groups.push( group );
+		}
+
+		byModule.get( key ).fields.push( field );
+	} );
+
+	return groups;
+}
+
+/**
+ * Turn what a date input gives us into what the column actually holds.
+ *
+ * A browser's `<input type="date">` produces `YYYY-MM-DD` and will produce
+ * nothing else — that is the whole point of using it, because a free text box
+ * lets someone type `8.7.2024.` and get a filter that reads correctly and matches
+ * nothing. ACF stores `20240708` for a date picker and `2024-07-08 00:00:00` for
+ * a date-and-time picker, so the two never meet without this.
+ *
+ * The upper bound of a range is pushed to the end of the day when the stored
+ * format carries a time. `between 2024-01-01 and 2024-12-31` on a
+ * `Y-m-d H:i:s` column would otherwise stop at midnight and silently drop
+ * everything recorded during the last day — which reads as an off-by-one nobody
+ * can see, because the answer is plausible.
+ *
+ * An unknown format is returned untouched rather than guessed at: a provider
+ * that declares a format this does not know is better served sending the raw
+ * text, which its own column may well match, than a value invented here.
+ *
+ * @param {string}  value    `YYYY-MM-DD` from the date input.
+ * @param {string}  format   The PHP date format the descriptor declares.
+ * @param {boolean} endOfDay Whether this is the upper bound of a range.
+ * @return {string} The value to send.
+ */
+export function dateForStorage( value, format, endOfDay = false ) {
+	const iso = 'string' === typeof value ? value.trim() : '';
+
+	if ( '' === iso || ! /^\d{4}-\d{2}-\d{2}$/.test( iso ) ) {
+		// Not a date the input produced — an empty box, or a value typed before
+		// this field became a date control. Hand it back and let the ordinary
+		// empty-value rule drop it.
+		return value;
+	}
+
+	if ( 'Ymd' === format ) {
+		return iso.replace( /-/g, '' );
+	}
+
+	if ( 'Y-m-d H:i:s' === format ) {
+		return iso + ( endOfDay ? ' 23:59:59' : ' 00:00:00' );
+	}
+
+	return iso;
 }

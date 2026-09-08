@@ -81,7 +81,7 @@ final class Filter_Providers {
 	 * field a saved filter already uses — a dropped field is how a user ends up
 	 * looking at a filter that no longer says what they wrote.
 	 *
-	 * @return list<array{field: Filter_Field, module: string, available: bool}>
+	 * @return list<array{field: Filter_Field, module: string, label: string, available: bool}>
 	 */
 	public function all_fields(): array {
 		$fields = array();
@@ -89,11 +89,13 @@ final class Filter_Providers {
 		foreach ( $this->providers as $provider ) {
 			$module    = $provider->module();
 			$available = '' === $module || $this->license->has_module( $module );
+			$label     = $provider->label();
 
 			foreach ( $provider->filter_fields() as $field ) {
 				$fields[] = array(
 					'field'     => $field,
 					'module'    => $module,
+					'label'     => $label,
 					'available' => $available,
 				);
 			}

@@ -205,6 +205,10 @@ final class FilterProvidersTest extends TestCase {
 				return $this->module;
 			}
 
+			public function label(): string {
+				return 'Test module';
+			}
+
 			public function filter_fields(): array {
 				return $this->fields;
 			}

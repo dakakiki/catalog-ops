@@ -138,8 +138,14 @@ final class Fields_Controller {
 				'operators'     => array_map( static fn( $operator ): string => $operator->value, $field->operators ),
 				'scopes'        => array_map( static fn( $scope ): string => $scope->value, $field->scopes ),
 				'options_route' => $field->options_route,
+				// The format the value is STORED in, so a date control can send what
+				// the column holds rather than what a browser's date input produces.
+				'value_format'  => $field->value_format,
 				'column_label'  => $field->column_label,
 				'module'        => $entry['module'],
+				// The heading the client groups this field under. Served rather than
+				// derived, so the admin bundle never learns a module's name.
+				'module_label'  => $entry['label'],
 				'available'     => $entry['available'],
 			);
 		}

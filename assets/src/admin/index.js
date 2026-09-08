@@ -27,8 +27,14 @@ import apiFetch from '@wordpress/api-fetch';
 import { __, _n, sprintf } from '@wordpress/i18n';
 import {
 	buildFilter,
+	defaultModuleOperator,
 	emptyForm,
+	groupModuleFields,
+	moduleOperators,
 	NO_TAG,
+	NO_VALUE,
+	operatorTakesRange,
+	operatorTakesValue,
 	reconcileTagSelection,
 } from './filter';
 import './style.css';
@@ -1043,11 +1049,12 @@ function ModuleField( { field, row, onChange } ) {
 			.catch( () => {} );
 	}, [ field.options_route, field.available ] );
 
-	const value = row ? row.value : '';
-	const mode = row ? row.mode : 'in';
+	const value = row && undefined !== row.value ? row.value : '';
+	const mode = row && row.mode ? row.mode : '';
 	const id = `catalogops-module-${ field.key.replace( /[^a-z0-9]/gi, '-' ) }`;
 
-	const set = ( next ) => onChange( { value, mode, ...next } );
+	const set = ( next ) =>
+		onChange( { value, mode, to: row && row.to ? row.to : '', ...next } );
 
 	// A field the licence does not cover is shown rather than hidden, and shown
 	// disabled rather than absent. A saved filter can already name it, and a
@@ -1065,18 +1072,37 @@ function ModuleField( { field, row, onChange } ) {
 		);
 	}
 
-	const presence = ( field.operators || [] ).includes( 'exists' );
-
 	// A set control gets the same picker the built-in category and tag rows use,
 	// so a module field looks and behaves like a first-party one. It carries its
 	// own include/exclude toggle, which is why the mode select below is hidden
 	// for it rather than shown twice.
 	if ( 'term_set' === field.control || 'value_set' === field.control ) {
+		// "Without a value" is offered as an entry in the list rather than as an
+		// operator beside it, exactly as the tag row offers "Without tag". On a set
+		// field it is the one question no choice can express: `is not sale` keeps
+		// the products carrying no badge at all, because they are, definitively,
+		// not on sale. Only added when the field declares it, and never when a real
+		// option already answers to the sentinel — an ACF choice key is a string
+		// and could in principle collide.
+		const offersPresence =
+			( field.operators || [] ).includes( 'not_exists' ) &&
+			! options.some( ( one ) => String( one.id ) === NO_VALUE );
+
+		const withPresence = offersPresence
+			? [
+					{
+						id: NO_VALUE,
+						name: __( 'Without a value', 'catalogops' ),
+					},
+					...options,
+			  ]
+			: options;
+
 		return (
 			<div className="catalogops-field">
 				<MultiSelect
 					label={ field.label }
-					options={ options }
+					options={ withPresence }
 					value={ Array.isArray( value ) ? value : [] }
 					placeholder={ __( 'Any', 'catalogops' ) }
 					mode={ 'not_in' === mode ? 'not_in' : 'in' }
@@ -1087,11 +1113,13 @@ function ModuleField( { field, row, onChange } ) {
 		);
 	}
 
-	return (
-		<div className="catalogops-field">
-			<label htmlFor={ id }>{ field.label }</label>
-
-			{ 'toggle' === field.control ? (
+	// A true/false field keeps its three-state Any/Yes/No box and gets no operator
+	// control: "Any" already means "no condition", so an operator would only offer
+	// ways of saying the same thing twice.
+	if ( 'toggle' === field.control ) {
+		return (
+			<div className="catalogops-field">
+				<label htmlFor={ id }>{ field.label }</label>
 				<select
 					id={ id }
 					value={ '' === value ? '' : String( value ) }
@@ -1108,40 +1136,145 @@ function ModuleField( { field, row, onChange } ) {
 					<option value="true">{ __( 'Yes', 'catalogops' ) }</option>
 					<option value="false">{ __( 'No', 'catalogops' ) }</option>
 				</select>
-			) : (
-				<input
-					id={ id }
-					type={
-						'number' === field.control || 'money' === field.control
-							? 'number'
-							: 'text'
-					}
-					value={ value }
-					disabled={ 'exists' === mode || 'not_exists' === mode }
-					onChange={ ( e ) => set( { value: e.target.value } ) }
-				/>
-			) }
+			</div>
+		);
+	}
 
-			<select
-				value={ mode }
-				aria-label={ __( 'How to match', 'catalogops' ) }
-				onChange={ ( e ) => set( { mode: e.target.value } ) }
-			>
-				<option value="in">{ __( 'is', 'catalogops' ) }</option>
-				<option value="not_in">{ __( 'is not', 'catalogops' ) }</option>
-				{ presence && (
-					<option value="exists">
-						{ __( 'has any value', 'catalogops' ) }
-					</option>
-				) }
-				{ presence && (
-					<option value="not_exists">
-						{ __( 'has no value', 'catalogops' ) }
-					</option>
-				) }
-			</select>
+	const operators = moduleOperators( field );
+	const operator = mode || defaultModuleOperator( field );
+
+	// A date field gets a date input, not a text box. The descriptor says the
+	// value is a date; a text box invites `8.7.2024.` against a column holding
+	// `20240708`, which is a filter that reads correctly and matches nothing —
+	// and nothing is exactly what an over-narrow filter looks like. `filter.js`
+	// converts what this produces into the format the column actually holds.
+	const inputType = INPUT_TYPES[ field.control ] || 'text';
+
+	return (
+		<div className="catalogops-field">
+			{ /* The operator sits in the label row, where the multiselect already
+			     puts its include/exclude switch, because it modifies the label's
+			     question ("Cost price is more than…") rather than the value. Below
+			     the box — which is where it used to be — it read as a second
+			     control of equal weight and made every field three rows tall. */ }
+			<span className="catalogops-field__label-row">
+				<label htmlFor={ id } className="catalogops-field-label">
+					{ field.label }
+				</label>
+
+				<select
+					className="catalogops-field__op"
+					value={ operator }
+					aria-label={ sprintf(
+						/* translators: %s: the filter field's name, e.g. "Cost price". */
+						__( 'How to match %s', 'catalogops' ),
+						field.label
+					) }
+					onChange={ ( e ) => set( { mode: e.target.value } ) }
+				>
+					{ operators.map( ( token ) => (
+						<option key={ token } value={ token }>
+							{ operatorLabel( token ) }
+						</option>
+					) ) }
+				</select>
+			</span>
+
+			{ /* Removed, not disabled. A greyed-out box beside "has no value"
+			     reads as something broken and invites the question of what the
+			     text in it would have done. */ }
+			{ operatorTakesValue( operator ) &&
+				( operatorTakesRange( operator ) ? (
+					<span className="catalogops-field__range">
+						<input
+							id={ id }
+							type={ inputType }
+							value={ value }
+							aria-label={ __( 'From', 'catalogops' ) }
+							placeholder={ __( 'From', 'catalogops' ) }
+							onChange={ ( e ) =>
+								set( { value: e.target.value } )
+							}
+						/>
+						<input
+							type={ inputType }
+							value={ row && row.to ? row.to : '' }
+							aria-label={ __( 'To', 'catalogops' ) }
+							placeholder={ __( 'To', 'catalogops' ) }
+							onChange={ ( e ) => set( { to: e.target.value } ) }
+						/>
+					</span>
+				) : (
+					<input
+						id={ id }
+						type={ inputType }
+						value={ value }
+						onChange={ ( e ) => set( { value: e.target.value } ) }
+					/>
+				) ) }
 		</div>
 	);
+}
+
+/**
+ * The HTML input a control needs. Anything unlisted is a text box.
+ *
+ * `date` is the one that matters. The descriptor says the value is a date, and a
+ * text box would invite `8.7.2024.` against a column holding `20240708` — a
+ * filter that reads correctly and matches nothing, which is indistinguishable
+ * from an over-narrow filter. A date input can only produce `YYYY-MM-DD`, and
+ * `filter.js` turns that into whatever the column actually keeps.
+ */
+const INPUT_TYPES = {
+	number: 'number',
+	money: 'number',
+	date: 'date',
+};
+
+/**
+ * How to say an operator token in the filter's own voice.
+ *
+ * Here rather than in `filter.js`: deciding *which* operators a field offers is
+ * a rule and belongs with the other rules; saying them in the reader's language
+ * is this file's job, and keeping the two apart is what lets `filter.js` stay
+ * free of i18n and be tested as plain data.
+ *
+ * The wording is a sentence continuing the label — "Cost price · is more than",
+ * "Launch date · is between" — rather than the mathematical symbol, because the
+ * person reading it wrote the field in ACF and is not thinking in operators.
+ *
+ * @param {string} operator The operator token as the API persists it.
+ * @return {string} A translated phrase.
+ */
+function operatorLabel( operator ) {
+	switch ( operator ) {
+		case '=':
+			return __( 'is', 'catalogops' );
+		case '!=':
+			return __( 'is not', 'catalogops' );
+		case 'contains':
+			return __( 'contains', 'catalogops' );
+		case 'in':
+			return __( 'is any of', 'catalogops' );
+		case 'not_in':
+			return __( 'is none of', 'catalogops' );
+		case '>':
+			return __( 'is more than', 'catalogops' );
+		case '>=':
+			return __( 'is at least', 'catalogops' );
+		case '<':
+			return __( 'is less than', 'catalogops' );
+		case '<=':
+			return __( 'is at most', 'catalogops' );
+		case 'between':
+			return __( 'is between', 'catalogops' );
+		case 'exists':
+			return __( 'has any value', 'catalogops' );
+		case 'not_exists':
+			return __( 'has no value', 'catalogops' );
+		default:
+			return operator;
+	}
 }
 
 /**
@@ -5685,41 +5818,52 @@ function App() {
 								</div>
 
 								{ /* The fields modules add, below the built-in
-								     controls rather than mixed into them. A field
-								     that means nothing in this scope is not
-								     rendered, for the same reason the attribute
-								     row is hidden under the product scope: a
-								     control that cannot produce a condition is a
-								     control that lies. */ }
-								{ moduleFields.filter( ( f ) =>
-									( f.scopes || [] ).includes( scope )
-								).length > 0 && (
-									<div className="catalogops-filter-fields">
-										{ moduleFields
-											.filter( ( f ) =>
-												( f.scopes || [] ).includes(
-													scope
-												)
-											)
-											.map( ( f ) => (
-												<ModuleField
-													key={ f.key }
-													field={ f }
-													row={
-														form.modules[ f.key ]
-													}
-													onChange={ ( next ) =>
-														setForm( {
-															...form,
-															modules: {
-																...form.modules,
-																[ f.key ]: next,
-															},
-														} )
-													}
-												/>
-											) ) }
-									</div>
+								     controls rather than mixed into them, and
+								     under a heading of their own. Appending them
+								     bare read as eight more built-in controls
+								     that had simply been added badly — nothing
+								     said where WooCommerce stopped and ACF began.
+								     A field that means nothing in this scope is
+								     not rendered, for the same reason the
+								     attribute row is hidden under the product
+								     scope: a control that cannot produce a
+								     condition is a control that lies. */ }
+								{ groupModuleFields( moduleFields, scope ).map(
+									( group ) => (
+										<div
+											className="catalogops-module-group"
+											key={ group.module }
+										>
+											{ group.label && (
+												<div className="catalogops-module-heading">
+													{ group.label }
+												</div>
+											) }
+											<div className="catalogops-filter-row">
+												{ group.fields.map( ( f ) => (
+													<ModuleField
+														key={ f.key }
+														field={ f }
+														row={
+															form.modules[
+																f.key
+															]
+														}
+														onChange={ ( next ) =>
+															setForm( {
+																...form,
+																modules: {
+																	...form.modules,
+																	[ f.key ]:
+																		next,
+																},
+															} )
+														}
+													/>
+												) ) }
+											</div>
+										</div>
+									)
 								) }
 
 								<div className="catalogops-filter-row">

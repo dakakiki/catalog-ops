@@ -13,10 +13,17 @@
 
 import {
 	buildFilter,
+	dateForStorage,
+	defaultModuleOperator,
 	emptyForm,
+	groupModuleFields,
+	moduleOperators,
 	moduleValue,
 	NO_TAG,
+	NO_VALUE,
 	operatorFor,
+	operatorTakesRange,
+	operatorTakesValue,
 	reconcileTagSelection,
 } from './filter';
 
@@ -338,20 +345,38 @@ describe( 'module fields', () => {
 	const conditions = ( modules, fields = [ supplier ], scope = 'product' ) =>
 		buildFilter( { ...emptyForm(), modules }, scope, fields ).conditions;
 
-	it( 'adds a condition for a filled row', () => {
+	it( 'sends the operator the row is set to, verbatim', () => {
 		expect(
-			conditions( { 'acf:supplier': { value: 'Globex', mode: 'in' } } )
+			conditions( { 'acf:supplier': { value: 'Globex', mode: '=' } } )
 		).toEqual( [
 			{ field: 'acf:supplier', operator: '=', value: 'Globex' },
 		] );
-	} );
 
-	it( 'uses the exclusion operator the field declares', () => {
 		expect(
 			conditions( {
-				'acf:supplier': { value: 'Globex', mode: 'not_in' },
+				'acf:supplier': { value: 'Globex', mode: '!=' },
 			} )[ 0 ].operator
 		).toBe( '!=' );
+	} );
+
+	// A row the user has not touched still has to mean something: the value box
+	// is what they type into first, and the operator is left where it opened.
+	it( 'falls back to the default operator when the row names none', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: 'Globex' } } )[ 0 ].operator
+		).toBe( '=' );
+	} );
+
+	// The field list can change under a form that is already open — a licence
+	// lapses, an ACF field is deleted and rebuilt with fewer operators. An
+	// operator the field does not declare is refused by the registry, and a
+	// refusal stops the WHOLE filter rather than just this row.
+	it( 'drops a row whose operator the field does not declare', () => {
+		expect(
+			conditions( {
+				'acf:supplier': { value: 'Globex', mode: 'between' },
+			} )
+		).toEqual( [] );
 	} );
 
 	it( 'adds nothing for a row nobody filled in', () => {
@@ -479,5 +504,393 @@ describe( 'moduleValue', () => {
 	it( 'sends nothing for an empty set', () => {
 		expect( moduleValue( 'term_set', [] ) ).toBeUndefined();
 		expect( moduleValue( 'value_set', [ '' ] ) ).toBeUndefined();
+	} );
+} );
+
+describe( 'groupModuleFields', () => {
+	const field = ( key, module, label, scopes = [ 'product' ] ) => ( {
+		key,
+		module,
+		module_label: label,
+		scopes,
+		control: 'text',
+		operators: [ '=' ],
+		available: true,
+	} );
+
+	it( 'puts every field of one module under a single heading', () => {
+		const groups = groupModuleFields(
+			[
+				field( 'acf:a', 'acf', 'ACF fields' ),
+				field( 'acf:b', 'acf', 'ACF fields' ),
+				field( 'acf:c', 'acf', 'ACF fields' ),
+			],
+			'product'
+		);
+
+		expect( groups ).toHaveLength( 1 );
+		expect( groups[ 0 ].label ).toBe( 'ACF fields' );
+		expect( groups[ 0 ].fields.map( ( f ) => f.key ) ).toEqual( [
+			'acf:a',
+			'acf:b',
+			'acf:c',
+		] );
+	} );
+
+	it( 'keeps modules apart and keeps the order the server sent', () => {
+		const groups = groupModuleFields(
+			[
+				field( 'acf:a', 'acf', 'ACF fields' ),
+				field( 'wpml:lang', 'wpml', 'Translation' ),
+				field( 'acf:b', 'acf', 'ACF fields' ),
+			],
+			'product'
+		);
+
+		// Two groups, not three: a module interleaved with another still gets one
+		// heading, and the first appearance fixes where it sits.
+		expect( groups.map( ( g ) => g.module ) ).toEqual( [ 'acf', 'wpml' ] );
+		expect( groups[ 0 ].fields ).toHaveLength( 2 );
+		expect( groups[ 1 ].fields ).toHaveLength( 1 );
+	} );
+
+	// A control that cannot produce a condition is a control that lies — the same
+	// rule that hides the attribute row under the product scope.
+	it( 'drops fields that mean nothing in this scope', () => {
+		const groups = groupModuleFields(
+			[
+				field( 'acf:a', 'acf', 'ACF fields', [ 'product' ] ),
+				field( 'acf:v', 'acf', 'ACF fields', [ 'variation' ] ),
+			],
+			'variation'
+		);
+
+		expect( groups ).toHaveLength( 1 );
+		expect( groups[ 0 ].fields.map( ( f ) => f.key ) ).toEqual( [
+			'acf:v',
+		] );
+	} );
+
+	it( 'yields no group at all when nothing applies to the scope', () => {
+		const groups = groupModuleFields(
+			[ field( 'acf:a', 'acf', 'ACF fields', [ 'product' ] ) ],
+			'variation'
+		);
+
+		expect( groups ).toEqual( [] );
+	} );
+
+	// The heading is the server's to write. A client that fell back to the module
+	// slug would print "acf" as a heading, and would have to be taught every
+	// future module's name — the coupling `options_route` exists to avoid.
+	it( 'leaves the heading empty rather than inventing one from the slug', () => {
+		const groups = groupModuleFields(
+			[ { key: 'x:a', module: 'x', scopes: [ 'product' ] } ],
+			'product'
+		);
+
+		expect( groups[ 0 ].label ).toBe( '' );
+		expect( groups[ 0 ].module ).toBe( 'x' );
+	} );
+
+	it( 'survives an empty or missing field list', () => {
+		expect( groupModuleFields( [], 'product' ) ).toEqual( [] );
+		expect( groupModuleFields( undefined, 'product' ) ).toEqual( [] );
+	} );
+} );
+
+describe( 'module field operators', () => {
+	const field = ( operators ) => ( {
+		key: 'acf:x',
+		control: 'text',
+		operators,
+		scopes: [ 'product' ],
+		available: true,
+	} );
+
+	it( 'offers only what the field declares, in menu order', () => {
+		// Declared in a deliberately jumbled order: the menu must not inherit it,
+		// or the same field reads differently depending on how a provider happened
+		// to list its operators.
+		expect(
+			moduleOperators( field( [ 'between', 'exists', '=', '>' ] ) )
+		).toEqual( [ '=', '>', 'between', 'exists' ] );
+	} );
+
+	it( 'offers nothing for a field that declares nothing', () => {
+		expect( moduleOperators( field( [] ) ) ).toEqual( [] );
+		expect( moduleOperators( {} ) ).toEqual( [] );
+	} );
+
+	// The regression this whole change exists for. `>`, `>=`, `<`, `<=` and
+	// `between` are declared by ACF's number and date fields, the compiler emits
+	// them and the engine answers them — and the old mode-to-operator mapping
+	// could only ever produce '=', '!=', 'in', 'not_in' or 'contains', so "cost
+	// is more than 100" was unaskable from the UI.
+	it( 'reaches the ordered operators a number field declares', () => {
+		const number = field( [
+			'=',
+			'!=',
+			'>',
+			'>=',
+			'<',
+			'<=',
+			'between',
+			'exists',
+			'not_exists',
+		] );
+
+		expect( moduleOperators( number ) ).toContain( '>' );
+		expect( moduleOperators( number ) ).toContain( 'between' );
+	} );
+
+	it( 'starts on the first operator that takes a value, not on presence', () => {
+		expect( defaultModuleOperator( field( [ '=', 'exists' ] ) ) ).toBe(
+			'='
+		);
+		expect(
+			defaultModuleOperator(
+				field( [ 'exists', 'not_exists', 'contains' ] )
+			)
+		).toBe( 'contains' );
+	} );
+
+	// A field that can only be asked about presence has nothing else to open on.
+	it( 'starts on presence when that is all the field has', () => {
+		expect(
+			defaultModuleOperator( field( [ 'exists', 'not_exists' ] ) )
+		).toBe( 'exists' );
+		expect( defaultModuleOperator( field( [] ) ) ).toBe( '' );
+	} );
+
+	it( 'knows which operators need a value and which need two', () => {
+		expect( operatorTakesValue( '=' ) ).toBe( true );
+		expect( operatorTakesValue( 'between' ) ).toBe( true );
+		expect( operatorTakesValue( 'exists' ) ).toBe( false );
+		expect( operatorTakesValue( 'not_exists' ) ).toBe( false );
+
+		expect( operatorTakesRange( 'between' ) ).toBe( true );
+		expect( operatorTakesRange( '>' ) ).toBe( false );
+	} );
+} );
+
+describe( 'module conditions across the operator range', () => {
+	const cost = {
+		key: 'acf:cost',
+		control: 'number',
+		operators: [ '=', '>', '<', 'between', 'exists', 'not_exists' ],
+		scopes: [ 'product' ],
+		available: true,
+	};
+
+	const conditions = ( modules ) =>
+		buildFilter( { ...emptyForm(), modules }, 'product', [ cost ] )
+			.conditions;
+
+	it( 'sends an ordered comparison with a number, not a string', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '100', mode: '>' } } )
+		).toEqual( [ { field: 'acf:cost', operator: '>', value: 100 } ] );
+	} );
+
+	it( 'sends a range as a two-element list', () => {
+		expect(
+			conditions( {
+				'acf:cost': { value: '10', to: '90', mode: 'between' },
+			} )
+		).toEqual( [
+			{ field: 'acf:cost', operator: 'between', value: [ 10, 90 ] },
+		] );
+	} );
+
+	// Half a range is not a narrower range, it is a different question — and
+	// BETWEEN with one bound missing is a condition the engine refuses, which
+	// stops the whole filter rather than this row.
+	it( 'sends nothing for half a range', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '10', mode: 'between' } } )
+		).toEqual( [] );
+		expect(
+			conditions( { 'acf:cost': { to: '90', mode: 'between' } } )
+		).toEqual( [] );
+	} );
+
+	it( 'sends presence with no value at all', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '', mode: 'not_exists' } } )
+		).toEqual( [ { field: 'acf:cost', operator: 'not_exists' } ] );
+	} );
+
+	// Presence ignores the box rather than being blocked by it. The box is
+	// removed on screen, so a value left behind when the operator changed must
+	// not leak into the condition.
+	it( 'ignores a stale value when the operator asks about presence', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '100', mode: 'exists' } } )
+		).toEqual( [ { field: 'acf:cost', operator: 'exists' } ] );
+	} );
+} );
+
+describe( 'dates against the format the column actually holds', () => {
+	const launch = {
+		key: 'acf:launch',
+		control: 'date',
+		operators: [ '=', '>=', '<=', 'between', 'exists', 'not_exists' ],
+		scopes: [ 'product' ],
+		available: true,
+		value_format: 'Ymd',
+	};
+
+	const conditions = ( modules, field = launch ) =>
+		buildFilter( { ...emptyForm(), modules }, 'product', [ field ] )
+			.conditions;
+
+	// The whole reason this exists. A date input gives `2024-07-08`; ACF's date
+	// picker stores `20240708`. Sent as typed, the filter reads perfectly and
+	// matches nothing — and nothing is what an over-narrow filter looks like, so
+	// the failure never announces itself.
+	it( 'sends a date picker the compact form it stores', () => {
+		expect(
+			conditions( { 'acf:launch': { value: '2024-07-08', mode: '=' } } )
+		).toEqual( [
+			{ field: 'acf:launch', operator: '=', value: '20240708' },
+		] );
+	} );
+
+	it( 'sends a date-and-time picker a time as well', () => {
+		const stamped = { ...launch, value_format: 'Y-m-d H:i:s' };
+
+		expect(
+			conditions(
+				{ 'acf:launch': { value: '2024-07-08', mode: '>=' } },
+				stamped
+			)[ 0 ].value
+		).toBe( '2024-07-08 00:00:00' );
+	} );
+
+	// A range's far end has to reach the end of its day. Stopping at midnight
+	// drops everything recorded during the last day of the range, which is an
+	// off-by-one nobody can see: the answer is smaller, and still plausible.
+	it( 'takes a range to the end of its last day when the column keeps a time', () => {
+		const stamped = { ...launch, value_format: 'Y-m-d H:i:s' };
+
+		expect(
+			conditions(
+				{
+					'acf:launch': {
+						value: '2024-01-01',
+						to: '2024-12-31',
+						mode: 'between',
+					},
+				},
+				stamped
+			)[ 0 ].value
+		).toEqual( [ '2024-01-01 00:00:00', '2024-12-31 23:59:59' ] );
+	} );
+
+	it( 'has no end-of-day to add when the column keeps only a date', () => {
+		expect(
+			conditions( {
+				'acf:launch': {
+					value: '2024-01-01',
+					to: '2024-12-31',
+					mode: 'between',
+				},
+			} )[ 0 ].value
+		).toEqual( [ '20240101', '20241231' ] );
+	} );
+
+	it( 'leaves a field that declares no format alone', () => {
+		const plain = { ...launch, value_format: '' };
+
+		expect(
+			conditions(
+				{ 'acf:launch': { value: '2024-07-08', mode: '=' } },
+				plain
+			)[ 0 ].value
+		).toBe( '2024-07-08' );
+	} );
+
+	// A value left over from before the field was a date control, or from a saved
+	// filter written by hand. Converting it would be inventing data; passing it
+	// through lets the ordinary rules deal with it.
+	it( 'passes anything that is not an ISO date straight through', () => {
+		expect( dateForStorage( 'yesterday', 'Ymd' ) ).toBe( 'yesterday' );
+		expect( dateForStorage( '', 'Ymd' ) ).toBe( '' );
+		expect( dateForStorage( '20240708', 'Ymd' ) ).toBe( '20240708' );
+	} );
+
+	it( 'still drops a half-filled range', () => {
+		expect(
+			conditions( {
+				'acf:launch': { value: '2024-01-01', mode: 'between' },
+			} )
+		).toEqual( [] );
+	} );
+} );
+
+describe( 'the "Without a value" entry on a set field', () => {
+	const badges = {
+		key: 'acf:badges',
+		control: 'value_set',
+		operators: [ 'in', 'not_in', 'exists', 'not_exists' ],
+		scopes: [ 'product' ],
+		available: true,
+	};
+
+	const conditions = ( row, field = badges ) =>
+		buildFilter(
+			{ ...emptyForm(), modules: { 'acf:badges': row } },
+			'product',
+			[ field ]
+		).conditions;
+
+	// The question no choice can ask. `is not sale` deliberately KEEPS a product
+	// carrying no badge at all — it is, definitively, not on sale — so without
+	// this entry the empty ones cannot be selected by any combination at all.
+	it( 'asks about the field rather than about which choices', () => {
+		expect( conditions( { value: [ NO_VALUE ], mode: 'in' } ) ).toEqual( [
+			{ field: 'acf:badges', operator: 'not_exists' },
+		] );
+	} );
+
+	// The mode reads the way the rest of the row does: the selection is what to
+	// keep, so excluding the empty ones leaves exactly those that carry a value.
+	it( 'inverts to exists when the row is set to exclude', () => {
+		expect(
+			conditions( { value: [ NO_VALUE ], mode: 'not_in' } )[ 0 ].operator
+		).toBe( 'exists' );
+	} );
+
+	// Same rule the tag row follows: asking about the field's absence and about
+	// its values at once is two questions, and the absence is the one meant.
+	it( 'wins the row when picked alongside real choices', () => {
+		expect(
+			conditions( { value: [ 'sale', NO_VALUE ], mode: 'in' } )
+		).toEqual( [ { field: 'acf:badges', operator: 'not_exists' } ] );
+	} );
+
+	it( 'leaves an ordinary selection alone', () => {
+		expect( conditions( { value: [ 'sale' ], mode: 'in' } ) ).toEqual( [
+			{ field: 'acf:badges', operator: 'in', value: [ 'sale' ] },
+		] );
+	} );
+
+	// A provider that does not declare presence must not have it smuggled in by a
+	// sentinel the control happened to add.
+	it( 'sends nothing when the field does not declare presence', () => {
+		const plain = { ...badges, operators: [ 'in', 'not_in' ] };
+
+		expect(
+			conditions( { value: [ NO_VALUE ], mode: 'in' }, plain )
+		).toEqual( [] );
+	} );
+
+	// The sentinel is a string and an ACF choice key is a string, so the two could
+	// in principle collide. This is the half of the guard that lives here; the
+	// control refuses to add the entry when a real option already answers to it.
+	it( 'is a value no ordinary choice would be', () => {
+		expect( NO_VALUE ).toMatch( /^__catalogops_/ );
+		expect( NO_VALUE ).not.toBe( NO_TAG );
 	} );
 } );
