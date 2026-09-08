@@ -143,6 +143,60 @@ final class Scheduler implements Operation_Scheduler {
 	}
 
 	/**
+	 * Let go of chunks this operation left claimed and unfinished.
+	 *
+	 * Scoped as narrowly as it can be: our hook, in this operation's own group, and
+	 * only entries Action Scheduler still believes are executing. It never runs the
+	 * site-wide cleaner, because other plugins' abandoned work is not ours to judge.
+	 *
+	 * Marking them failed is the whole fix, and it is smaller than it looks.
+	 * `ActionScheduler_DBStore::get_claim_count()` counts claim rows that still have
+	 * an action in a pending or in-progress status, so a failed action drops out of
+	 * the count on the spot and the claim it belonged to stops blocking anything —
+	 * with no reaching into the claims table. Since `claim_actions()` only ever
+	 * selects unclaimed *pending* rows, a failed action can never be handed out
+	 * again either.
+	 *
+	 * Guarded rather than assumed. Everything here is Action Scheduler's internals
+	 * as they stand today; a build that has moved on should leave the site working
+	 * and unrecovered rather than fatal, which is the same bargain the rest of this
+	 * class makes with `function_exists`.
+	 *
+	 * @param int $op_id Operation id.
+	 * @return int How many abandoned chunks were released.
+	 */
+	public function release_stuck_chunks( int $op_id ): int {
+		if ( ! class_exists( '\ActionScheduler' ) || ! class_exists( '\ActionScheduler_Store' ) ) {
+			return 0;
+		}
+
+		$store = \ActionScheduler::store();
+
+		if ( ! method_exists( $store, 'query_actions' ) || ! method_exists( $store, 'mark_failure' ) ) {
+			return 0;
+		}
+
+		$ids = $store->query_actions(
+			array(
+				'hook'     => self::CHUNK_HOOK,
+				'group'    => $this->group( $op_id ),
+				'status'   => \ActionScheduler_Store::STATUS_RUNNING,
+				'per_page' => 50,
+			)
+		);
+
+		if ( ! is_array( $ids ) ) {
+			return 0;
+		}
+
+		foreach ( $ids as $id ) {
+			$store->mark_failure( (int) $id );
+		}
+
+		return count( $ids );
+	}
+
+	/**
 	 * Ensure the recurring watchdog action is scheduled exactly once.
 	 */
 	public function ensure_watchdog(): void {

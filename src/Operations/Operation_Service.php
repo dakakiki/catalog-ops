@@ -12,9 +12,13 @@ use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Query\Condition;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Filter_Field_Unavailable;
+use CatalogOps\Query\Filter_Fields;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
+use CatalogOps\Query\Requirements\Untouched_By_Schedule;
 use InvalidArgumentException;
 use Throwable;
 use WC_Product;
@@ -107,6 +111,20 @@ final class Operation_Service {
 	private Evaluator $evaluator;
 
 	/**
+	 * Schedules repository, for stopping a schedule whose run has been undone.
+	 *
+	 * @var Schedules|null
+	 */
+	private ?Schedules $schedules;
+
+	/**
+	 * Module filter-field registry, or null when only core keys are answerable.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $filter_fields;
+
+	/**
 	 * How many objects the preview shows worked out in full. Ten is a sample, not
 	 * a set: enough to see the shape of the change, few enough to load quickly and
 	 * to read without scrolling. The search covers "but I want to see that one".
@@ -114,18 +132,55 @@ final class Operation_Service {
 	private const SAMPLE_SIZE = 10;
 
 	/**
+	 * Why a schedule stopped when a user undid one of its runs.
+	 *
+	 * Stored as it is written here rather than translated at render time, and in
+	 * English like the supervisor's own reasons ({@see Schedule_Runner::pause()},
+	 * which records an exception message): the column is a record of what happened,
+	 * and the locale of whoever happened to press Undo is not part of that. Well
+	 * inside the column's 191 characters.
+	 */
+	private const UNDONE_PAUSE_REASON = 'A user undid this run, so the schedule was paused instead of being left to apply the same change again.';
+
+	/**
+	 * Why a schedule stopped when a user stopped one of its runs.
+	 *
+	 * Deliberately says nothing about the stopped run still being resumable, though
+	 * it almost always is. {@see Chunk_Runner::run()} reads the operation's status
+	 * once, on entry, and {@see Chunk_Runner::finalize()} writes COMPLETED without
+	 * looking again — so a Stop that lands while the last chunk is in flight settles
+	 * the run as completed anyway, with nothing left to resume. The window is small
+	 * and the outcome is benign, but a reason recorded on a schedule outlives it,
+	 * and a sentence that is occasionally false is worse than one that says less.
+	 */
+	private const STOPPED_PAUSE_REASON = 'A user stopped this run, so the schedule was paused instead of being left to start the same work again on its next tick.';
+
+	/**
 	 * Build the service.
 	 *
-	 * @param Query_Engine        $engine     Query engine.
-	 * @param Operations          $operations Operations repository.
-	 * @param Changes             $changes    Changes repository.
-	 * @param Field_Providers     $providers  Field provider registry.
-	 * @param Lock                $lock       Single-writer lock.
-	 * @param Operation_Scheduler $scheduler Scheduler for chunk hand-off/cancel.
-	 * @param License|null        $license    Plan gating; defaults to unlimited
-	 *                                        (unlicensed development and tests).
-	 * @param Write_Rules|null    $rules      Applicability rules; the default set is
-	 *                                        stateless, so it is built when omitted.
+	 * @param Query_Engine          $engine     Query engine.
+	 * @param Operations            $operations Operations repository.
+	 * @param Changes               $changes    Changes repository.
+	 * @param Field_Providers       $providers  Field provider registry.
+	 * @param Lock                  $lock       Single-writer lock.
+	 * @param Operation_Scheduler   $scheduler Scheduler for chunk hand-off/cancel.
+	 * @param License|null          $license    Plan gating; defaults to unlimited
+	 *                                          (unlicensed development and tests).
+	 * @param Write_Rules|null      $rules      Applicability rules; the default set is
+	 *                                          stateless, so it is built when omitted.
+	 * @param Schedules|null        $schedules  Schedules repository, so undoing a
+	 *                                          scheduled run can stop the schedule that
+	 *                                          would re-apply it. Unlike the two above,
+	 *                                          omitting it is not a neutral default: the
+	 *                                          pause simply does not happen. The
+	 *                                          container always supplies it; it is
+	 *                                          optional only so the many tests that
+	 *                                          never involve a schedule need not build
+	 *                                          one.
+	 * @param Filter_Providers|null $filter_fields Module filter-field registry. Null
+	 *                                        means only the engine's own keys are
+	 *                                        answerable, which is what every test
+	 *                                        that predates the provider seam wants.
 	 */
 	public function __construct(
 		Query_Engine $engine,
@@ -135,17 +190,47 @@ final class Operation_Service {
 		Lock $lock,
 		Operation_Scheduler $scheduler,
 		?License $license = null,
-		?Write_Rules $rules = null
+		?Write_Rules $rules = null,
+		?Schedules $schedules = null,
+		?Filter_Providers $filter_fields = null
 	) {
-		$this->engine     = $engine;
-		$this->operations = $operations;
-		$this->changes    = $changes;
-		$this->providers  = $providers;
-		$this->lock       = $lock;
-		$this->scheduler  = $scheduler;
-		$this->license    = $license ?? License::unlimited();
-		$this->rules      = $rules ?? new Write_Rules();
-		$this->evaluator  = new Evaluator( $providers, $this->rules );
+		$this->engine        = $engine;
+		$this->operations    = $operations;
+		$this->changes       = $changes;
+		$this->providers     = $providers;
+		$this->lock          = $lock;
+		$this->scheduler     = $scheduler;
+		$this->license       = $license ?? License::unlimited();
+		$this->rules         = $rules ?? new Write_Rules();
+		$this->schedules     = $schedules;
+		$this->filter_fields = $filter_fields;
+		$this->evaluator     = new Evaluator( $providers, $this->rules );
+	}
+
+	/**
+	 * Refuse a filter this installation cannot answer, before anything is counted,
+	 * created or frozen.
+	 *
+	 * Two checks, one seam. Without a registry this is the static core-key list and
+	 * nothing else, which is what every test and the EXPLAIN harness want. With
+	 * one, the registry validates each non-core condition's field, scope, operator
+	 * and licence — everything the engine would validate later, asked here so the
+	 * refusal names the field at the boundary that owns the decision rather than
+	 * mid-statement.
+	 *
+	 * @param Filter $filter The filter to check.
+	 *
+	 * @throws \CatalogOps\Query\Filter_Field_Unavailable When a field cannot answer.
+	 * @throws License_Limited                           When a module is not licensed.
+	 */
+	private function assert_filter_answerable( Filter $filter ): void {
+		if ( null === $this->filter_fields ) {
+			Filter_Fields::assert_answerable( $filter );
+
+			return;
+		}
+
+		$this->filter_fields->assert_supported( $filter );
 	}
 
 	/**
@@ -156,22 +241,31 @@ final class Operation_Service {
 	 * @param Operation_Mode                          $mode    Write strategy.
 	 * @param Operation_Source                        $source  Origin.
 	 * @param int                                     $user_id Owner user id.
+	 * @param int|null                                $schedule_id Schedule that spawned this run, or null.
 	 * @return int The new operation id.
 	 *
-	 * @throws InvalidArgumentException When an action targets a field no provider handles.
+	 * @throws InvalidArgumentException  When an action targets a field no provider handles.
+	 * @throws Filter_Field_Unavailable  When the filter names a field the engine cannot answer.
 	 */
 	public function create(
 		Filter $filter,
 		array $actions,
 		Operation_Mode $mode,
 		Operation_Source $source,
-		int $user_id
+		int $user_id,
+		?int $schedule_id = null
 	): int {
+		// The filter first: it decides *what* is written, so a filter that cannot be
+		// answered exactly must not get as far as a draft row. The engine refuses the
+		// same condition again when it resolves, but by then a row exists and — on a
+		// schedule — a tick has been spent.
+		$this->assert_filter_answerable( $filter );
+
 		$this->assert_fields_supported( $actions );
 		$this->assert_formulas_allowed( $actions );
 		$this->assert_values_writable( $actions );
 
-		return $this->operations->create( $filter, $actions, $mode, $source, $user_id );
+		return $this->operations->create( $filter, $actions, $mode, $source, $user_id, $schedule_id );
 	}
 
 	/**
@@ -211,6 +305,15 @@ final class Operation_Service {
 	 * @throws InvalidArgumentException When an action targets an unsupported field.
 	 */
 	public function preview( Filter $filter, array $actions, string $sku = '' ): array {
+		// The filter is checked here as well as in create(), and the duplication is
+		// the point: preview takes a filter straight off the request and never goes
+		// near create(), so this is the only place that can refuse it before a count
+		// is put in front of somebody. Without it an unanswerable field reached the
+		// engine and was refused there — the right outcome by luck, one layer deeper
+		// than the boundary that owns the decision, and only while every clause
+		// builder keeps refusing.
+		$this->assert_filter_answerable( $filter );
+
 		$this->assert_fields_supported( $actions );
 		$this->assert_values_writable( $actions );
 
@@ -346,7 +449,7 @@ final class Operation_Service {
 	 * @param int             $user_id      Owner user id.
 	 * @return int The new undo operation id.
 	 *
-	 * @throws InvalidArgumentException When the parent is missing or still active.
+	 * @throws InvalidArgumentException When the parent is missing, still active, or already reverted.
 	 * @throws License_Limited          When undo is used without a paid plan.
 	 */
 	public function undo( int $parent_op_id, Conflict_Policy $policy, int $user_id ): int {
@@ -361,37 +464,144 @@ final class Operation_Service {
 		}
 
 		if ( $parent->status->is_active() ) {
-			throw new InvalidArgumentException( 'A running operation cannot be undone; cancel it first.' );
+			throw new InvalidArgumentException( 'A running operation cannot be undone; stop it first.' );
 		}
 
-		return $this->operations->create(
+		// Undo is one-way, and it ends there (a product decision, 2026-09-03). Two
+		// shapes of the same rule:
+		//
+		// An operation that has already been reverted has nothing left to give back.
+		// Every object would read as drift — its current value is the one the undo
+		// restored, not the one this operation wrote — so the safe policy would skip
+		// all of them and the forcing one would rewrite values that are already
+		// there: a full pass over the target list, holding the write lock, to leave
+		// an empty operation in the history.
+		//
+		// And an undo is not itself undoable. Reverting a revert would put the
+		// original change back, which turns undo into a toggle someone can ride
+		// indefinitely, and leaves the operation it reverted reading `reverted` while
+		// its change is in force again — a status that has no second move. Once a run
+		// has been given back, what remains is to look at what it did or delete it.
+		if ( Operation_Status::REVERTED === $parent->status ) {
+			throw new InvalidArgumentException( 'This operation has already been undone.' );
+		}
+
+		if ( $parent->is_undo() ) {
+			throw new InvalidArgumentException( 'An undo cannot itself be undone.' );
+		}
+
+		$undo_id = $this->operations->create(
 			new Filter(),
 			array(),
 			$parent->mode,
 			Operation_Source::UNDO,
 			$user_id,
+			null,
 			$parent_op_id,
 			$policy
 		);
+
+		$this->pause_parent_schedule( $parent, self::UNDONE_PAUSE_REASON );
+
+		return $undo_id;
+	}
+
+	/**
+	 * Stop the schedule that produced an operation the user has just rejected — by
+	 * undoing it ({@see undo()}) or by stopping it part-way ({@see cancel()}).
+	 *
+	 * Both are the same sentence from the user: not this run. Neither meant anything
+	 * to the schedule, which stayed active with `next_run` untouched.
+	 *
+	 * After an undo, the next tick rebuilt the same operation from the same stored
+	 * template, re-resolved the filter — which has no notion of "already changed by
+	 * an earlier fire" — and wrote the reverted values straight back. The revert
+	 * survived a single tick, and because {@see Notifier} mails only on a scheduled
+	 * source, the one message in the sequence was the one announcing the run that
+	 * overwrote it.
+	 *
+	 * After a stop it is worse in a quieter way, and it was seen live: a run stopped
+	 * at 20,500 of 21,366 leaves its remaining rows frozen and resumable, and
+	 * {@see Operations::active_excluding()} does not count a paused operation, so the
+	 * schedule fired again thirty-seven minutes later and began a second full pass
+	 * over the same objects. Two half-finished runs from one schedule, and the user
+	 * had already said stop.
+	 *
+	 * Paused, not completed. COMPLETED is how a spent one-shot ends, and
+	 * {@see Schedule_Runner::run_one()} refuses it for ever — so completing a
+	 * recurring schedule here would permanently take away the user's ability to start
+	 * it again, a large consequence for what may be a one-off correction. Paused is
+	 * the reversible shape of the same stop: the table says why, and Resume is one
+	 * click, already warned when it would fire immediately.
+	 *
+	 * Three schedules are left exactly as they are. A completed one cannot fire
+	 * again, and moving it to paused would *grant* it a Run now it had spent. A
+	 * paused one is not going to fire either, and overwriting its reason would throw
+	 * away a diagnosis the supervisor recorded in order to say something the history
+	 * already shows. A deleted one is gone; the runs it made keep its id, which
+	 * {@see \CatalogOps\Database\Migrations\Add_Operation_Schedule_Column} explains.
+	 *
+	 * Contained, because stopping and undoing are the things the user actually asked
+	 * for. Both callers run this after their own work has landed, and a failure here
+	 * must not be able to lose it — the same rule {@see Schedule_Runner::fire()}
+	 * follows in the other direction, where bookkeeping that fails is not allowed to
+	 * delete an operation that is already queued.
+	 *
+	 * The reason is passed in rather than derived, because the two callers are not
+	 * telling the reader the same thing and the schedules table is where they will
+	 * read it.
+	 *
+	 * @param Operation $operation The operation the user rejected.
+	 * @param string    $reason    What to record on the schedule, under 191 characters.
+	 */
+	private function pause_parent_schedule( Operation $operation, string $reason ): void {
+		if ( null === $this->schedules || null === $operation->schedule_id ) {
+			return;
+		}
+
+		try {
+			$schedule = $this->schedules->find( $operation->schedule_id );
+
+			if ( null === $schedule || Schedule_Status::ACTIVE !== $schedule->status ) {
+				return;
+			}
+
+			$this->schedules->set_status(
+				$schedule->id,
+				Schedule_Status::PAUSED,
+				$reason
+			);
+		} catch ( Throwable $e ) {
+			// Deliberately swallowed; see the note above. The schedules screen is the
+			// source of truth for whether the pause stuck, and it is one click away.
+			return;
+		}
 	}
 
 	/**
 	 * Preview an undo without writing: the total number of recorded changes that
-	 * would be reverted, and a sample showing, per object, whether it would revert
+	 * would be reverted, and one page showing, per object, whether it would revert
 	 * or be skipped as drift (CONTEXT §3). The exact skipped count is not computed
 	 * here — that would mean reading every target object, which the architecture
-	 * reserves for execution; the sample conveys the shape and the run reports the
-	 * exact figure.
+	 * reserves for execution; the run reports the exact figure.
+	 *
+	 * It pages and searches rather than showing a fixed sample, because an undo is
+	 * agreed to on the strength of this table: with twenty rows out of eighteen
+	 * thousand and no way to look further, "is the one I care about going to be
+	 * skipped?" had no answer. `total` stays the whole undo, `matched` is what the
+	 * search narrowed to — searching must not look as though it shrank the job.
 	 *
 	 * @param int             $parent_op_id The operation to undo.
-	 * @param Conflict_Policy $policy       Policy to reflect in the sample's action.
-	 * @param int             $limit        Maximum sample rows.
-	 * @return array{parent_op_id: int, total: int, conflict_policy: string, sample: list<array{id: int, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
+	 * @param Conflict_Policy $policy       Policy to reflect in each row's action.
+	 * @param int             $per_page     Rows per page.
+	 * @param int             $page         1-based page number.
+	 * @param string          $sku          When non-empty, only objects matching this SKU.
+	 * @return array{parent_op_id: int, total: int, matched: int, page: int, per_page: int, conflict_policy: string, schedule: array{id: int, name: string}|null, items: list<array{id: int, sku: string, field: string, current: ?string, restore_to: ?string, drift: bool, action: string}>}
 	 *
 	 * @throws InvalidArgumentException When the parent operation is missing.
 	 * @throws License_Limited          When undo is used without a paid plan.
 	 */
-	public function preview_undo( int $parent_op_id, Conflict_Policy $policy, int $limit = 20 ): array {
+	public function preview_undo( int $parent_op_id, Conflict_Policy $policy, int $per_page = 10, int $page = 1, string $sku = '' ): array {
 		if ( ! $this->license->can_undo() ) {
 			throw new License_Limited( 'Undo is a paid-plan feature.' );
 		}
@@ -402,10 +612,28 @@ final class Operation_Service {
 			throw new InvalidArgumentException( 'Operation not found.' );
 		}
 
-		$total  = $this->changes->counts( $parent_op_id )['applied'];
-		$sample = array();
+		$per_page = max( 1, $per_page );
+		$page     = max( 1, $page );
 
-		foreach ( $this->changes->applied_sample( $parent_op_id, max( 0, $limit ) ) as $row ) {
+		// Two counts, and they answer different questions. `total` is every applied
+		// row, which is what the undo will actually attempt and what the headline
+		// states; `matched` is what the current SKU search narrowed that to, which is
+		// what the pager counts. Conflating them would make searching look as though
+		// it had shrunk the undo.
+		$total   = $this->changes->counts( $parent_op_id )['applied'];
+		$matched = $this->changes->count_page( $parent_op_id, 0, $sku, Change_Status::APPLIED );
+		$items   = array();
+
+		$rows = $this->changes->page(
+			$parent_op_id,
+			$per_page,
+			( $page - 1 ) * $per_page,
+			0,
+			$sku,
+			Change_Status::APPLIED
+		);
+
+		foreach ( $rows as $row ) {
 			$resolved = $this->providers->for_storage( $row->field_type, $row->field_key );
 			$product  = wc_get_product( $row->object_id );
 
@@ -416,8 +644,11 @@ final class Operation_Service {
 
 			$drift = ! Values::equal( $current, $row->new_value );
 
-			$sample[] = array(
+			$items[] = array(
 				'id'         => $row->object_id,
+				// Carried so the row can be read, and searched for, by the name the
+				// shop uses out loud rather than by an internal id.
+				'sku'        => $this->sku_for( $product ),
 				'field'      => null === $resolved ? $row->field_key : $resolved['key'],
 				'current'    => $current,
 				'restore_to' => $row->old_value,
@@ -429,9 +660,72 @@ final class Operation_Service {
 		return array(
 			'parent_op_id'    => $parent_op_id,
 			'total'           => $total,
+			'matched'         => $matched,
+			'page'            => $page,
+			'per_page'        => $per_page,
 			'conflict_policy' => $policy->value,
-			'sample'          => $sample,
+			'schedule'        => $this->live_schedule_for( $parent ),
+			'items'           => $items,
 		);
+	}
+
+	/**
+	 * The schedule an operation came from, when there is one and it is still live.
+	 *
+	 * Answered here rather than on the history rows.
+	 * {@see \CatalogOps\Rest\Operations_Controller::to_array()} shapes every row of a
+	 * paged list, so looking a schedule up there would be a query per row to serve a
+	 * sentence that appears on one panel. The undo preview is fetched once, when the
+	 * user opens the very thing that needs it.
+	 *
+	 * Only an ACTIVE schedule is reported, because the sentence this feeds is a
+	 * promise that something is about to be stopped. A paused or completed one is not
+	 * going to fire, {@see pause_parent_schedule()} leaves it alone, and naming it
+	 * would raise a worry the user then has to go and dismiss.
+	 *
+	 * @param Operation $parent_operation The operation being previewed for undo.
+	 * @return array{id: int, name: string}|null
+	 */
+	private function live_schedule_for( Operation $parent_operation ): ?array {
+		if ( null === $this->schedules || null === $parent_operation->schedule_id ) {
+			return null;
+		}
+
+		$schedule = $this->schedules->find( $parent_operation->schedule_id );
+
+		if ( null === $schedule || Schedule_Status::ACTIVE !== $schedule->status ) {
+			return null;
+		}
+
+		return array(
+			'id'   => $schedule->id,
+			'name' => $schedule->name,
+		);
+	}
+
+	/**
+	 * The SKU to show for a change row's object.
+	 *
+	 * A variation's own SKU is blank in most shops, and the one a user searches by
+	 * is the parent's — the results table and the audit log already read them that
+	 * way, so the undo preview does too rather than showing a blank column.
+	 *
+	 * @param WC_Product|false|null $product The loaded object, if it still exists.
+	 */
+	private function sku_for( $product ): string {
+		if ( ! $product instanceof WC_Product ) {
+			return '';
+		}
+
+		$sku = (string) $product->get_sku();
+
+		if ( '' !== $sku || 0 === $product->get_parent_id() ) {
+			return $sku;
+		}
+
+		$parent = wc_get_product( $product->get_parent_id() );
+
+		return $parent instanceof WC_Product ? (string) $parent->get_sku() : '';
 	}
 
 	/**
@@ -467,6 +761,14 @@ final class Operation_Service {
 			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 		}
 
+		// The turn this preparation was granted, to be checked before it publishes.
+		// {@see Lock::acquire()} refuses only a holder whose row reads *active*, and
+		// for the whole of the freeze below this row reads `draft` — so a second
+		// operation asking for the lock during it is simply given it, and on a real
+		// catalogue "during it" is minutes. Nothing used to notice: this method went
+		// on to publish its row and hand a chunk to the scheduler beside the thief.
+		$hold = $this->lock->generation();
+
 		// The lock is held across freezing and handed to the async runner on
 		// success. The finally releases it on every other exit — the settle-now
 		// path (nothing to do) and any thrown failure, such as a free-tier
@@ -494,8 +796,26 @@ final class Operation_Service {
 
 			$this->operations->set_target_count( $op_id, $target );
 			$this->operations->set_batch_size( $op_id, self::DEFAULT_BATCH );
-			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
+
+			// The heartbeat before the status, for the reason spelled out in
+			// {@see resume()} — and here it is not a two-statement hazard but a certain
+			// precondition. A draft has no heartbeat, so {@see Recovery::is_cold()}
+			// falls back to `created_at`, and the freeze this row has just come through
+			// takes minutes on a real catalogue. So the row went active already older
+			// than {@see Recovery::COLD_AFTER}, and any request landing between these
+			// two statements handed a run that had never executed a single chunk to a
+			// second worker, beside the chunk enqueued three lines below.
 			$this->operations->touch( $op_id );
+
+			// Still ours? The row goes active on the next statement, and from that
+			// instant {@see Lock::acquire()} refuses everyone else — so this is the
+			// last moment the hold can have been taken, and the first at which anything
+			// would notice. Losing it is the same answer the caller would have had a
+			// moment earlier, and it takes the same path: the draft is discarded by the
+			// catch below and nothing is queued.
+			$this->assert_still_holding( $hold );
+
+			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
 
 			$this->scheduler->enqueue_chunk( $op_id, self::DEFAULT_BATCH );
 
@@ -512,9 +832,51 @@ final class Operation_Service {
 			throw $e;
 		} finally {
 			if ( ! $handed_off ) {
-				$this->lock->release( $op_id );
+				// Named, because this caller can honestly name it: it is giving back the
+				// hold it was granted, not taking a run down. A hold that was taken from
+				// it mid-freeze belongs to somebody else and is not this method's to free.
+				$this->lock->release( $op_id, $hold );
 			}
 		}
+	}
+
+	/**
+	 * Refuse to go on when the write lock is no longer the one this request was
+	 * granted.
+	 *
+	 * The check a preparation owes, and the reason it cannot be left to
+	 * {@see Lock::acquire()}. That method refuses a holder whose row reads active,
+	 * which is the right rule for a run that is executing and the wrong one for a run
+	 * that is being prepared: `queue()` holds the lock across a freeze that takes
+	 * minutes while its row still reads `draft`, and `resume()` holds it over a row
+	 * that still reads `failed`. Both are stolen from without a word.
+	 *
+	 * Teaching `acquire()` to refuse those was designed and rejected, twice. It would
+	 * have to tell a preparation in progress from one whose process died half way, and
+	 * the only thing separating them is time — so a preparation killed mid-freeze
+	 * would leave a hold nothing could take, and the site would decline every
+	 * operation until the timer expired. That is a worse failure than the one being
+	 * fixed, and it is why the check belongs to the preparer, which knows the answer
+	 * exactly: it is holding the turn it was given, or it is not.
+	 *
+	 * {@see Lock::still_held()} rather than a comparison, for that method's own
+	 * reason: the steal happens in a different request, so a request-cached read
+	 * cannot see it and the check would pass for ever while being worthless.
+	 *
+	 * What is left is one statement — this call and the status write that follows it,
+	 * after which the row is active and acquire() guards it. Closing that too would
+	 * need the grant itself to be conditional, which the options API cannot express.
+	 *
+	 * @param string $hold The turn {@see Lock::generation()} returned at acquisition.
+	 *
+	 * @throws Operation_Blocked When the lock has been granted to somebody else.
+	 */
+	private function assert_still_holding( string $hold ): void {
+		if ( $this->lock->still_held( $hold ) ) {
+			return;
+		}
+
+		throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
 	}
 
 	/**
@@ -555,6 +917,14 @@ final class Operation_Service {
 
 		$filter = $operation->filter();
 
+		// And again at the freeze, which is the moment that matters most and the one
+		// furthest in time from create(). A schedule rehydrates a filter stored days
+		// or months ago, on a cron tick with nobody present; between then and now a
+		// module can have been deactivated or a field withdrawn, and the row this
+		// runs from was validated against a plugin set that no longer exists. Nothing
+		// else re-asks the question before the id set is frozen and written.
+		$this->assert_filter_answerable( $filter );
+
 		// The one-and-only filter resolution (CONTEXT §2), narrowed to the objects
 		// the edit can actually change: those carrying every field it reads, and
 		// those whose new value WooCommerce will keep rather than override on save.
@@ -563,7 +933,32 @@ final class Operation_Service {
 		// undo later reverts — so progress never disagrees with the outcome. These
 		// are the same requirements {@see preview()} counted, so the number the user
 		// was shown is the number that runs.
-		$ids = $this->engine->resolve( $filter, $this->rules->requirements( $actions ) );
+		$requirements = $this->rules->requirements( $actions );
+
+		// A repeat is for what has since entered the segment, not for doing the same
+		// thing again to what this schedule has already changed. Without this a
+		// relative action compounds against its own last result: measured on the test
+		// catalogue with an hourly `regular_price * 0.95`, one product went 430.14 →
+		// 408.63 → 388.20 over three ticks, each reading the price the tick before
+		// had written. An overnight schedule would take a catalogue to nothing.
+		//
+		// It goes in as a requirement rather than a filter condition because that is
+		// the seam that already narrows a run to what it can actually change, and
+		// because the objects are then never frozen at all — seeding them only to
+		// skip each one at write time would be the same answer paid for in rows.
+		//
+		// Per schedule, deliberately. Two schedules overlapping on one product is the
+		// user's own arrangement to make, and each still drives its own values.
+		if ( null !== $operation->schedule_id ) {
+			$requirements[] = new Untouched_By_Schedule(
+				(int) $operation->schedule_id,
+				$this->changes->table(),
+				$this->operations->table(),
+				Skip_Reason::ALREADY_CHANGED_BY_SCHEDULE->value
+			);
+		}
+
+		$ids = $this->engine->resolve( $filter, $requirements );
 
 		if ( array() === $ids ) {
 			return 0;
@@ -623,7 +1018,7 @@ final class Operation_Service {
 		}
 
 		if ( $operation->status->is_active() ) {
-			throw new Operation_Blocked( 'A running operation cannot be deleted; cancel it first.' );
+			throw new Operation_Blocked( 'A running operation cannot be deleted; stop it first.' );
 		}
 
 		// The deltas first: an operations row with no changes is a harmless stub,
@@ -645,8 +1040,113 @@ final class Operation_Service {
 	}
 
 	/**
+	 * Put a half-finished operation back to work on the targets it already froze.
+	 *
+	 * An operation stops in the middle for reasons that have nothing to do with
+	 * what it was asked to do: the host restarts, a fatal lands in some other
+	 * plugin, the queue's loopback chain breaks. {@see Watchdog} then marks it
+	 * `failed` after ten minutes of silence and frees the lock, and the user is
+	 * left with a catalogue that is part-changed and two poor moves — undo the
+	 * fraction that landed, or run the whole thing again.
+	 *
+	 * Running it again is not the same thing, which is the point of this method.
+	 * A fresh run resolves the filter anew, against a catalogue that has moved on;
+	 * resuming continues down the list that was frozen when the user pressed Apply
+	 * and agreed to a number. For an overnight run over eighteen thousand products
+	 * those are two different sets, and only one of them is what was approved.
+	 *
+	 * Nothing is re-frozen and nothing is re-counted: the pending rows are still
+	 * there, in order, and this only re-acquires the lock and hands the queue the
+	 * next chunk. {@see Operation_Status::is_terminal()} already describes `failed`
+	 * as a state no chunk leaves "without an explicit new action (resume, undo)" —
+	 * this is that action.
+	 *
+	 * @param int $op_id Operation id.
+	 *
+	 * @throws InvalidArgumentException When the operation is missing, still active,
+	 *                                  or has nothing left to do.
+	 * @throws Operation_Blocked        When another operation holds the write lock.
+	 */
+	public function resume( int $op_id ): void {
+		$operation = $this->operations->find( $op_id );
+
+		if ( null === $operation ) {
+			throw new InvalidArgumentException( 'Operation not found.' );
+		}
+
+		if ( $operation->status->is_active() ) {
+			throw new InvalidArgumentException( 'This operation is already running.' );
+		}
+
+		if ( 0 === $this->changes->pending_count( $op_id ) ) {
+			// Either it finished, or every remaining row was skipped. Nothing is
+			// owed, and re-queueing would put a run on the screen that immediately
+			// settles having done nothing.
+			throw new InvalidArgumentException( 'This operation has nothing left to do.' );
+		}
+
+		if ( ! $this->lock->acquire( $op_id ) ) {
+			throw new Operation_Blocked( 'Another operation is already writing to this catalog.' );
+		}
+
+		// The turn this restart was granted. Narrower than `queue()`'s — there is no
+		// freeze here — but the same hole: until the status write below, this row
+		// still reads `failed` or `paused`, and {@see Lock::acquire()} hands the
+		// catalogue to anyone who asks for it over a row that is not active.
+		$hold = $this->lock->generation();
+
+		$handed_off = false;
+
+		try {
+			// The heartbeat before the status, and the order is the fix rather than a
+			// tidy-up. A run becomes visible to {@see Recovery} the instant its status
+			// is written, and from that instant recovery judges it by its heartbeat —
+			// which, on a run the watchdog failed, is ten minutes old by construction,
+			// because ten minutes of silence is what failed it. Writing the status
+			// first therefore published, for the width of one statement, a run that is
+			// alive and reads long dead. A request landing there did not merely free a
+			// lock: it took the whole hand-off path — released the stuck chunks, minted
+			// a new generation, enqueued a chunk of its own — beside the chunk this
+			// method is about to enqueue, and both workers then carry the same
+			// generation, so neither fence ever fires and both write the catalogue.
+			//
+			// Touched first, the row is warm before it is active and there is no
+			// instant at which recovery can read it as cold. It is also still here for
+			// its original reason: without it the watchdog would find a ten-minute-old
+			// stamp on a run that has only just restarted and fail it a second time.
+			$this->operations->touch( $op_id );
+
+			// Still ours? See {@see assert_still_holding()}. The row goes active on the
+			// next statement, so this is the last moment the hold can have been taken.
+			$this->assert_still_holding( $hold );
+
+			$this->operations->set_status( $op_id, Operation_Status::QUEUED );
+
+			$batch = $operation->batch_size > 0 ? $operation->batch_size : self::DEFAULT_BATCH;
+
+			$this->scheduler->enqueue_chunk( $op_id, $batch );
+			$this->scheduler->kick();
+
+			$handed_off = true;
+		} finally {
+			if ( ! $handed_off ) {
+				// Named, for the reason given in {@see queue()}: a hold taken from this
+				// request belongs to somebody else and is not this method's to free.
+				$this->lock->release( $op_id, $hold );
+			}
+		}
+	}
+
+	/**
 	 * Cancel a running or queued operation: stop scheduling, pause it, and free
 	 * the lock. Already-applied changes remain (undo is a separate M3 operation).
+	 *
+	 * A schedule that produced this run is paused with it. Stopping was the user
+	 * saying "not this", and leaving the schedule running answered them by starting
+	 * the same work again on the next tick — see {@see pause_parent_schedule()},
+	 * which also explains why it is paused rather than completed. It happens last,
+	 * so a failure to reach the schedules table cannot leave a run that is still
+	 * writing: the stop itself is the part that must not fail.
 	 *
 	 * @param int $op_id Operation id.
 	 */
@@ -655,6 +1155,57 @@ final class Operation_Service {
 
 		if ( null === $operation || ! $operation->status->is_active() ) {
 			return;
+		}
+
+		$this->scheduler->cancel_operation( $op_id );
+		$this->operations->set_status( $op_id, Operation_Status::PAUSED );
+		$this->lock->release( $op_id );
+
+		$this->pause_parent_schedule( $operation, self::STOPPED_PAUSE_REASON );
+	}
+
+	/**
+	 * Take a dead run back: settle it and free the write lock, leaving its schedule
+	 * running.
+	 *
+	 * Mechanically this is {@see cancel()}. It exists as its own method because the
+	 * two are not the same sentence, and the difference is the whole of the rule the
+	 * owner set down: a user's decision stops a schedule, a machine's failure must
+	 * not. Stopping a run that is working says "not this change"; taking over one
+	 * whose process died says "the machine dropped it, carry on" — and an hourly
+	 * schedule left paused by a server restart means someone has to get up in the
+	 * night to start it again, which is the opposite of what scheduling is for.
+	 *
+	 * Routed apart rather than branched inside `cancel()` so the difference cannot be
+	 * lost to a later edit: the two paths are named, tested in a pair, and the one
+	 * that must not touch a schedule has no code that could.
+	 *
+	 * The refusal is the point of the guard. `is_stalled` reaches here from the
+	 * client, which learned it from a poll that may be seconds old, and a run that
+	 * has since drawn breath must not be taken from a live writer on the strength of
+	 * a stale screen. So the server measures again, at the instant of the act,
+	 * against {@see Watchdog::is_stalled()} — the same test the supervisor uses. A
+	 * run that has recovered is refused, and the user is told to stop it instead,
+	 * which is the honest control for a run that is working.
+	 *
+	 * @param int $op_id Operation id.
+	 *
+	 * @throws InvalidArgumentException When the operation is missing, not running, or
+	 *                                  still reporting progress.
+	 */
+	public function take_over( int $op_id ): void {
+		$operation = $this->operations->find( $op_id );
+
+		if ( null === $operation ) {
+			throw new InvalidArgumentException( 'Operation not found.' );
+		}
+
+		if ( ! $operation->status->is_active() ) {
+			throw new InvalidArgumentException( 'This operation is not running.' );
+		}
+
+		if ( ! Watchdog::is_stalled( $operation ) ) {
+			throw new InvalidArgumentException( 'This run is still reporting progress; stop it instead.' );
 		}
 
 		$this->scheduler->cancel_operation( $op_id );

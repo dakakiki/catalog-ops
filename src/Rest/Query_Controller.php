@@ -11,6 +11,8 @@ use CatalogOps\Operations\Formula\Variables;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Query_Scope;
+use InvalidArgumentException;
+use WP_Error;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
@@ -97,8 +99,9 @@ final class Query_Controller {
 	 * Resolve a filter and return one page of matching products.
 	 *
 	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
 	 */
-	public function query( WP_REST_Request $request ): WP_REST_Response {
+	public function query( WP_REST_Request $request ) {
 		$filter_data = (array) $request->get_param( 'filter' );
 
 		// A top-level scope param (what the UI's Products/Variations toggle sends)
@@ -108,13 +111,30 @@ final class Query_Controller {
 			$filter_data['scope'] = $scope;
 		}
 
-		$filter   = Filter::from_array( $filter_data );
 		$page     = max( 1, (int) $request->get_param( 'page' ) );
 		$per_page = min( 200, max( 1, (int) $request->get_param( 'per_page' ) ) );
 
-		$ids      = $this->engine->resolve( $filter );
-		$total    = count( $ids );
-		$page_ids = array_slice( $ids, ( $page - 1 ) * $per_page, $per_page );
+		// This is the table someone is looking at while they build a filter, so it is
+		// where a refusal lands first and hardest. Both engine calls share the try on
+		// purpose: other_scope() re-asks the same filter, and it only asks when the
+		// first call found nothing — exactly the state a filter naming a field that
+		// has gone away ends up in. Guarding only the first would turn the 400 into a
+		// 500 on the one path that reaches the second.
+		try {
+			$filter   = Filter::from_array( $filter_data );
+			$ids      = $this->engine->resolve( $filter );
+			$total    = count( $ids );
+			$page_ids = array_slice( $ids, ( $page - 1 ) * $per_page, $per_page );
+			$other    = $this->other_scope( $filter, $total );
+		} catch ( InvalidArgumentException $e ) {
+			// A filter the engine will not run is a bad request, not a server fault:
+			// the table shows the message and the user fixes the condition. Every
+			// other filter endpoint already maps this to 400; this one had no error
+			// machinery of its own, so a refusal here surfaced as a fatal instead.
+			// Filter_Field_Unavailable extends InvalidArgumentException, so this one
+			// arm covers the refusal, a bad operator token, and an empty field key.
+			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
+		}
 
 		return new WP_REST_Response(
 			array(
@@ -123,7 +143,7 @@ final class Query_Controller {
 				'per_page'    => $per_page,
 				'scope'       => $filter->scope()->value,
 				'items'       => $this->rows_for( $page_ids, $filter->scope() ),
-				'other_scope' => $this->other_scope( $filter, $total ),
+				'other_scope' => $other,
 			)
 		);
 	}
@@ -221,15 +241,15 @@ final class Query_Controller {
 		$extra      = $this->meta_columns( $ids );
 
 		// Terms hang off the parent product, which is also how the filter matches
-		// them, so under the variation scope the tags to show are the parent's.
-		$tag_owners = array();
+		// them, so under the variation scope the terms to show are the parent's.
+		$term_owners = array();
 		foreach ( $ids as $id ) {
 			if ( isset( $by_id[ $id ] ) ) {
-				$tag_owners[ $id ] = $is_variation ? (int) $by_id[ $id ]['parent_id'] : $id;
+				$term_owners[ $id ] = $is_variation ? (int) $by_id[ $id ]['parent_id'] : $id;
 			}
 		}
 
-		$tags = $this->tags( $tag_owners );
+		$terms = $this->terms( $term_owners );
 
 		$items = array();
 		foreach ( $ids as $id ) {
@@ -249,7 +269,8 @@ final class Query_Controller {
 				'parent_id'      => (int) $row['parent_id'],
 				'sku'            => (string) $row['sku'],
 				'brand'          => $extra[ $id ]['brand'] ?? null,
-				'tags'           => $tags[ $id ] ?? array(),
+				'categories'     => $terms[ $id ]['product_cat'] ?? array(),
+				'tags'           => $terms[ $id ]['product_tag'] ?? array(),
 				'price'          => $row['min_price'],
 				'max_price'      => $row['max_price'],
 				'sale_price'     => $extra[ $id ]['sale_price'] ?? null,
@@ -263,7 +284,15 @@ final class Query_Controller {
 	}
 
 	/**
-	 * The product tags for a page of objects, in one pass.
+	 * The product categories and tags for a page of objects, in one pass.
+	 *
+	 * Both taxonomies come back from a single statement rather than one query
+	 * each: the join and the id list are identical, only the taxonomy name
+	 * differs, and a page is at most 200 rows either way.
+	 *
+	 * Category is here for the same reason brand and tags are — it is filterable,
+	 * and it is the control the filter opens with, so a table that omits it asks
+	 * the user to take the most common match of all on faith.
 	 *
 	 * Joining `term_taxonomy` here is safe, unlike inside the filter's membership
 	 * subquery where it is the thing that mis-plans (see
@@ -272,9 +301,9 @@ final class Query_Controller {
 	 * around.
 	 *
 	 * @param array<int, int> $owners Row id => the object whose terms to read.
-	 * @return array<int, list<string>> Row id => tag names.
+	 * @return array<int, array<string, list<string>>> Row id => taxonomy => term names.
 	 */
-	private function tags( array $owners ): array {
+	private function terms( array $owners ): array {
 		$unique = array_values( array_unique( array_filter( $owners ) ) );
 
 		if ( array() === $unique ) {
@@ -289,9 +318,11 @@ final class Query_Controller {
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
-				"SELECT tr.object_id, t.name
+				"SELECT tr.object_id, tt.taxonomy, t.name
 				FROM {$relationships} tr
-				INNER JOIN {$taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'product_tag'
+				INNER JOIN {$taxonomy} tt
+					ON tt.term_taxonomy_id = tr.term_taxonomy_id
+					AND tt.taxonomy IN ( 'product_cat', 'product_tag' )
 				INNER JOIN {$terms} t ON t.term_id = tt.term_id
 				WHERE tr.object_id IN ( {$placeholders} )
 				ORDER BY t.name ASC",
@@ -303,7 +334,7 @@ final class Query_Controller {
 
 		$by_owner = array();
 		foreach ( $rows as $row ) {
-			$by_owner[ (int) $row['object_id'] ][] = (string) $row['name'];
+			$by_owner[ (int) $row['object_id'] ][ (string) $row['taxonomy'] ][] = $this->decode( (string) $row['name'] );
 		}
 
 		$by_row = array();
@@ -411,5 +442,35 @@ final class Query_Controller {
 		}
 
 		return $summary;
+	}
+
+	/**
+	 * Decode HTML entities in a term name, the same way the filter's own dropdowns
+	 * do ({@see Fields_Controller::decode()}).
+	 *
+	 * WordPress stores term names with entities encoded — "Home &amp; Kitchen" —
+	 * and this reads `wp_terms` directly, so nothing decodes them on the way out.
+	 * The admin app renders the value as React text, which escapes again, so the
+	 * entity showed literally in the results table: the filter's category dropdown
+	 * said "Home & Kitchen" and the row it matched said "Home &amp; Kitchen".
+	 *
+	 * Safe here because these columns are display-only — the filter matches
+	 * categories and tags by term id, never by name.
+	 *
+	 * @param string $text Possibly entity-encoded term name.
+	 */
+	private function decode( string $text ): string {
+		return html_entity_decode( $text, ENT_QUOTES, 'UTF-8' );
+	}
+
+	/**
+	 * Build a WP_Error carrying an HTTP status.
+	 *
+	 * @param string $code    Machine-readable error code.
+	 * @param string $message Human-readable message.
+	 * @param int    $status  HTTP status code.
+	 */
+	private function error( string $code, string $message, int $status ): WP_Error {
+		return new WP_Error( $code, $message, array( 'status' => $status ) );
 	}
 }

@@ -190,6 +190,9 @@ final class Schedules {
 	 * the next fire time (or leave it for a one-shot), and move to the given
 	 * status (active to keep recurring, completed for a spent one-shot).
 	 *
+	 * A successful fire also clears any pause explanation: the column describes the
+	 * pause a schedule is currently in, and a schedule that just ran is not in one.
+	 *
 	 * @param int             $id           Schedule id.
 	 * @param int             $op_id        Operation the fire spawned.
 	 * @param string          $last_run_gmt Fire time (GMT MySQL datetime).
@@ -198,11 +201,12 @@ final class Schedules {
 	 */
 	public function record_run( int $id, int $op_id, string $last_run_gmt, ?string $next_run_gmt, Schedule_Status $status ): void {
 		$data    = array(
-			'last_run'   => $last_run_gmt,
-			'last_op_id' => $op_id,
-			'status'     => $status->value,
+			'last_run'      => $last_run_gmt,
+			'last_op_id'    => $op_id,
+			'status'        => $status->value,
+			'paused_reason' => null,
 		);
-		$formats = array( '%s', '%d', '%s' );
+		$formats = array( '%s', '%d', '%s', '%s' );
 
 		if ( null !== $next_run_gmt ) {
 			$data['next_run'] = $next_run_gmt;
@@ -219,16 +223,33 @@ final class Schedules {
 	}
 
 	/**
-	 * Move a schedule to a new lifecycle state (pause/resume).
+	 * Move a schedule to a new lifecycle state (pause/resume), recording why when
+	 * the plugin paused it itself.
 	 *
 	 * @param int             $id     Schedule id.
 	 * @param Schedule_Status $status New state.
+	 * @param string|null     $reason Why, for a self-inflicted pause; null clears it.
 	 * @return bool Whether a row changed.
 	 */
-	public function set_status( int $id, Schedule_Status $status ): bool {
+	public function set_status( int $id, Schedule_Status $status, ?string $reason = null ): bool {
 		$updated = $this->wpdb->update(
 			$this->schema->schedules_table(),
 			array( 'status' => $status->value ),
+			array( 'id' => $id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		// Written as its own statement, and its result ignored on purpose.
+		// maybe_upgrade() runs on admin_init and a cron tick does not, so between a
+		// plugin update landing on disk and the next admin request this column may
+		// not exist yet. A schedule that pauses without its explanation is far better
+		// than one whose pause failed to stick and goes on retrying. The reason is
+		// always written, so resuming clears a stale explanation rather than leaving
+		// it on a live schedule.
+		$this->wpdb->update(
+			$this->schema->schedules_table(),
+			array( 'paused_reason' => $reason ),
 			array( 'id' => $id ),
 			array( '%s' ),
 			array( '%d' )
@@ -276,6 +297,11 @@ final class Schedules {
 			null === $row['last_op_id'] ? null : (int) $row['last_op_id'],
 			(string) $row['notify_email'],
 			(string) $row['created_at'],
+			// array_key_exists, not isset: the column is nullable, and on a database
+			// still on schema 6 the key is absent altogether.
+			array_key_exists( 'paused_reason', $row ) && null !== $row['paused_reason']
+				? (string) $row['paused_reason']
+				: null,
 		);
 	}
 }

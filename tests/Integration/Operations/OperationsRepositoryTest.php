@@ -66,6 +66,7 @@ final class OperationsRepositoryTest extends Operations_Database_Case {
 			Operation_Mode::SAFE,
 			Operation_Source::UNDO,
 			7,
+			null,
 			41,
 			\CatalogOps\Operations\Conflict_Policy::FORCE
 		);

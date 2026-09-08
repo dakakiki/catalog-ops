@@ -53,6 +53,17 @@ final class Changes {
 	}
 
 	/**
+	 * The changes table's name.
+	 *
+	 * Exposed for the one caller that has to name it in SQL it does not itself run:
+	 * {@see \CatalogOps\Query\Requirements\Untouched_By_Schedule} is handed to the
+	 * query engine, which knows nothing of {@see Schema} and should not.
+	 */
+	public function table(): string {
+		return $this->schema->changes_table();
+	}
+
+	/**
 	 * Seed pending change rows for an operation, in bulk.
 	 *
 	 * @param int                                                                                            $operation_id Owning operation id.
@@ -172,58 +183,33 @@ final class Changes {
 	}
 
 	/**
-	 * A sample of an operation's applied deltas, oldest object first — for the
-	 * undo preview, which reads each sampled object's current value to show whether
-	 * it would revert or be skipped as drift.
-	 *
-	 * @param int $operation_id Operation id.
-	 * @param int $limit        Maximum rows to return.
-	 * @return list<Change>
-	 */
-	public function applied_sample( int $operation_id, int $limit ): array {
-		$table = $this->schema->changes_table();
-		$limit = max( 0, $limit );
-
-		if ( 0 === $limit ) {
-			return array();
-		}
-
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare(
-				"SELECT * FROM {$table} WHERE operation_id = %d AND status = %d ORDER BY object_id ASC, id ASC LIMIT %d",
-				$operation_id,
-				Change_Status::APPLIED->value,
-				$limit
-			),
-			ARRAY_A
-		);
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-
-		return array_map( array( $this, 'hydrate' ), $rows );
-	}
-
-	/**
 	 * A page of an operation's change rows, oldest id first — the audit-log detail
 	 * view of what an operation did, field by field. An optional object id narrows
 	 * it to a single product/variation, so a user can look up whether a specific
 	 * object was changed (and to what).
 	 *
-	 * @param int    $operation_id Operation id.
-	 * @param int    $limit        Page size.
-	 * @param int    $offset       Rows to skip.
-	 * @param int    $object_id    When > 0, only this object's rows.
-	 * @param string $sku          When non-empty, only objects whose SKU (or, for a
-	 *                             variation, the parent's SKU) matches this substring.
+	 * @param int           $operation_id Operation id.
+	 * @param int           $limit        Page size.
+	 * @param int           $offset       Rows to skip.
+	 * @param int           $object_id    When > 0, only this object's rows.
+	 * @param string        $sku          When non-empty, only objects whose SKU (or, for a
+	 *                                    variation, the parent's SKU) matches this substring.
+	 * @param Change_Status $status       When given, only rows in this state — the undo
+	 *                                    preview pages the applied rows, which are the
+	 *                                    only ones it can give back.
 	 * @return list<Change>
 	 */
-	public function page( int $operation_id, int $limit, int $offset, int $object_id = 0, string $sku = '' ): array {
+	public function page( int $operation_id, int $limit, int $offset, int $object_id = 0, string $sku = '', ?Change_Status $status = null ): array {
 		$table  = $this->schema->changes_table();
 		$limit  = max( 1, $limit );
 		$offset = max( 0, $offset );
 
 		$where = 'operation_id = %d';
 		$args  = array( $operation_id );
+		if ( null !== $status ) {
+			$where .= ' AND status = %d';
+			$args[] = $status->value;
+		}
 		if ( $object_id > 0 ) {
 			$where .= ' AND object_id = %d';
 			$args[] = $object_id;
@@ -263,15 +249,20 @@ final class Changes {
 	 * Count the changes matching a {@see page()} filter (operation + optional
 	 * object / SKU) — the total the audit pager needs to show "page X of Y".
 	 *
-	 * @param int    $operation_id Operation id.
-	 * @param int    $object_id    When > 0, only this object's rows.
-	 * @param string $sku          When non-empty, the SKU substring filter.
+	 * @param int           $operation_id Operation id.
+	 * @param int           $object_id    When > 0, only this object's rows.
+	 * @param string        $sku          When non-empty, the SKU substring filter.
+	 * @param Change_Status $status       When given, only rows in this state.
 	 */
-	public function count_page( int $operation_id, int $object_id = 0, string $sku = '' ): int {
+	public function count_page( int $operation_id, int $object_id = 0, string $sku = '', ?Change_Status $status = null ): int {
 		$table = $this->schema->changes_table();
 
 		$where = 'operation_id = %d';
 		$args  = array( $operation_id );
+		if ( null !== $status ) {
+			$where .= ' AND status = %d';
+			$args[] = $status->value;
+		}
 		if ( $object_id > 0 ) {
 			$where .= ' AND object_id = %d';
 			$args[] = $object_id;
@@ -329,6 +320,60 @@ final class Changes {
 
 	/**
 	 * How many rows are still pending for an operation.
+	 *
+	 * @param int $operation_id Operation id.
+	 */
+	/**
+	 * Pending row counts for several operations at once, keyed by operation id.
+	 *
+	 * The history list has to know, per row, whether an operation has work left —
+	 * that is what decides whether Resume is offered. Asking once per row would put
+	 * ten counts behind every poll of a list that polls every two seconds while
+	 * anything is running; one grouped query costs the same as one of them.
+	 * Operations with nothing pending are absent from the result rather than
+	 * present as zero, so callers should default.
+	 *
+	 * @param int[] $operation_ids Operation ids.
+	 * @return array<int, int> Operation id => pending rows.
+	 */
+	public function pending_counts( array $operation_ids ): array {
+		$ids = array_values( array_unique( array_filter( array_map( 'intval', $operation_ids ) ) ) );
+
+		if ( array() === $ids ) {
+			return array();
+		}
+
+		$table        = $this->schema->changes_table();
+		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+
+		// The placeholders are generated to match $ids exactly, so the static checks
+		// cannot see them in the literal — the same false positive count_page()
+		// already suppresses.
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT operation_id, COUNT(*) AS pending
+				FROM {$table}
+				WHERE operation_id IN ( {$placeholders} ) AND status = 0
+				GROUP BY operation_id",
+				...$ids
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$counts = array();
+
+		foreach ( $rows as $row ) {
+			$counts[ (int) $row['operation_id'] ] = (int) $row['pending'];
+		}
+
+		return $counts;
+	}
+
+	/**
+	 * How many rows an operation still has waiting — what is left to write, and
+	 * therefore whether it has anything to resume.
 	 *
 	 * @param int $operation_id Operation id.
 	 */
@@ -435,6 +480,91 @@ final class Changes {
 		}
 
 		return $reasons;
+	}
+
+	/**
+	 * What actually became of a settled operation's frozen list, in the unit that
+	 * operation's own counters speak.
+	 *
+	 * The truth of a run lives in these rows: every one of them was written by the
+	 * worker that owned it, under the guarded flip, so nothing here can be lost to a
+	 * process dying. The counters on the operation cannot say the same — they are
+	 * accumulated by the worker as it goes, so a worker killed between two beats
+	 * takes the count of everything it did since the last one with it. Measured on
+	 * the live catalogue after a host was stopped mid-run: 581 rows applied, 581
+	 * objects, and a counter reading 523. The rows were right; the number was not.
+	 *
+	 * A run that has settled is the one moment the two can be reconciled exactly,
+	 * and it is worth one query: from here the number is read for the rest of the
+	 * operation's life — by the history, the progress bar, and the report the
+	 * notifier mails — and a bar that stops short on a run that finished everything
+	 * is the plainest possible way of saying the plugin lost something, about the
+	 * one thing it must never lose.
+	 *
+	 * The unit is the caller's, for the reason {@see Chunk_Runner::run()} sets out
+	 * at length: an edit's target is a count of *objects*, because that is the number
+	 * its preview promised, while an undo's is a count of the parent's applied
+	 * *rows*. Reconciling in the wrong one would put the bar past its own target.
+	 *
+	 * Failure wins over success within one object, so an object whose save threw
+	 * after some of its fields had been recorded counts once, as failed — never in
+	 * both halves, which would push the total above the target.
+	 *
+	 * @param int  $operation_id Operation id.
+	 * @param bool $by_rows      Count rows (an undo) rather than objects (an edit).
+	 * @return array{processed: int, failed: int} Settled counts, pending ignored.
+	 */
+	public function settled_counts( int $operation_id, bool $by_rows ): array {
+		$table = $this->schema->changes_table();
+
+		$applied = Change_Status::APPLIED->value;
+		$failed  = Change_Status::FAILED->value;
+		$skipped = Change_Status::SKIPPED->value;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		if ( $by_rows ) {
+			$row = $this->wpdb->get_row(
+				$this->wpdb->prepare(
+					"SELECT
+						SUM( CASE WHEN status IN ( %d, %d ) THEN 1 ELSE 0 END ) AS processed,
+						SUM( CASE WHEN status = %d THEN 1 ELSE 0 END ) AS failed
+					FROM {$table} WHERE operation_id = %d",
+					$applied,
+					$skipped,
+					$failed,
+					$operation_id
+				),
+				ARRAY_A
+			);
+		} else {
+			// One row per object, so an object with several fields counts once —
+			// as failed if any of its fields failed, and as processed otherwise.
+			$row = $this->wpdb->get_row(
+				$this->wpdb->prepare(
+					"SELECT
+						SUM( 1 - object_failed ) AS processed,
+						SUM( object_failed ) AS failed
+					FROM (
+						SELECT MAX( CASE WHEN status = %d THEN 1 ELSE 0 END ) AS object_failed
+						FROM {$table}
+						WHERE operation_id = %d AND status IN ( %d, %d, %d )
+						GROUP BY object_id
+					) AS per_object",
+					$failed,
+					$operation_id,
+					$applied,
+					$failed,
+					$skipped
+				),
+				ARRAY_A
+			);
+		}
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		return array(
+			'processed' => (int) ( $row['processed'] ?? 0 ),
+			'failed'    => (int) ( $row['failed'] ?? 0 ),
+		);
 	}
 
 	/**

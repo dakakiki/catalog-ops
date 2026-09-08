@@ -49,6 +49,29 @@ final class Chunk_Runner {
 	private const MAX_BATCH = 1000;
 
 	/**
+	 * How often a running chunk marks itself alive, in seconds.
+	 *
+	 * The heartbeat used to be written only at the chunk's edges — once on entry and
+	 * once after the whole object loop — so the longest a *healthy* run could stay
+	 * silent was one entire chunk, and a chunk may hold {@see MAX_BATCH} objects.
+	 * Every threshold built on that silence had to be longer than the slowest
+	 * imaginable chunk, which is why {@see Watchdog::STALL_THRESHOLD} is ten minutes:
+	 * not because ten minutes of quiet means death, but because less than that could
+	 * not be told apart from work.
+	 *
+	 * Beating from inside the loop separates the two for the first time. A live
+	 * process now says so every few seconds however long its chunk runs, so silence
+	 * becomes evidence rather than a guess — which lets the wait shrink honestly, and
+	 * closes the hazard in the other direction too: a legitimately slow chunk could
+	 * previously outlast the watchdog and be failed while it was still writing.
+	 *
+	 * Five seconds is chosen against the measured cadence — objects take on the order
+	 * of 80ms in safe mode, so this is a write every sixty-odd objects, against sixty
+	 * object saves. Cheaper than the counters the same loop already keeps.
+	 */
+	private const PULSE_SECONDS = 5;
+
+	/**
 	 * Operations repository.
 	 *
 	 * @var Operations
@@ -156,18 +179,65 @@ final class Chunk_Runner {
 
 		$plan = $this->plan_for( $operation, array_map( 'intval', array_keys( $by_object ) ) );
 
-		$processed = 0;
-		$failed    = 0;
+		// Progress is counted in the unit this operation's own target was set in, and
+		// the two kinds differ: an edit freezes a target of *objects*, which is the
+		// number its preview promised ("1,855 products will change"), while an undo
+		// freezes the parent's applied rows and its preview says "143 changes will be
+		// reverted". Counting objects for both — which is what this did — left an
+		// undo of a multi-field operation reporting two against a target of four, so
+		// its bar stopped at half on a run that had finished.
+		//
+		// Making everything rows was tried and is wrong: it puts the frozen target of
+		// an ordinary edit above the number the preview promised, and "the previewed
+		// count is the count the run delivers" is the promise the whole pipeline is
+		// built to keep. Each path stays in the unit its own preview speaks.
+		$counts_rows = $operation->is_undo();
+		$processed   = 0;
+		$failed      = 0;
+
+		// How much of the above has reached the row, so each flush sends only what
+		// has happened since the last one. {@see Operations::record_progress()} adds
+		// to the stored counters rather than setting them, so sending the running
+		// total on every beat would count the early objects once per beat.
+		$flushed_processed = 0;
+		$flushed_failed    = 0;
+
+		// The pulse starts with the chunk: the touch above is this loop's first beat.
+		$pulsed_at = microtime( true );
+
+		// The generation this worker is writing under. Recovery can decide, wrongly,
+		// that this process is dead — a timeout is evidence, never proof — and hand
+		// the same operation to a new worker. Carrying the generation is what lets
+		// this one find out and stop, rather than write beside it.
+		$generation  = $this->lock->generation();
+		$surrendered = false;
+
+		/**
+		 * Filters how often a running chunk marks itself alive and checks that the
+		 * run is still its own, in seconds.
+		 *
+		 * A real seam rather than a hook for testing's sake: the default is set
+		 * against a catalogue whose objects save in about 80ms, and a site whose
+		 * saves are an order of magnitude slower or faster has a different idea of
+		 * how much silence is normal. Zero pulses on every object, which is what the
+		 * fence's own test needs to reach the check without waiting five seconds.
+		 *
+		 * @param float $seconds How long between beats.
+		 * @param int   $op_id   The operation being written.
+		 */
+		$pulse = (float) apply_filters( 'catalogops_pulse_seconds', self::PULSE_SECONDS, $op_id );
 
 		foreach ( $by_object as $object_id => $object_rows ) {
+			$counts_as = $counts_rows ? count( $object_rows ) : 1;
+
 			try {
 				$this->apply_object( (int) $object_id, $object_rows, $plan );
-				++$processed;
+				$processed += $counts_as;
 			} catch ( Throwable $e ) {
 				foreach ( $object_rows as $row ) {
 					$this->changes->mark_failed( $row->id );
 				}
-				++$failed;
+				$failed += $counts_as;
 
 				/**
 				 * Fires when a single object in a chunk fails to update.
@@ -178,9 +248,74 @@ final class Chunk_Runner {
 				 */
 				do_action( 'catalogops_chunk_object_failed', $op_id, (int) $object_id, $e );
 			}
+
+			if ( microtime( true ) - $pulsed_at >= $pulse ) {
+				// The beat carries the count, rather than only saying "still alive".
+				//
+				// The count used to be written once, after the loop, so a process killed
+				// mid-chunk lost every object it had already saved: the change rows were
+				// right and the number was not. Measured on the live catalogue —
+				// 21,058 reported against 21,366 actually applied, every row `applied`
+				// and none failed.
+				//
+				// That used to be a transient wrong number on a run that was over
+				// anyway. It stopped being transient when {@see Recovery} made mid-chunk
+				// death survivable: the run comes back and finishes, and the counter it
+				// carries for the rest of its life is short by whatever the dead worker
+				// had done since its last chunk boundary. A progress bar that never
+				// reaches its target on a run that completed is worse than no bar.
+				//
+				// It costs nothing. This beat already spent one UPDATE on the heartbeat,
+				// and {@see Operations::record_progress()} writes `last_progress_at`
+				// itself — so this is the same single statement, carrying more.
+				$this->operations->record_progress(
+					$op_id,
+					$processed - $flushed_processed,
+					$failed - $flushed_failed
+				);
+
+				$flushed_processed = $processed;
+				$flushed_failed    = $failed;
+
+				$pulsed_at = microtime( true );
+
+				// Checked on the pulse rather than per object: the same cadence that
+				// says "alive" is the natural one to ask "still mine?", and it keeps
+				// the extra read to one every few seconds instead of one per save.
+				// The exposure is therefore a few seconds of writing after a wrongful
+				// hand-over, not the rest of the chunk.
+				// An empty generation means this worker never had an identity to lose,
+				// not that it has lost one. Fencing on it would be the worst of both:
+				// `still_held('')` is false by construction, so the very first pulse
+				// would break the chain of a run nothing was actually contending —
+				// silently, since a surrendering worker neither enqueues nor errors.
+				// Without an identity there is simply nothing to check.
+				if ( '' !== $generation && ! $this->lock->still_held( $generation ) ) {
+					$surrendered = true;
+					break;
+				}
+			}
 		}
 
-		$this->operations->record_progress( $op_id, $processed, $failed );
+		// Whatever the beats have not carried yet — the objects saved since the last
+		// one, and on a chunk shorter than a single pulse that is all of them.
+		// Recorded either way: what this worker wrote before it let go really was
+		// written, and the counters have to describe the catalogue rather than the
+		// worker's fate. It runs even when the remainder is zero, so the chunk still
+		// ends on a fresh heartbeat.
+		$this->operations->record_progress(
+			$op_id,
+			$processed - $flushed_processed,
+			$failed - $flushed_failed
+		);
+
+		if ( $surrendered ) {
+			// Everything below belongs to whoever holds the lock now. Enqueueing would
+			// put this worker back in a chain it has been removed from, and finalizing
+			// would settle — or complete — an operation another process is still
+			// writing. Leaving quietly is the whole of this worker's remaining job.
+			return;
+		}
 
 		$next = $this->adapt_batch_size( $batch_size, microtime( true ) - $started, count( $by_object ) );
 		$this->operations->set_batch_size( $op_id, $next );
@@ -291,6 +426,22 @@ final class Chunk_Runner {
 	 * @param Operation $operation The operation that has finished.
 	 */
 	private function finalize( Operation $operation ): void {
+		// The last word on what this run did, taken from the rows rather than from
+		// the running total. Beating the count out on every pulse narrowed the loss a
+		// violent death causes; it cannot abolish it, because whatever a worker did
+		// between its last beat and being killed was never reported by anyone. That
+		// remainder used to survive to the end and be read for ever after: measured
+		// on the live catalogue after a host was stopped mid-run — 581 rows applied,
+		// 581 objects, every one of them written, and a completed operation whose bar
+		// read 523 of 581.
+		//
+		// Here it can simply be asked. The rows are the record, they are complete the
+		// moment nothing is pending, and one query buys a number that no longer
+		// depends on which process happened to survive. See
+		// {@see Changes::settled_counts()} for why the unit is the operation's own.
+		$settled = $this->changes->settled_counts( $operation->id, $operation->is_undo() );
+		$this->operations->set_progress( $operation->id, $settled['processed'], $settled['failed'] );
+
 		$this->operations->set_status( $operation->id, Operation_Status::COMPLETED, true );
 
 		if ( $operation->is_undo() && null !== $operation->parent_op_id ) {

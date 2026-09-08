@@ -143,6 +143,58 @@ final class WriteEngineTest extends Operations_Database_Case {
 		$this->assertSame( 0, $counts['pending'] );
 	}
 
+	/**
+	 * A two-field edit reaches 100%, and its target stays the number previewed.
+	 *
+	 * An edit freezes a target of *objects*, because that is what its preview
+	 * promised — "N products will change" — and "the previewed count is the count
+	 * the run delivers" is the promise the pipeline exists to keep. Two fields on
+	 * two products is four change rows but still two products, and the bar has to
+	 * agree with the preview rather than with the row count.
+	 *
+	 * Pinned because the obvious repair for the undo bug below — count rows
+	 * everywhere — breaks exactly this, and does it quietly: the run still
+	 * finishes, it just targets more than the user approved.
+	 */
+	public function test_a_two_field_edit_targets_products_and_reaches_the_end(): void {
+		$this->make_product( 25 );
+		$this->make_product( 30 );
+
+		$actions = array(
+			new Set_Value( 'regular_price', '9.99' ),
+			new Set_Value( 'meta:_catalogops_brand', 'Globex' ),
+		);
+		$filter  = new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 20 ) ) );
+
+		$preview = $this->service->preview( $filter, $actions );
+
+		$op_id = $this->service->create(
+			$filter,
+			$actions,
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+
+		$this->service->queue( $op_id );
+
+		$operation = $this->operations->find( $op_id );
+
+		$this->assertSame( 2, $operation->target_count );
+		$this->assertSame( $preview['applicable'], $operation->target_count );
+		// Four rows behind it: one per product per field.
+		$this->assertSame( 4, $this->changes->counts( $op_id )['pending'] );
+
+		$this->drive( $op_id );
+
+		$operation = $this->operations->find( $op_id );
+
+		$this->assertSame( Operation_Status::COMPLETED, $operation->status );
+		$this->assertSame( 2, $operation->processed );
+		$this->assertSame( 100, $operation->percent() );
+		$this->assertSame( 0, $this->changes->counts( $op_id )['pending'] );
+	}
+
 	public function test_rerunning_a_completed_operation_is_a_no_op(): void {
 		$product = $this->make_product( 50 );
 
@@ -176,6 +228,100 @@ final class WriteEngineTest extends Operations_Database_Case {
 
 		$this->drive( $op_id );
 		$this->assertSame( 6, $this->operations->find( $op_id )->processed );
+	}
+
+	/**
+	 * The counter has to describe the catalogue at every beat, not only at the end
+	 * of a chunk.
+	 *
+	 * It was written once, after the loop, so a process killed mid-chunk lost every
+	 * object it had already saved — the change rows were right and the number was
+	 * not. Measured live: 21,058 reported against 21,366 actually applied, every row
+	 * `applied` and none failed.
+	 *
+	 * That was a transient wrong number on a run that was over anyway, until
+	 * {@see \CatalogOps\Operations\Recovery} made mid-chunk death survivable. Now the
+	 * run comes back and finishes, and carries the short count for the rest of its
+	 * life: a bar that never reaches its target on a run that completed.
+	 */
+	public function test_progress_is_recorded_as_the_chunk_runs_not_only_at_its_end(): void {
+		for ( $i = 0; $i < 6; $i++ ) {
+			$this->make_product( 50 );
+		}
+
+		$op_id = $this->queue_price_change( 'price', Operator::GREATER_THAN, 20, '2.00' );
+
+		// Beat on every object, so the test does not wait five seconds for one.
+		$pulse_every_object = static fn(): float => 0.0;
+
+		$operations = $this->operations;
+		$seen       = array();
+
+		// Read the stored counter from inside the loop — what a supervisor, or the
+		// operations list polling every couple of seconds, would see mid-chunk.
+		$watch = static function () use ( $operations, $op_id, &$seen ): void {
+			$seen[] = $operations->find( $op_id )->processed;
+		};
+
+		add_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+		add_action( 'woocommerce_update_product', $watch );
+
+		try {
+			$this->runner->run( $op_id, 6 );
+		} finally {
+			remove_filter( 'catalogops_pulse_seconds', $pulse_every_object );
+			remove_action( 'woocommerce_update_product', $watch );
+		}
+
+		$this->assertNotEmpty( $seen, 'nothing was saved, so nothing was tested' );
+
+		// It moved while the chunk was still running. Before, every one of these
+		// reads was nought until the loop ended.
+		$this->assertGreaterThan( 0, max( $seen ) );
+
+		// And each object still counted exactly once: the beat sends what has
+		// happened since the last one, not the running total.
+		$operation = $this->operations->find( $op_id );
+		$this->assertSame( 6, $operation->processed );
+		$this->assertSame( 0, $operation->failed );
+	}
+
+	/**
+	 * A finished run reports what its rows say, not what happened to survive.
+	 *
+	 * Beating the count out on every pulse narrows what a violent death costs, but
+	 * cannot abolish it: whatever a worker did between its last beat and being killed
+	 * was never reported by anyone. That remainder used to outlive the run and be
+	 * read for ever after. Measured on the live catalogue on 2026-09-06, after the
+	 * host was stopped mid-run and recovery finished the job: 581 rows applied, 581
+	 * objects, every one of them written — and a *completed* operation whose bar read
+	 * 523 of 581.
+	 *
+	 * Here the loss is made deliberate, because a killed process cannot be staged in
+	 * a test: the counter is knocked back to nought after real work has landed, which
+	 * is the same state a dead worker leaves behind.
+	 */
+	public function test_a_completed_run_reports_what_its_rows_say_not_what_survived(): void {
+		for ( $i = 0; $i < 4; $i++ ) {
+			$this->make_product( 50 );
+		}
+
+		$op_id = $this->queue_price_change( 'price', Operator::GREATER_THAN, 20, '2.00' );
+
+		// Two objects written, and then the count of them lost.
+		$this->runner->run( $op_id, 2 );
+		$this->assertGreaterThan( 0, $this->operations->find( $op_id )->processed );
+		$this->operations->set_progress( $op_id, 0, 0 );
+
+		$this->drive( $op_id );
+
+		$operation = $this->operations->find( $op_id );
+		$this->assertSame( Operation_Status::COMPLETED, $operation->status );
+
+		// Four objects were written, so four is what a finished run must say —
+		// not the two the surviving worker happened to report.
+		$this->assertSame( 4, $operation->processed );
+		$this->assertSame( 0, $operation->failed );
 	}
 
 	public function test_second_operation_is_blocked_while_one_is_active(): void {

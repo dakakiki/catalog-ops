@@ -16,7 +16,9 @@ use CatalogOps\Operations\Operation_Blocked;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
+use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Watchdog;
 use CatalogOps\Licensing\License;
 use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Query\Filter;
@@ -182,6 +184,29 @@ final class Operations_Controller {
 			)
 		);
 
+		// Its own route rather than a flag on cancel: the two acts differ in what they
+		// mean for the schedule behind the run, and a difference that lives in a
+		// request parameter is one a later caller can forget to send.
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/operations/(?P<id>\d+)/take-over',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'take_over' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
+
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/operations/(?P<id>\d+)/resume',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'resume' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
+
 		$policy_arg = array(
 			'conflict_policy' => array(
 				'type'    => 'string',
@@ -209,11 +234,20 @@ final class Operations_Controller {
 				'callback'            => array( $this, 'undo_preview' ),
 				'permission_callback' => array( $this, 'can_manage' ),
 				'args'                => $policy_arg + array(
-					'limit' => array(
+					'page'     => array(
 						'type'    => 'integer',
-						'default' => 20,
-						'minimum' => 0,
+						'default' => 1,
+						'minimum' => 1,
+					),
+					'per_page' => array(
+						'type'    => 'integer',
+						'default' => 10,
+						'minimum' => 1,
 						'maximum' => 100,
+					),
+					'sku'      => array(
+						'type'    => 'string',
+						'default' => '',
 					),
 				),
 			)
@@ -379,10 +413,19 @@ final class Operations_Controller {
 	 */
 	public function index( WP_REST_Request $request ): WP_REST_Response {
 		$slice = Paging::slice( $request, self::HISTORY_PER_PAGE );
+		$rows  = $this->operations->recent( $slice['per_page'], $slice['offset'] );
+
+		// One grouped count for the page rather than one per row: this list polls
+		// every two seconds while anything is running, and each row needs to know
+		// whether it has work left before it can offer Resume.
+		$pending = $this->changes->pending_counts( array_column( $rows, 'id' ) );
 
 		$operations = array_map(
-			array( $this, 'to_array' ),
-			$this->operations->recent( $slice['per_page'], $slice['offset'] )
+			fn( Operation $operation ): array => $this->to_array(
+				$operation,
+				$pending[ $operation->id ] ?? 0
+			),
+			$rows
 		);
 
 		return new WP_REST_Response(
@@ -440,6 +483,60 @@ final class Operations_Controller {
 	}
 
 	/**
+	 * Take back a run whose process died, without stopping its schedule.
+	 *
+	 * The 409 is the case worth naming: the client asks for this on the strength of
+	 * `is_stalled` from a poll, and between that poll and the click the run may have
+	 * drawn breath. {@see Operation_Service::take_over()} measures again and refuses,
+	 * and the status says "try again, the state moved" rather than "you did something
+	 * wrong" — which is what a conflict is.
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function take_over( WP_REST_Request $request ) {
+		$id = (int) $request->get_param( 'id' );
+
+		if ( null === $this->operations->find( $id ) ) {
+			return $this->error( 'catalogops_not_found', 'Operation not found.', 404 );
+		}
+
+		try {
+			$this->service->take_over( $id );
+		} catch ( InvalidArgumentException $e ) {
+			return $this->error( 'catalogops_conflict', $e->getMessage(), 409 );
+		}
+
+		return new WP_REST_Response( $this->to_array( $this->operations->find( $id ) ) );
+	}
+
+	/**
+	 * Put a stopped or failed operation back to work on the targets it froze.
+	 *
+	 * @param WP_REST_Request $request The request.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function resume( WP_REST_Request $request ) {
+		$id = (int) $request->get_param( 'id' );
+
+		if ( null === $this->operations->find( $id ) ) {
+			return $this->error( 'catalogops_not_found', 'Operation not found.', 404 );
+		}
+
+		try {
+			$this->service->resume( $id );
+		} catch ( Operation_Blocked $e ) {
+			// Someone else is writing. Not the caller's mistake and not a permanent
+			// state, so 409 rather than 400 — the same answer queueing gives.
+			return $this->error( 'catalogops_locked', $e->getMessage(), 409 );
+		} catch ( InvalidArgumentException $e ) {
+			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
+		}
+
+		return new WP_REST_Response( $this->to_array( $this->operations->find( $id ) ) );
+	}
+
+	/**
 	 * Preview undoing an operation: how many changes would be reverted and a
 	 * sample flagging which objects have drifted (CONTEXT §3).
 	 *
@@ -453,7 +550,9 @@ final class Operations_Controller {
 			$preview = $this->service->preview_undo(
 				$id,
 				$this->policy_param( $request ),
-				(int) $request->get_param( 'limit' )
+				(int) $request->get_param( 'per_page' ),
+				(int) $request->get_param( 'page' ),
+				trim( (string) $request->get_param( 'sku' ) )
 			);
 		} catch ( License_Limited $e ) {
 			return $this->error( 'catalogops_upgrade_required', $e->getMessage(), 402 );
@@ -648,27 +747,98 @@ final class Operations_Controller {
 	 * Shape an operation for a JSON response.
 	 *
 	 * @param Operation $operation The operation.
+	 * @param int|null  $pending   Rows still waiting, when the caller has already
+	 *                             counted them for a whole page; null to count here.
 	 * @return array<string, mixed>
 	 */
-	private function to_array( Operation $operation ): array {
+	private function to_array( Operation $operation, ?int $pending = null ): array {
+		// Costs a query when the caller has not already counted; the history list
+		// counts a whole page in one and passes the answer in, because it polls.
+		$pending = null === $pending ? $this->changes->pending_count( $operation->id ) : $pending;
+
 		return array(
-			'id'              => $operation->id,
-			'status'          => $operation->status->value,
-			'source'          => $operation->source->value,
-			'mode'            => $operation->mode->value,
-			'parent_op_id'    => $operation->parent_op_id,
-			'conflict_policy' => null === $operation->conflict_policy ? null : $operation->conflict_policy->value,
-			'user_id'         => $operation->user_id,
-			'user_name'       => $this->user_name( $operation->user_id ),
-			'target_count'    => $operation->target_count,
-			'processed'       => $operation->processed,
-			'failed'          => $operation->failed,
-			'percent'         => $operation->percent(),
-			'can_undo'        => $this->can_undo( $operation ),
-			'created_at'      => $operation->created_at,
-			'completed_at'    => $operation->completed_at,
+			'id'                 => $operation->id,
+			'status'             => $operation->status->value,
+			'source'             => $operation->source->value,
+			'mode'               => $operation->mode->value,
+			'parent_op_id'       => $operation->parent_op_id,
+			// The id alone, read straight off the row this method already has, so the
+			// history costs no extra query for it. The Stop confirmation needs to know
+			// only that there is a schedule behind this run, because stopping pauses
+			// it; the undo panel, which names the schedule, can afford the lookup
+			// because its preview is fetched once rather than per row on a poll.
+			'schedule_id'        => $operation->schedule_id,
+			'conflict_policy'    => null === $operation->conflict_policy ? null : $operation->conflict_policy->value,
+			'user_id'            => $operation->user_id,
+			'user_name'          => $this->user_name( $operation->user_id ),
+			'target_count'       => $operation->target_count,
+			'processed'          => $operation->processed,
+			'failed'             => $operation->failed,
+			'percent'            => $operation->percent(),
+			'can_undo'           => $this->can_undo( $operation ),
+			// Work still frozen and waiting, and nothing writing it: an operation the
+			// watchdog failed after a restart, or one the user stopped. Resuming
+			// continues the list that was approved; running the filter again would
+			// resolve a different one.
+			'can_resume'         => ! $operation->status->is_active() && $pending > 0,
+			// Running, and nothing has written for longer than the watchdog tolerates.
+			// The counters alone cannot say this: a run whose host died is a `running`
+			// row with a progress bar that has simply stopped, indistinguishable from a
+			// slow one until someone watches it long enough to lose confidence in it.
+			'is_stalled'         => Watchdog::is_stalled( $operation ),
+			// How long it has been quiet, so the screen can count rather than sit
+			// silent until a threshold trips. Normal gaps between chunks are seconds;
+			// anything the client chooses to show is its own judgement about when
+			// silence becomes worth mentioning, and it can change that without the
+			// server agreeing.
+			'quiet_seconds'      => $this->quiet_seconds( $operation ),
+			'pending'            => $pending,
+			// Stored and compared in GMT; the *_local pair is what the history
+			// actually prints, exactly as the schedules list does. Shipping only the
+			// GMT value is what put the history a whole offset out of step with the
+			// schedules card — the same run reading 08:01 in one table and 10:01 in
+			// the other, which is unarguable evidence of a bug that was not there.
+			// `completed_at` gets the pair too, though nothing prints it yet: it is
+			// one render away from being the same defect.
+			'created_at'         => $operation->created_at,
+			'created_at_local'   => $this->to_local( $operation->created_at ),
+			'completed_at'       => $operation->completed_at,
+			'completed_at_local' => $this->to_local( $operation->completed_at ),
 		);
 	}
+
+	/**
+	 * A GMT datetime rendered in the site's timezone, for display.
+	 *
+	 * The scheduler's reasons for storing GMT are good ones and are argued where
+	 * that decision lives ({@see \CatalogOps\Rest\Schedules_Controller::to_local()}).
+	 * What matters here is that a shop owner reads the clock on the wall: a history
+	 * that prints GMT does not merely inconvenience them, it makes a correct run
+	 * look like it fired hours before it was told to.
+	 *
+	 * @param string|null $gmt Stored GMT datetime, or null.
+	 */
+	private function to_local( ?string $gmt ): ?string {
+		return ( null === $gmt || '' === $gmt ) ? $gmt : get_date_from_gmt( $gmt );
+	}
+
+	/**
+	 * Seconds since a running operation last reported progress, or null when the
+	 * question does not apply.
+	 *
+	 * Null for anything that is not still going: a finished run is not quiet, it is
+	 * over, and a screen counting seconds beside it would be describing nothing.
+	 *
+	 * @param Operation $operation The operation to measure.
+	 */
+	private function quiet_seconds( Operation $operation ): ?int {
+		if ( ! $operation->status->is_active() || null === $operation->last_progress_at ) {
+			return null;
+		}
+
+		return max( 0, time() - (int) strtotime( $operation->last_progress_at . ' UTC' ) );
+	}
+
 
 	/**
 	 * Shape one change row for the audit view, enriched with the object's SKU and
@@ -714,7 +884,15 @@ final class Operations_Controller {
 	 * @param Operation $operation The operation.
 	 */
 	private function can_undo( Operation $operation ): bool {
-		return $this->license->can_undo() && ! $operation->status->is_active() && $operation->processed > 0;
+		return $this->license->can_undo()
+			&& ! $operation->status->is_active()
+			// Undo is one-way and it ends there. A reverted operation has already
+			// been given back, and an undo is not itself undoable — otherwise undo
+			// becomes a toggle to ride back and forth. What is left on both is to
+			// look at what they did, or delete them.
+			&& Operation_Status::REVERTED !== $operation->status
+			&& ! $operation->is_undo()
+			&& $operation->processed > 0;
 	}
 
 	/**

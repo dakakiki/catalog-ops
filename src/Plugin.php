@@ -20,12 +20,14 @@ use CatalogOps\Operations\Lock;
 use CatalogOps\Operations\Notifier;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Recovery;
 use CatalogOps\Operations\Retention;
 use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedules;
 use CatalogOps\Operations\Scheduler;
 use CatalogOps\Operations\Watchdog;
 use CatalogOps\Operations\Write_Rules;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Saved_Filters;
 use CatalogOps\Rest\Fields_Controller;
@@ -119,6 +121,13 @@ final class Plugin {
 		// Apply pending migrations after a plugin update (no reactivation needed).
 		add_action( 'admin_init', array( $this, 'maybe_upgrade_database' ) );
 
+		// Early, and on `init` rather than `admin_init`, because the requests most
+		// certain to be arriving while a run is dying are the admin screen's own REST
+		// polls — which `admin_init` never sees — and the cron request, which reaches
+		// a site nobody is looking at. See Recovery for why this cannot be a
+		// scheduled job.
+		add_action( 'init', array( $this, 'maybe_recover_operation' ), 5 );
+
 		add_action(
 			'rest_api_init',
 			function (): void {
@@ -204,6 +213,14 @@ final class Plugin {
 	}
 
 	/**
+	 * Hand a run whose writer disappeared to a new one. Hooked to init; costs an
+	 * integer comparison when nothing is running, which is nearly always.
+	 */
+	public function maybe_recover_operation(): void {
+		$this->container->get( Recovery::class )->run();
+	}
+
+	/**
 	 * The service container.
 	 */
 	public function container(): Container {
@@ -269,11 +286,28 @@ final class Plugin {
 		);
 
 		$this->container->singleton(
+			Filter_Providers::class,
+			static fn( Container $container ): Filter_Providers => new Filter_Providers(
+				$container->get( License::class )
+				// Empty on purpose. The seam is live — Query_Engine offers it every
+				// key it has no builder for, and refuses when nobody claims one — but
+				// no module registers yet and there is no public hook to register
+				// through. Publishing the filter is the point of no return for the
+				// provider API (it freezes the interfaces, the enums and the named
+				// constructors), and it comes after the EXPLAIN harness has measured
+				// every shape the compiler emits and after the UI can render a field
+				// nobody hardcoded. An empty registry changes no statement this
+				// engine produces today, which is exactly what makes it safe to land
+				// on its own.
+			)
+		);
+
+		$this->container->singleton(
 			Query_Engine::class,
-			static function (): Query_Engine {
+			static function ( Container $container ): Query_Engine {
 				global $wpdb;
 
-				return new Query_Engine( $wpdb );
+				return new Query_Engine( $wpdb, $container->get( Filter_Providers::class ) );
 			}
 		);
 
@@ -373,7 +407,19 @@ final class Plugin {
 				$container->get( Lock::class ),
 				$container->get( Scheduler::class ),
 				$container->get( License::class ),
-				$container->get( Write_Rules::class )
+				$container->get( Write_Rules::class ),
+				$container->get( Schedules::class ),
+				$container->get( Filter_Providers::class )
+			)
+		);
+
+		$this->container->singleton(
+			Recovery::class,
+			static fn( Container $container ): Recovery => new Recovery(
+				$container->get( Operations::class ),
+				$container->get( Changes::class ),
+				$container->get( Lock::class ),
+				$container->get( Scheduler::class )
 			)
 		);
 
@@ -523,6 +569,61 @@ final class Plugin {
 			'catalogops_operation_completed',
 			function ( $op_id = 0 ): void {
 				$this->container->get( Notifier::class )->notify( (int) $op_id );
+			}
+		);
+
+		// The two messages the plugin lacked. Until these, it announced only success:
+		// a run that died and a schedule that stopped itself both went unmentioned,
+		// which is exactly backwards for work nobody is sitting and watching.
+		add_action(
+			'catalogops_operation_failed',
+			function ( $op_id = 0 ): void {
+				$this->container->get( Notifier::class )->notify_failed( (int) $op_id );
+			}
+		);
+
+		add_action(
+			'catalogops_schedule_paused',
+			function ( $schedule_id = 0, $error = null ): void {
+				$this->container->get( Notifier::class )->notify_schedule_paused( (int) $schedule_id, $error );
+			},
+			10,
+			2
+		);
+
+		/*
+		 * Shorten the pause between queue runs while one of our operations is
+		 * writing.
+		 *
+		 * Action Scheduler sleeps five seconds between chained queue runs, and on
+		 * the 18.5k catalogue that is most of the gap between chunks: measured on a
+		 * 1,855-product run, each chunk spent about eight seconds writing and about
+		 * six seconds waiting, so roughly 43% of the wall clock was this pause plus
+		 * a WordPress bootstrap. Five seconds exists to stop chained loopbacks
+		 * hammering a shared host, which is a real concern for a queue that might
+		 * run for hours — but a bulk edit the user is watching is a burst, not a
+		 * background trickle, and it holds the write lock while it waits.
+		 *
+		 * So the sleep is only shortened while a CatalogOps operation is actually
+		 * active. Any other queue work on the site — WooCommerce's own, another
+		 * plugin's — sees the value untouched, because this returns $seconds
+		 * unchanged the moment we have nothing running. A host that wants the full
+		 * pause back can filter `catalogops_queue_sleep_seconds` to 5.
+		 */
+		add_filter(
+			'action_scheduler_async_request_sleep_seconds',
+			function ( $seconds ) {
+				if ( null === $this->container->get( Operations::class )->active_excluding( 0 ) ) {
+					return $seconds;
+				}
+
+				/**
+				 * Filters the seconds Action Scheduler waits between queue runs
+				 * while a CatalogOps operation is writing.
+				 *
+				 * @param int $seconds Pause between chained queue runs.
+				 */
+				return apply_filters( 'catalogops_queue_sleep_seconds', 1 );
 			}
 		);
 

@@ -30,6 +30,7 @@ final class Operation {
 	 * @param Operation_Mode                   $mode             Write strategy.
 	 * @param int                              $user_id          Owner user id.
 	 * @param int|null                         $parent_op_id     Parent operation (for undo), or null.
+	 * @param int|null                         $schedule_id      Schedule that spawned this run, or null.
 	 * @param array<string, mixed>             $filter_data  Decoded filter_json.
 	 * @param array<int, array<string, mixed>> $actions_data Decoded actions_json.
 	 * @param int                              $target_count     Frozen number of target objects.
@@ -48,6 +49,7 @@ final class Operation {
 		public readonly Operation_Mode $mode,
 		public readonly int $user_id,
 		public readonly ?int $parent_op_id,
+		public readonly ?int $schedule_id,
 		public readonly array $filter_data,
 		public readonly array $actions_data,
 		public readonly int $target_count,

@@ -64,6 +64,17 @@ enum Skip_Reason: string {
 	case UNCHANGED = 'unchanged';
 
 	/**
+	 * The schedule that spawned this run had already changed the object, so a
+	 * repeat left it alone.
+	 *
+	 * A recurring schedule exists to catch what has since entered its segment, not
+	 * to apply itself again to what it has already done — which for a relative
+	 * action means compounding against its own last result. See
+	 * {@see \CatalogOps\Query\Requirements\Untouched_By_Schedule}.
+	 */
+	case ALREADY_CHANGED_BY_SCHEDULE = 'already_changed_by_schedule';
+
+	/**
 	 * The save did not keep the value and no specific rule explains it — another
 	 * plugin's filter, or a validation rule this build does not model.
 	 */

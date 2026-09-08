@@ -54,6 +54,7 @@ final class Operations {
 	 * @param Operation_Mode                          $mode         Write strategy.
 	 * @param Operation_Source                        $source          Origin.
 	 * @param int                                     $user_id         Owner user id.
+	 * @param int|null                                $schedule_id     Schedule that spawned this run.
 	 * @param int|null                                $parent_op_id    Parent operation, for undo.
 	 * @param Conflict_Policy|null                    $conflict_policy Drift policy (undo only).
 	 * @return int The new operation id.
@@ -64,6 +65,7 @@ final class Operations {
 		Operation_Mode $mode,
 		Operation_Source $source,
 		int $user_id,
+		?int $schedule_id = null,
 		?int $parent_op_id = null,
 		?Conflict_Policy $conflict_policy = null
 	): int {
@@ -74,6 +76,7 @@ final class Operations {
 				'user_id'         => $user_id,
 				'status'          => Operation_Status::DRAFT->value,
 				'source'          => $source->value,
+				'schedule_id'     => $schedule_id,
 				'parent_op_id'    => $parent_op_id,
 				'filter_json'     => (string) wp_json_encode( $filter->to_array() ),
 				'actions_json'    => (string) wp_json_encode( Action_Factory::list_to_array( $actions ) ),
@@ -84,7 +87,7 @@ final class Operations {
 				'batch_size'      => 0,
 				'conflict_policy' => null === $conflict_policy ? null : $conflict_policy->value,
 			),
-			array( '%s', '%d', '%s', '%s', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s' )
+			array( '%s', '%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s' )
 		);
 
 		return (int) $this->wpdb->insert_id;
@@ -137,6 +140,16 @@ final class Operations {
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
 		return is_int( $detached ) ? $detached : 0;
+	}
+
+	/**
+	 * The operations table's name.
+	 *
+	 * Exposed for the one caller that has to name it in SQL it does not itself run —
+	 * see {@see Changes::table()} for the reasoning.
+	 */
+	public function table(): string {
+		return $this->schema->operations_table();
 	}
 
 	/**
@@ -300,8 +313,10 @@ final class Operations {
 	 * increment form keeps the counters correct regardless.
 	 *
 	 * @param int $id             Operation id.
-	 * @param int $processed_delta Objects processed in this chunk.
-	 * @param int $failed_delta    Objects failed in this chunk.
+	 * @param int $processed_delta Change rows resolved in this chunk — the same unit
+	 *                             target_count is seeded in, so the two compare.
+	 * @param int $failed_delta    Change rows that failed in this chunk, in the same
+	 *                             unit — an object that throws fails all of its rows.
 	 */
 	public function record_progress( int $id, int $processed_delta, int $failed_delta ): void {
 		$table = $this->schema->operations_table();
@@ -318,6 +333,33 @@ final class Operations {
 			)
 		);
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	}
+
+	/**
+	 * Set the counters outright, rather than adding to them.
+	 *
+	 * The counterpart to {@see record_progress()}, and the only caller is the one
+	 * moment the true figures are knowable: a run that has settled, reconciled
+	 * against its own change rows by {@see Chunk_Runner::finalize()}. Adding is right
+	 * while work is in flight, because each worker knows only what it has just done;
+	 * it is wrong at the end, because what a worker never got to report is exactly
+	 * what a violent death takes with it.
+	 *
+	 * @param int $id        Operation id.
+	 * @param int $processed Objects, or rows for an undo, that were dealt with.
+	 * @param int $failed    Of those, the ones that failed.
+	 */
+	public function set_progress( int $id, int $processed, int $failed ): void {
+		$this->wpdb->update(
+			$this->schema->operations_table(),
+			array(
+				'processed' => $processed,
+				'failed'    => $failed,
+			),
+			array( 'id' => $id ),
+			array( '%d', '%d' ),
+			array( '%d' )
+		);
 	}
 
 	/**
@@ -352,6 +394,7 @@ final class Operations {
 			Operation_Mode::from( (string) $row['mode'] ),
 			(int) $row['user_id'],
 			null === $row['parent_op_id'] ? null : (int) $row['parent_op_id'],
+			empty( $row['schedule_id'] ) ? null : (int) $row['schedule_id'],
 			is_array( $filter_data ) ? $filter_data : array(),
 			is_array( $actions_data ) ? $actions_data : array(),
 			(int) $row['target_count'],

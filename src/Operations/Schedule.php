@@ -39,6 +39,7 @@ final class Schedule {
 	 * @param int|null                         $last_op_id   Operation spawned by the last fire, or null.
 	 * @param string                           $notify_email Report recipient (may be empty).
 	 * @param string                           $created_at   Creation time (GMT MySQL datetime).
+	 * @param string|null                      $paused_reason Why the supervisor paused it, or null.
 	 */
 	public function __construct(
 		public readonly int $id,
@@ -54,6 +55,7 @@ final class Schedule {
 		public readonly ?int $last_op_id,
 		public readonly string $notify_email,
 		public readonly string $created_at,
+		public readonly ?string $paused_reason = null,
 	) {}
 
 	/**

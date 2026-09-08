@@ -712,6 +712,16 @@ be more than a few rows however much is chosen.
 	margin: 0;
 }
 
+/*
+The undo preview puts a plain sentence here rather than a status caption — it
+states how much is about to be reverted, which is the opposite of a footnote, so
+it keeps its normal weight and colour and only loses the paragraph margins that
+would otherwise stretch the row.
+*/
+.catalogops-results-bar > p {
+	margin: 0;
+}
+
 /* Search-only bar (audit detail): push the search to the right edge. */
 .catalogops-results-bar--end {
 	justify-content: flex-end;
@@ -850,8 +860,12 @@ be more than a few rows however much is chosen.
 	color: var(--co-red);
 }
 
+/* Amber holds. A run that has stopped reporting belongs here rather than with the
+   indigo in-progress states: it is not progressing, and it is not yet failed —
+   the watchdog turns it red on its next pass. */
 .catalogops-status-badge.is-reverted,
-.catalogops-status-badge.is-paused {
+.catalogops-status-badge.is-paused,
+.catalogops-status-badge.is-stalled {
 	background: #fcf5e6;
 	color: var(--co-amber);
 }
@@ -1221,12 +1235,16 @@ Scoped under .catalogops for the same reason as the danger button — wp-admin's
 	color: #fff;
 }
 
+/*
+Carries wp-admin's own `notice notice-*` classes, so it reads exactly like the
+preview panel above the form rather than as loose text under a field. Only the
+row layout is overridden: `.catalogops-filter-row` lays its children out in a
+flex row, which would put the summary, the reason list and the caveat side by
+side. Paragraph rhythm is left to `.notice p` on purpose — the point is that the
+two blocks look the same.
+*/
 .catalogops-schedule-preview {
 	display: block;
-}
-
-.catalogops-schedule-preview p {
-	margin: 0 0 4px;
 }
 
 /* --- Scheduler setup --------------------------------------------------- */
@@ -1347,6 +1365,15 @@ is created — an unread instruction here means a change that silently never run
 .catalogops-undo legend {
 	padding: 0 6px;
 	color: var(--co-muted);
+}
+
+/*
+The drift explanation sits under the two radios it explains, and wp-admin's own
+5px top margin on a notice reads as if the text belonged to the second option
+rather than to both. A little air separates the reading from the choosing.
+*/
+.catalogops-undo fieldset .notice {
+	margin-top: 14px;
 }
 
 tr.is-drift td {
@@ -1708,7 +1735,55 @@ tr.is-drift td {
 
 .catalogops-confirm__actions {
 	display: flex;
+	align-items: center;
 	gap: 8px;
+}
+
+/*
+The pair has to read as one row. wp-admin gives `.button` a 4px bottom margin on
+top of its 40px min-height, so a stretched flex row aligns the margin boxes and
+leaves the two borders a couple of pixels out of line. Centre them, drop the
+margin, and pin both members of the height — the same shape
+`.catalogops-filter-row .button` already uses for the controls beside it.
+*/
+.catalogops .catalogops-confirm__actions .button {
+	height: var(--co-control-h);
+	min-height: var(--co-control-h);
+	margin: 0;
+	display: inline-flex;
+	align-items: center;
+	box-sizing: border-box;
+}
+
+/*
+Orange is the colour this app gives to reversing — the undo row icon already
+wears it, and the confirmation's own button should not arrive in a different
+vocabulary. Scoped and class+class deep for the same reason as
+`.catalogops-button--go`: `.wp-core-ui .button` would otherwise outrank it.
+*/
+.catalogops .catalogops-button--undo,
+.catalogops .catalogops-button--undo:visited {
+	border-color: #b45309;
+	background: var(--co-orange);
+	color: #fff;
+	text-shadow: none;
+}
+
+.catalogops .catalogops-button--undo:hover:not( :disabled ),
+.catalogops .catalogops-button--undo:focus:not( :disabled ) {
+	border-color: #92400e;
+	background: #b45309;
+	color: #fff;
+}
+
+.catalogops .catalogops-button--undo:focus:not( :disabled ) {
+	box-shadow: 0 0 0 1px #fff, 0 0 0 3px var(--co-orange);
+}
+
+.catalogops .catalogops-button--undo:disabled {
+	border-color: var(--co-border-strong);
+	background: var(--co-border-strong);
+	color: #fff;
 }
 
 /* --- Cosmetic polish (M6 brand pass) ----------------------------------- */

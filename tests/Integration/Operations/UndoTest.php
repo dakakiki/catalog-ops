@@ -17,6 +17,7 @@ use CatalogOps\Operations\Changes;
 use CatalogOps\Operations\Conflict_Policy;
 use CatalogOps\Operations\Chunk_Runner;
 use CatalogOps\Operations\Lock;
+use CatalogOps\Operations\Operation_Blocked;
 use CatalogOps\Operations\Operation_Mode;
 use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
@@ -29,6 +30,7 @@ use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
+use InvalidArgumentException;
 use WC_Product_Simple;
 
 /**
@@ -167,7 +169,17 @@ final class UndoTest extends Operations_Database_Case {
 		$this->assertSame( 0, $this->changes->counts( $undo_id )['skipped'] );
 	}
 
-	public function test_undo_of_undo_re_applies_the_operation(): void {
+	/**
+	 * Undo is one-way and it ends there.
+	 *
+	 * This used to be a redo: undoing the undo reverted its own deltas and put the
+	 * original change back. It is refused now, deliberately — undo that can be
+	 * ridden in both directions is a toggle, not a safety net, and the round trip
+	 * left the first operation reading `reverted` while its change was in force
+	 * again, a status with no second move. Once a run has been given back, what is
+	 * left is to look at what it did or delete it.
+	 */
+	public function test_an_undo_cannot_itself_be_undone(): void {
 		$a = $this->make_product( 20 );
 
 		$op_id = $this->run_price_change( '9.99' );
@@ -177,13 +189,55 @@ final class UndoTest extends Operations_Database_Case {
 		$this->drive( $undo_id );
 		$this->assertSame( '20', wc_get_product( $a )->get_regular_price() );
 
-		// Undo the undo: reverts the undo's own deltas, re-applying 9.99.
-		$redo_id = $this->service->undo( $undo_id, Conflict_Policy::SKIP, 1 );
-		$this->service->queue( $redo_id );
-		$this->drive( $redo_id );
+		$before = $this->operations->count_all();
 
-		$this->assertSame( '9.99', wc_get_product( $a )->get_regular_price() );
-		$this->assertSame( Operation_Status::REVERTED, $this->operations->find( $undo_id )->status );
+		try {
+			$this->service->undo( $undo_id, Conflict_Policy::SKIP, 1 );
+			$this->fail( 'Expected undoing an undo to be refused.' );
+		} catch ( InvalidArgumentException $e ) {
+			$this->assertStringContainsString( 'cannot itself be undone', $e->getMessage() );
+		}
+
+		// The price stays where the undo left it, and nothing was recorded.
+		$this->assertSame( '20', wc_get_product( $a )->get_regular_price() );
+		$this->assertSame( $before, $this->operations->count_all() );
+	}
+
+	/**
+	 * An operation that has already been given back cannot be given back again.
+	 *
+	 * Nothing stopped it before: the guard only asked whether the operation was
+	 * still running. Undoing a reverted operation reads every object as drift —
+	 * its current value is the one the undo restored, not the one the operation
+	 * wrote — so the safe policy skips all of them, and what the user gets for a
+	 * full pass over the target list, with the write lock held, is an empty
+	 * operation in the history. The route to putting the change back is undoing
+	 * the undo, which {@see test_undo_of_undo_re_applies_the_operation} covers.
+	 */
+	public function test_cannot_undo_an_operation_that_is_already_reverted(): void {
+		$this->make_product( 20 );
+
+		$op_id   = $this->run_price_change( '9.99' );
+		$undo_id = $this->service->undo( $op_id, Conflict_Policy::SKIP, 1 );
+
+		$this->service->queue( $undo_id );
+		$this->drive( $undo_id );
+
+		$this->assertSame( Operation_Status::REVERTED, $this->operations->find( $op_id )->status );
+
+		$before = $this->operations->count_all();
+
+		try {
+			$this->service->undo( $op_id, Conflict_Policy::SKIP, 1 );
+			$this->fail( 'Expected undoing an already-reverted operation to be refused.' );
+		} catch ( InvalidArgumentException $e ) {
+			$this->assertStringContainsString( 'already been undone', $e->getMessage() );
+		}
+
+		$after = $this->operations->count_all();
+
+		// Refused before anything was recorded: no empty operation left behind.
+		$this->assertSame( $before, $after );
 	}
 
 	public function test_preview_undo_reports_total_and_flags_drift_in_the_sample(): void {
@@ -196,11 +250,12 @@ final class UndoTest extends Operations_Database_Case {
 		$preview = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 20 );
 
 		$this->assertSame( 2, $preview['total'] );
+		$this->assertSame( 2, $preview['matched'] );
 		$this->assertSame( 'skip', $preview['conflict_policy'] );
-		$this->assertCount( 2, $preview['sample'] );
+		$this->assertCount( 2, $preview['items'] );
 
 		$by_id = array();
-		foreach ( $preview['sample'] as $entry ) {
+		foreach ( $preview['items'] as $entry ) {
 			$by_id[ $entry['id'] ] = $entry;
 		}
 
@@ -210,6 +265,111 @@ final class UndoTest extends Operations_Database_Case {
 
 		$this->assertTrue( $by_id[ $b ]['drift'] );
 		$this->assertSame( 'skip', $by_id[ $b ]['action'] );
+	}
+
+	/**
+	 * The preview pages and searches, and neither narrows the undo itself.
+	 *
+	 * It used to return a fixed sample of the first rows with no way to look
+	 * further, so on a catalogue of any size the question an undo is actually
+	 * agreed on — "will the one I care about be reverted or skipped?" — had no
+	 * answer. `total` has to stay the whole job while `matched` follows the
+	 * search, or narrowing the view would read as narrowing the undo.
+	 */
+	public function test_the_preview_pages_and_searches_without_narrowing_the_undo(): void {
+		$this->make_product( 20, 'UNDO-AAA-1' );
+		$this->make_product( 30, 'UNDO-AAA-2' );
+		$this->make_product( 40, 'UNDO-BBB-1' );
+
+		$op_id = $this->run_price_change( '9.99' );
+
+		$first = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 2, 1 );
+
+		$this->assertSame( 3, $first['total'] );
+		$this->assertSame( 3, $first['matched'] );
+		$this->assertCount( 2, $first['items'] );
+		$this->assertSame( 1, $first['page'] );
+
+		$second = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 2, 2 );
+
+		$this->assertCount( 1, $second['items'] );
+		$this->assertSame( 2, $second['page'] );
+
+		// The two pages together are the whole list, exactly once.
+		$paged = array_merge(
+			array_column( $first['items'], 'id' ),
+			array_column( $second['items'], 'id' )
+		);
+		$this->assertCount( 3, array_unique( $paged ) );
+
+		// The SKU reaches the row, so the column is readable and the search means
+		// something to the person typing it.
+		$this->assertContains( 'UNDO-AAA-1', array_column( $first['items'], 'sku' ) );
+
+		$found = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 10, 1, 'UNDO-AAA' );
+
+		$this->assertSame( 2, $found['matched'] );
+		$this->assertCount( 2, $found['items'] );
+		// Unchanged by the search: the undo still covers all three.
+		$this->assertSame( 3, $found['total'] );
+
+		$none = $this->service->preview_undo( $op_id, Conflict_Policy::SKIP, 10, 1, 'UNDO-ZZZ' );
+
+		$this->assertSame( 0, $none['matched'] );
+		$this->assertSame( array(), $none['items'] );
+		$this->assertSame( 3, $none['total'] );
+	}
+
+	/**
+	 * An undo of a two-field operation finishes at 100%, not at half.
+	 *
+	 * The two kinds of operation count in different units, each matching what its
+	 * own preview promised: an edit targets *products* ("N products will change"),
+	 * an undo targets the parent's applied *rows* ("N changes will be reverted").
+	 * The runner counted objects for both, so an undo of an operation that touched
+	 * two fields set a target of four, reported two, and stopped mid-bar on a run
+	 * that had finished — on the screen someone is watching to decide whether it is
+	 * safe to walk away.
+	 *
+	 * Unreachable from the admin app, which sends one action; reachable the moment
+	 * a provider offers more, which is what M7 is.
+	 */
+	public function test_an_undo_of_a_two_field_operation_reaches_the_end(): void {
+		$a = $this->make_product( 20 );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array(
+				new Set_Value( 'regular_price', '9.99' ),
+				new Set_Value( 'meta:_undo_two', 'after' ),
+			),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+		$this->drive( $op_id );
+
+		// One product, two fields: the parent applied two rows.
+		$this->assertSame( 2, $this->changes->counts( $op_id )['applied'] );
+
+		$undo_id = $this->service->undo( $op_id, Conflict_Policy::SKIP, 1 );
+		$this->service->queue( $undo_id );
+
+		$undo = $this->operations->find( $undo_id );
+		$this->assertSame( 2, $undo->target_count, 'An undo targets the rows it reverts.' );
+
+		$this->drive( $undo_id );
+
+		$undo = $this->operations->find( $undo_id );
+
+		$this->assertSame( Operation_Status::COMPLETED, $undo->status );
+		$this->assertSame( 2, $undo->processed, 'The bar must reach its own target.' );
+		$this->assertSame( 100, $undo->percent() );
+
+		// And it actually reverted both fields, not just the one it counted.
+		$this->assertSame( '20', wc_get_product( $a )->get_regular_price() );
+		$this->assertSame( '', (string) wc_get_product( $a )->get_meta( '_undo_two', true ) );
 	}
 
 	public function test_undo_with_nothing_applied_settles_immediately(): void {
@@ -255,6 +415,102 @@ final class UndoTest extends Operations_Database_Case {
 	 * @param string $price New price.
 	 * @return int Operation id.
 	 */
+	/**
+	 * A run the watchdog failed part-way finishes the list it froze, not a new one.
+	 *
+	 * This is the hole resume fills. An operation stops for reasons unrelated to
+	 * what it was asked to do — the host restarts, the queue's chain breaks — and
+	 * the watchdog marks it `failed` after ten minutes so the write lock is not
+	 * wedged. Before this the user's only moves were undoing the fraction that
+	 * landed or running the whole filter again, and running it again resolves the
+	 * filter against a catalogue that has since moved on. Resuming carries on down
+	 * the frozen list, which is the set that was approved.
+	 */
+	public function test_a_failed_operation_resumes_the_targets_it_froze(): void {
+		$a = $this->make_product( 20 );
+		$b = $this->make_product( 30 );
+
+		$op_id = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array( new Set_Value( 'regular_price', '7.77' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $op_id );
+
+		// One object through, then the run dies and the watchdog fails it.
+		$this->runner->run( $op_id, 1 );
+		$this->operations->set_status( $op_id, Operation_Status::FAILED );
+
+		$partial = $this->operations->find( $op_id );
+		$this->assertSame( Operation_Status::FAILED, $partial->status );
+		$this->assertSame( 1, $this->changes->pending_count( $op_id ) );
+
+		// A product added after the freeze must NOT be swept in — that is exactly
+		// the difference between resuming and running the filter again.
+		$late = $this->make_product( 40 );
+
+		$this->service->resume( $op_id );
+		$this->drive( $op_id );
+
+		$this->assertSame( 0, $this->changes->pending_count( $op_id ) );
+		$this->assertSame( '7.77', wc_get_product( $a )->get_regular_price() );
+		$this->assertSame( '7.77', wc_get_product( $b )->get_regular_price() );
+		$this->assertSame( '40', wc_get_product( $late )->get_regular_price() );
+	}
+
+	public function test_resuming_is_refused_while_another_operation_holds_the_lock(): void {
+		$this->make_product( 20 );
+
+		$stalled = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array( new Set_Value( 'regular_price', '7.77' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $stalled );
+		$this->operations->set_status( $stalled, Operation_Status::FAILED );
+
+		// Someone else starts writing in the meantime.
+		$other = $this->service->create(
+			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
+			array( new Set_Value( 'regular_price', '5.55' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			1
+		);
+		$this->service->queue( $other );
+
+		try {
+			$this->service->resume( $stalled );
+			$this->fail( 'Expected resuming to be refused while another operation writes.' );
+		} catch ( Operation_Blocked $e ) {
+			$this->assertStringContainsString( 'already writing', $e->getMessage() );
+		}
+
+		// Refused without disturbing either side: the stalled run keeps its state,
+		// and the live one keeps the lock it holds.
+		$this->assertSame( Operation_Status::FAILED, $this->operations->find( $stalled )->status );
+		$this->assertTrue( $this->operations->find( $other )->status->is_active() );
+	}
+
+	public function test_resuming_an_operation_with_nothing_left_is_refused(): void {
+		$this->make_product( 20 );
+
+		$op_id = $this->run_price_change( '9.99' );
+
+		$this->assertSame( 0, $this->changes->pending_count( $op_id ) );
+
+		try {
+			$this->service->resume( $op_id );
+			$this->fail( 'Expected resuming a finished operation to be refused.' );
+		} catch ( InvalidArgumentException $e ) {
+			$this->assertStringContainsString( 'nothing left to do', $e->getMessage() );
+		}
+	}
+
 	private function run_price_change( string $price ): int {
 		$op_id = $this->service->create(
 			new Filter( array( new Condition( 'price', Operator::GREATER_THAN, 10 ) ) ),
@@ -300,12 +556,15 @@ final class UndoTest extends Operations_Database_Case {
 	 * @param float $price Regular price.
 	 * @return int Product id.
 	 */
-	private function make_product( float $price ): int {
+	private function make_product( float $price, string $sku = '' ): int {
 		$product = new WC_Product_Simple();
 		$product->set_regular_price( (string) $price );
 		$product->set_manage_stock( true );
 		$product->set_stock_quantity( 5 );
 		$product->set_stock_status( 'instock' );
+		if ( '' !== $sku ) {
+			$product->set_sku( $sku );
+		}
 		$id = $product->save();
 
 		$this->created[] = $id;

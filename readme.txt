@@ -2,9 +2,11 @@
 Contributors: dakakiki
 Tags: woocommerce, bulk edit, products, variations, undo
 Requires at least: 6.0
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.7.1
+WC requires at least: 9.0
+WC tested up to: 11.0
+Stable tag: 0.7.3
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +79,42 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 3. Operation history with one-click undo.
 
 == Changelog ==
+
+= 0.7.3 =
+* Added: every operation that finishes now emails a report, whatever started it and whether or not anything was skipped. Until now a run that changed everything it promised said nothing, on the reasoning that an hourly schedule sending two dozen cheerful reports a day teaches its reader to delete them unopened. What outweighed that is that silence cannot be read: a clean run, a schedule that never fired, cron not reaching the site and a host quietly dropping outgoing mail all produce exactly the same no mail at all, and telling them apart meant opening a screen the report exists to spare you. A report that always arrives is also the only one whose absence means something. Sites that want the old quiet can silence any one source through the `catalogops_send_notifications` filter.
+* Changed: reports are now formatted, with the changed, skipped and failed figures in the same green, amber and red the admin screens use, and a plain-text copy sent alongside for text-only clients and spam filters. A figure of zero is left uncoloured, so colour in a report always means something.
+* Changed: reports print times on the shop's own clock, like the history does, instead of GMT.
+* Added: a run whose worker disappears — a restarted host, a killed PHP process — is picked up and carried on automatically, without anyone at the screen. A machine failure never pauses a schedule; only a person stopping or undoing a run does that.
+* Added: the history says when a run has stopped answering, counting up from a minute of silence, and offers to take it over. A run's controls are held back while the page itself cannot reach the site, so nothing is decided on a stale screen.
+* Fixed: an interrupted run's counter now settles on the truth. The count was written once per chunk, so a process killed mid-chunk lost everything it had already saved — a live run finished 581 changes and reported 523. The count now rides the heartbeat, and at the end it is reconciled from the change rows themselves, which are the record.
+* Fixed: the progress panel no longer freezes for the rest of the session after a single request that never answered. One dropped poll used to end polling entirely, so a run that recovered and finished showed a panel stuck at its old number beside a history that had moved on.
+* Changed: the progress panel goes away once a run is over, instead of leaving a full green bar on the screen.
+* Fixed: filtering by brand returned the wrong set. A positive brand membership was tested in the WHERE clause rather than joined, which on a large catalogue is both slow and wrong; it is now the same shape the category filter uses.
+* Added: the tag filter can ask for products that have no tag at all.
+* Fixed: a repeating schedule with a relative action no longer compounds. A percentage or formula schedule re-resolved its filter every run and applied itself again to everything matching, so a nightly "-5%" cut five percent off the already-cut price, night after night. A schedule now changes each product at most once: everything on its first run, and only what has newly entered the filter after that.
+* Fixed: a schedule pauses itself, with the reason recorded and emailed, when one of its runs is stopped or undone.
+* Added: HPOS (High-Performance Order Storage) compatibility is declared, so CatalogOps no longer counts as an undeclared plugin holding the feature back, and the supported WooCommerce range is stated in the plugin header.
+
+= 0.7.2 =
+* Fixed: a filter condition naming a field CatalogOps does not recognize is now refused, naming the field, instead of being ignored. An ignored condition removed a constraint, so "category X and brand Y" quietly became "category X" — a larger set of products, previewed and applied identically, so nothing downstream noticed. The same now applies to a comparison a field cannot make (a price "contains", a SKU "greater than") and to a "between" filter missing one end.
+* Fixed: a variation attribute filter whose terms have been deleted now matches nothing, as the same filter over products already did. It used to match every variation.
+* Fixed: a schedule that cannot be built no longer stops every other schedule on the site. It pauses itself, records why, and the rest of the tick continues. Previously the failure repeated on every tick and every later schedule was skipped indefinitely — reachable without any bad filter, for example when a licence lapses on a schedule that uses a formula.
+* Fixed: "Run now" on a schedule whose template is no longer valid answers cleanly instead of a critical error.
+* Fixed: an unrecognized filter operator answers with an error naming it, instead of a critical error.
+* Added: the results table shows categories, alongside the brand and tags added in 0.7.1. Category is the filter's first control and was the one thing you could filter by but not see.
+* Fixed: a category or tag whose name contains an ampersand reads as written in the results table. It showed as "Home &amp;amp; Kitchen" while the filter's own dropdown, for the same term, said "Home &amp; Kitchen".
+* Added: a run that stopped part-way can be resumed. If the host restarts or the background queue breaks, an operation is marked failed after ten minutes so it does not hold the catalog — and until now the only ways out were undoing the part that landed or running the whole filter again. Resume carries on down the list the run froze when it started, so it changes exactly what was approved then rather than re-resolving the filter against a catalog that has since moved on.
+* Changed: the backup reminder is per person and says who agreed and when. It used to be a single site-wide tick: one administrator's click stood it down for every colleague who came after, so a newcomer's first change over the whole catalogue could arrive with no warning — and it recorded only that somebody had clicked, at no particular time. Everyone now confirms once, and from then on the confirmation reads "Backup confirmed by <name> on <date>, in version <x>", with a nudge to check it is still recent.
+* Added: undo asks for the same backup confirmation Apply does. It writes at the same scale, it cannot itself be undone, and under Force it discards work done after the operation — the one thing this plugin can destroy that it never recorded and so can never give back.
+* Added: the undo preview pages and can be searched by SKU, like the results table and the audit log. It showed the first twenty rows and nothing else, so on a catalogue of any size the question an undo is actually decided on — will the one I care about be reverted, or skipped because it changed since? — had no answer. Rows now lead with the SKU, and searching narrows what is shown without narrowing what the undo covers.
+* Changed: confirming an undo happens on the page, alongside the numbers and the conflict choice being agreed to, instead of in a browser dialog that could state neither.
+* Changed: undo is one-way. An operation that has been undone no longer offers Undo, and an undo cannot itself be undone — previously it could, which put the original change back and made undo a toggle to ride in both directions, leaving the first operation reading "reverted" while its change was in force again. Once a run has been given back, what remains is to look at what it changed or delete it from the history.
+* Added: resuming a schedule whose time has passed now says so first. Pausing hides a schedule from the supervisor but does not move its next run, so resuming one that was paused past its time makes it due again immediately — it would start within a few minutes with nothing having said so. The confirmation names the time it was due, how soon it will run, and that it runs once rather than once for every run it missed. A schedule paused before its time resumes with no interruption, as before.
+* Fixed: a run that starts while the page is already open now appears by itself. The history list used to schedule its next refresh only if the answer it had just received already contained a running operation, so a page left open with everything finished went quiet for good and a schedule firing overnight was invisible until someone reloaded. It now keeps checking every thirty seconds and switches to every two while something is running, pauses entirely on a hidden tab, and refreshes the moment that tab is looked at again.
+* Added: a running operation can be stopped from the history. Until now the only thing offering to stop one was a disabled Delete button whose tooltip told you to stop the run first, and there was nowhere to do it — so a run writing the wrong thing had to be waited out, undo being refused while it is active. Stopping leaves what was already written in place; undo becomes available once it has stopped.
+* Faster: an operation no longer waits five seconds between batches. On an 18,583-product catalogue that pause, plus a WordPress load, was about 43% of the time a run took. It is shortened only while CatalogOps is writing, so other plugins' background work is unaffected; a host that wants the full pause back can filter `catalogops_queue_sleep_seconds`.
+* Added: `catalogops_schedule_paused` action, fired with the schedule id and the error when the supervisor pauses a schedule itself.
+* The schedule form's summary reads as a notice like the preview above it, and turns amber when a schedule would match products but change none of them — worth knowing before it is saved rather than after it fires.
 
 = 0.7.1 =
 * The results table leads with the SKU and shows brand and tags — both filterable, and until now invisible in the results.

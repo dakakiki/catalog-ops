@@ -24,6 +24,9 @@ use CatalogOps\Operations\Operation_Service;
 use CatalogOps\Operations\Operation_Source;
 use CatalogOps\Operations\Operation_Status;
 use CatalogOps\Operations\Operations;
+use CatalogOps\Operations\Recurrence;
+use CatalogOps\Operations\Schedules;
+use CatalogOps\Operations\Watchdog;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Rest\Operations_Controller;
@@ -38,6 +41,7 @@ final class OperationsControllerTest extends Operations_Database_Case {
 
 	private Operations $operations;
 	private Changes $changes;
+	private Schedules $schedules;
 
 	public function set_up(): void {
 		parent::set_up();
@@ -51,6 +55,7 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		global $wpdb;
 		$this->operations = new Operations( $wpdb, $this->schema );
 		$this->changes    = new Changes( $wpdb, $this->schema );
+		$this->schedules  = new Schedules( $wpdb, $this->schema );
 	}
 
 	public function tear_down(): void {
@@ -137,6 +142,62 @@ final class OperationsControllerTest extends Operations_Database_Case {
 			array(
 				'filter'  => array(),
 				'actions' => array( array( 'type' => 'set', 'field' => 'bogus', 'value' => 'x' ) ),
+			)
+		);
+
+		$this->assertSame( 400, $response->get_status() );
+	}
+
+	/**
+	 * Pins the boundary assert in Operation_Service::create(): a filter naming a
+	 * field the engine cannot answer is refused with a 400, and — this is the point
+	 * of the second assertion — refused before any row is written, which is only
+	 * true while the assert sits ahead of Operations::create() rather than after it.
+	 *
+	 * 0.7.1 dropped the unrecognised condition instead. build_where() skipped the
+	 * empty fragment, so the filter ran one condition lighter and matched strictly
+	 * more objects than were asked for: the operation was created and queued
+	 * against the whole catalogue and answered 201, leaving a row in the history
+	 * for an edit nobody had described.
+	 *
+	 * The same invariant FormulaWriteTest holds one step later — a refused
+	 * operation leaves no draft behind — carried back to the earlier refusal.
+	 */
+	public function test_create_refuses_an_unanswerable_filter_before_recording_a_draft(): void {
+		// A product the widened filter would have swept up and repriced.
+		$this->make_product( 30 );
+
+		$response = $this->post(
+			'/catalogops/v1/operations',
+			array(
+				'filter'  => array( 'conditions' => array( array( 'field' => 'brand', 'operator' => '=', 'value' => 'Acme' ) ) ),
+				'actions' => array( array( 'type' => 'set', 'field' => 'regular_price', 'value' => '5.00' ) ),
+			)
+		);
+
+		$this->assertSame( 400, $response->get_status() );
+
+		// Nothing recorded at all — not a draft that is discarded afterwards, but a
+		// refusal that happens before the history is ever touched.
+		$this->assertCount( 0, $this->operations->recent( 100 ) );
+	}
+
+	/**
+	 * Pins the preview endpoint refusing the same unanswerable filter with a 400
+	 * rather than answering a count computed from a widened filter.
+	 *
+	 * 0.7.1 answered 200 with `matched` describing every product in the shop, and
+	 * because the run resolved the identically widened filter, preview and run
+	 * agreed perfectly — so nothing downstream could notice the difference.
+	 */
+	public function test_preview_refuses_an_unanswerable_filter(): void {
+		$this->make_product( 30 );
+
+		$response = $this->post(
+			'/catalogops/v1/operations/preview',
+			array(
+				'filter'  => array( 'conditions' => array( array( 'field' => 'brand', 'operator' => '=', 'value' => 'Acme' ) ) ),
+				'actions' => array( array( 'type' => 'set', 'field' => 'regular_price', 'value' => '9.99' ) ),
 			)
 		);
 
@@ -296,6 +357,246 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		$this->assertSame( 'skip', $response->get_data()['conflict_policy'] );
 	}
 
+	/**
+	 * The undo confirmation warns that reverting a scheduled run will pause the
+	 * schedule behind it, and this is the boundary that sentence is built from —
+	 * the panel has no other source for the schedule's name. Pinned here as well as
+	 * in the service because it crosses the REST layer untouched, which is easy to
+	 * break by shaping the response rather than passing it through.
+	 */
+	public function test_the_undo_preview_carries_a_live_schedule_to_the_client(): void {
+		$schedule_id = $this->schedules->create(
+			'Nightly cut',
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Recurrence::DAILY,
+			'2099-01-01 00:00:00',
+			'',
+			get_current_user_id()
+		);
+		$op_id       = $this->completed_operation( array( 611, 612 ), $schedule_id );
+
+		$response = $this->post( '/catalogops/v1/operations/' . $op_id . '/undo/preview', array() );
+
+		$this->assertSame( 200, $response->get_status() );
+		$schedule = $response->get_data()['schedule'];
+		$this->assertNotNull( $schedule );
+		$this->assertSame( $schedule_id, $schedule['id'] );
+		$this->assertSame( 'Nightly cut', $schedule['name'] );
+	}
+
+	public function test_the_undo_preview_carries_no_schedule_for_a_run_started_by_hand(): void {
+		$op_id = $this->completed_operation( array( 621 ) );
+
+		$response = $this->post( '/catalogops/v1/operations/' . $op_id . '/undo/preview', array() );
+
+		$this->assertSame( 200, $response->get_status() );
+		$this->assertArrayHasKey( 'schedule', $response->get_data() );
+		$this->assertNull( $response->get_data()['schedule'] );
+	}
+
+	/**
+	 * The history prints this value straight, and the schedules card beside it has
+	 * always printed local time. Shipping only GMT here did not read to a user as a
+	 * timezone question: the same scheduled run showed 08:01 in the history and
+	 * 10:01 as the schedule's last fire, which reads as a run that went off hours
+	 * before it was due.
+	 */
+	public function test_operation_times_are_carried_in_the_sites_own_clock(): void {
+		$this->with_gmt_offset(
+			2,
+			function (): void {
+				$op_id = $this->completed_operation( array( 631 ) );
+
+				$data = rest_do_request(
+					new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id )
+				)->get_data();
+
+				$this->assertSame(
+					get_date_from_gmt( $data['created_at'] ),
+					$data['created_at_local']
+				);
+				// Two hours apart, and the GMT value is the one still stored.
+				$this->assertSame(
+					strtotime( $data['created_at'] ) + 2 * HOUR_IN_SECONDS,
+					strtotime( $data['created_at_local'] )
+				);
+				$this->assertSame(
+					get_date_from_gmt( $data['completed_at'] ),
+					$data['completed_at_local']
+				);
+			}
+		);
+	}
+
+	/**
+	 * The Stop confirmation warns that stopping a scheduled run pauses its schedule,
+	 * and this is all it has to go on: the id is read straight off the operation row,
+	 * so the history pays nothing for it on a poll.
+	 */
+	public function test_the_history_says_whether_a_run_came_from_a_schedule(): void {
+		$schedule_id = $this->schedules->create(
+			'Nightly cut',
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Recurrence::DAILY,
+			'2099-01-01 00:00:00',
+			'',
+			get_current_user_id()
+		);
+
+		$scheduled = $this->completed_operation( array( 641 ), $schedule_id );
+		$by_hand   = $this->completed_operation( array( 642 ) );
+
+		$this->assertSame( $schedule_id, $this->show( $scheduled )['schedule_id'] );
+		$this->assertNull( $this->show( $by_hand )['schedule_id'] );
+	}
+
+	/**
+	 * The history says "not responding" from this flag, and offers no Resume while
+	 * it is set. It has to agree exactly with what the watchdog is about to fail, or
+	 * the screen either accuses a healthy run or keeps promising a dead one.
+	 */
+	public function test_a_run_that_has_stopped_reporting_is_flagged_stalled(): void {
+		$op_id = $this->operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			get_current_user_id()
+		);
+		$this->operations->set_status( $op_id, Operation_Status::RUNNING );
+
+		// A fresh heartbeat is a healthy run, however slow.
+		$this->operations->touch( $op_id );
+		$this->assertFalse( $this->show( $op_id )['is_stalled'] );
+
+		$this->backdate_progress( $op_id, Watchdog::STALL_THRESHOLD + 60 );
+		$this->assertTrue( $this->show( $op_id )['is_stalled'] );
+
+		// And the same row, once it is no longer running, is not stalled but simply
+		// over — the watchdog has had it, and Resume is the control that applies.
+		$this->operations->set_status( $op_id, Operation_Status::FAILED );
+		$this->assertFalse( $this->show( $op_id )['is_stalled'] );
+	}
+
+	/**
+	 * The history counts rather than sitting silent until a threshold trips, so it
+	 * needs the duration and not just the verdict. Null once a run is over: a
+	 * finished operation is not quiet, it is done, and a screen counting seconds
+	 * beside it would be describing nothing.
+	 */
+	public function test_the_history_is_told_how_long_a_run_has_been_quiet(): void {
+		$op_id = $this->operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			get_current_user_id()
+		);
+		$this->operations->set_status( $op_id, Operation_Status::RUNNING );
+
+		$this->operations->touch( $op_id );
+		$this->assertLessThan( 5, $this->show( $op_id )['quiet_seconds'] );
+
+		$this->backdate_progress( $op_id, 90 );
+		$quiet = $this->show( $op_id )['quiet_seconds'];
+		$this->assertGreaterThanOrEqual( 90, $quiet );
+		$this->assertLessThan( 100, $quiet );
+
+		$this->operations->set_status( $op_id, Operation_Status::COMPLETED, true );
+		$this->assertNull( $this->show( $op_id )['quiet_seconds'] );
+	}
+
+	/**
+	 * A queued run has no heartbeat yet, and must not be read as one that has gone
+	 * quiet — the watchdog's query ignores it for the same reason.
+	 */
+	public function test_a_run_that_has_not_started_is_not_flagged_stalled(): void {
+		$op_id = $this->operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			get_current_user_id()
+		);
+		$this->operations->set_status( $op_id, Operation_Status::QUEUED );
+
+		$this->assertFalse( $this->show( $op_id )['is_stalled'] );
+	}
+
+	/**
+	 * Push an operation's heartbeat into the past.
+	 *
+	 * @param int $op_id   Operation id.
+	 * @param int $seconds How far back.
+	 */
+	private function backdate_progress( int $op_id, int $seconds ): void {
+		global $wpdb;
+
+		$wpdb->update(
+			$this->schema->operations_table(),
+			array( 'last_progress_at' => gmdate( 'Y-m-d H:i:s', time() - $seconds ) ),
+			array( 'id' => $op_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+	}
+
+	/**
+	 * One operation, as the history sees it.
+	 *
+	 * @param int $op_id Operation id.
+	 * @return array<string, mixed>
+	 */
+	private function show( int $op_id ): array {
+		return rest_do_request(
+			new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id )
+		)->get_data();
+	}
+
+	public function test_an_unfinished_operation_has_no_local_completion_time(): void {
+		$op_id = $this->operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::UI,
+			get_current_user_id()
+		);
+
+		$data = rest_do_request(
+			new WP_REST_Request( 'GET', '/catalogops/v1/operations/' . $op_id )
+		)->get_data();
+
+		$this->assertNull( $data['completed_at'] );
+		$this->assertNull( $data['completed_at_local'] );
+	}
+
+	/**
+	 * Run a test body with the site on a fixed UTC offset, restoring the original
+	 * settings afterwards. A fixed offset rather than a named zone so the
+	 * expectation cannot shift with daylight saving.
+	 *
+	 * @param int      $hours Offset from UTC.
+	 * @param callable $body  The assertions to run.
+	 */
+	private function with_gmt_offset( int $hours, callable $body ): void {
+		$original_string = get_option( 'timezone_string' );
+		$original_offset = get_option( 'gmt_offset' );
+
+		update_option( 'timezone_string', '' );
+		update_option( 'gmt_offset', $hours );
+
+		try {
+			$body();
+		} finally {
+			update_option( 'timezone_string', $original_string );
+			update_option( 'gmt_offset', $original_offset );
+		}
+	}
+
 	public function test_undo_preview_unknown_operation_is_404(): void {
 		$response = $this->post( '/catalogops/v1/operations/999999/undo/preview', array() );
 
@@ -433,13 +734,14 @@ final class OperationsControllerTest extends Operations_Database_Case {
 		);
 	}
 
-	private function completed_operation( array $object_ids ): int {
+	private function completed_operation( array $object_ids, ?int $schedule_id = null ): int {
 		$op_id = $this->operations->create(
 			new Filter(),
 			array( new Set_Value( 'regular_price', '9.99' ) ),
 			Operation_Mode::SAFE,
-			Operation_Source::UI,
-			get_current_user_id()
+			null === $schedule_id ? Operation_Source::UI : Operation_Source::SCHEDULE,
+			get_current_user_id(),
+			$schedule_id
 		);
 
 		$rows = array_map(
@@ -507,6 +809,7 @@ final class OperationsControllerTest extends Operations_Database_Case {
 			Operation_Mode::SAFE,
 			Operation_Source::UNDO,
 			get_current_user_id(),
+			null,
 			$parent
 		);
 		$this->operations->set_status( $undo, Operation_Status::COMPLETED, true );

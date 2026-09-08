@@ -16,6 +16,8 @@
 import {
 	createRoot,
 	render,
+	createContext,
+	useContext,
 	useState,
 	useCallback,
 	useEffect,
@@ -26,6 +28,171 @@ import { __, _n, sprintf } from '@wordpress/i18n';
 import './style.css';
 
 const PER_PAGE = 10;
+
+/**
+ * The onboarding record — whether this user has acknowledged the backup reminder,
+ * and, when they have, who and when.
+ *
+ * A context rather than a prop because the two places that need it sit far apart:
+ * the bulk-edit panel is a child of the app, and the undo panel is three levels
+ * down inside a history row. Threading it through History and OperationRow would
+ * make both of them carry something neither has any use for, and the two readers
+ * have to agree — acknowledging in one has to stand the other down too.
+ *
+ * Defaults to acknowledged. A failed fetch must not put a gate in front of
+ * someone's undo; the reminder is a courtesy, and the REST layer is where real
+ * limits are enforced.
+ */
+const OnboardingContext = createContext( {
+	backup_ack: true,
+	backup_ack_by: '',
+	backup_ack_at: '',
+	backup_ack_version: '',
+	retention_days: 30,
+	// Carried alongside the data so whichever panel takes the acknowledgement can
+	// stand the other one down without either knowing the other exists.
+	onAcknowledge: () => {},
+} );
+
+/**
+ * The backup reminder, in whichever of its two states applies: the gate before a
+ * user's first destructive run, or the record of when they passed it.
+ *
+ * Showing the record rather than nothing is the point of storing one. An
+ * acknowledgement from eight months ago is not evidence that a backup exists
+ * today, and the only person who can judge that is looking at this panel.
+ *
+ * @param {Object}   props         Component props.
+ * @param {boolean}  props.checked Whether the box is ticked this time round.
+ * @param {Function} props.onCheck Called as the box is ticked or unticked.
+ */
+function BackupReminder( { checked, onCheck } ) {
+	const onboarding = useContext( OnboardingContext );
+
+	if ( onboarding.backup_ack ) {
+		return (
+			<p className="catalogops-muted">
+				{ sprintf(
+					/* translators: 1: who acknowledged, 2: when, 3: the plugin version then. */
+					__(
+						'Backup confirmed by %1$s on %2$s, in version %3$s. If that was a while ago, now is the moment to check it is still recent.',
+						'catalogops'
+					),
+					onboarding.backup_ack_by,
+					onboarding.backup_ack_at,
+					onboarding.backup_ack_version
+				) }
+			</p>
+		);
+	}
+
+	return (
+		<>
+			<p className="catalogops-confirm__lead">
+				{ __(
+					'Before your first change: CatalogOps is safe, but it is not a backup.',
+					'catalogops'
+				) }
+			</p>
+			<label
+				className="catalogops-confirm__ack"
+				htmlFor="catalogops-backup-ack"
+			>
+				<input
+					id="catalogops-backup-ack"
+					type="checkbox"
+					checked={ checked }
+					onChange={ ( e ) => onCheck( e.target.checked ) }
+				/>
+				{ sprintf(
+					/* translators: %d: the number of days changes remain reversible. */
+					__(
+						'I have a recent backup, and I understand this change can be undone for %d days from History.',
+						'catalogops'
+					),
+					onboarding.retention_days || 30
+				) }
+			</label>
+		</>
+	);
+}
+
+/**
+ * How often the operation history re-asks the server while something is running.
+ */
+const HISTORY_POLL_ACTIVE_MS = 2000;
+
+/**
+ * How often it asks while nothing is running and nothing is due.
+ *
+ * This is the interval that decides how long a run started by something other
+ * than this browser tab stays invisible, and it has to be shorter than the runs
+ * themselves or it reports history rather than progress: measured on the
+ * 18,583-product catalogue, a 250-product schedule finished in 28 seconds and a
+ * 12-product one in a single second. A first attempt at half a minute could
+ * miss both from beginning to end, so the row appeared already completed and
+ * nothing was ever seen to happen.
+ *
+ * Eight seconds catches anything that runs for longer than a moment, and the
+ * expensive window — a schedule about to fire — does not rely on this at all;
+ * see POLL_DUE_MS.
+ */
+const HISTORY_POLL_IDLE_MS = 8000;
+
+/**
+ * How often both lists ask while a schedule is due to fire.
+ *
+ * A due schedule is the one moment when a new row is about to appear without
+ * anyone in the browser having asked for it, and it is knowable in advance:
+ * the schedules list carries next_run. So the page speeds up before the run
+ * starts rather than discovering it afterwards.
+ */
+const POLL_DUE_MS = 2000;
+
+/**
+ * How often the panel above the button asks about the run it just started.
+ *
+ * Faster than either list, because this is the one a user is watching on purpose:
+ * they pressed Apply and are waiting for the bar to move.
+ */
+const OPERATION_POLL_MS = 1500;
+
+/**
+ * How soon it asks again after a request that never answered.
+ *
+ * Slower than the ordinary cadence, because a poll fails when the server is not
+ * there — a host being restarted, a laptop that lost its network — and hammering
+ * something that is down helps nobody. Still far shorter than a run, so the panel
+ * catches up within seconds of the server coming back.
+ */
+const OPERATION_RETRY_MS = 4000;
+
+/**
+ * How long a run may go without reporting before the history mentions it.
+ *
+ * Chunks land seconds apart, so a minute of silence is already out of the
+ * ordinary — but it is not yet news. The server decides when a run is genuinely
+ * not responding; this only decides when it is worth saying that nothing has
+ * happened for a while, which is a smaller claim and belongs to the screen.
+ */
+const QUIET_AFTER_SECONDS = 60;
+
+/**
+ * A number of seconds as a person would say it: "48s", "1m 20s".
+ *
+ * Minutes and seconds only. Anything longer than an hour without a heartbeat is
+ * not a duration the reader is measuring any more, and by then the row says the
+ * run is not responding instead.
+ *
+ * @param {number} seconds How long it has been quiet.
+ * @return {string} The duration, spoken.
+ */
+const quietFor = ( seconds ) => {
+	const whole = Math.max( 0, Math.floor( seconds || 0 ) );
+	const mins = Math.floor( whole / 60 );
+
+	return mins > 0 ? `${ mins }m ${ whole % 60 }s` : `${ whole }s`;
+};
 
 /**
  * Plan capabilities for the current site, surfaced by the server via
@@ -893,6 +1060,43 @@ function operatorFor( value ) {
  * @return {Object} Filter in the API's shape (scope included, so the same filter
  * drives the query, the preview, and the operation).
  */
+/**
+ * The tag list's one entry that is not a tag: "has none at all".
+ *
+ * A string, so it cannot collide with a term id — those are numbers, and the
+ * real ones go through `Number()` on the way into a condition while this never
+ * does.
+ */
+const NO_TAG = 'none';
+
+/**
+ * Reconcile a tag selection with the "Without tag" entry, which cannot coexist
+ * with a real one: no product both carries a tag and carries none, so a filter
+ * saying both would always match nothing.
+ *
+ * Rather than refuse the combination and make the user undo it, whichever was
+ * chosen last wins — picking "Without tag" clears the tags, and picking a tag
+ * clears "Without tag".
+ *
+ * @param {Array} previous The selection before this change.
+ * @param {Array} next     The selection the control is proposing.
+ * @return {Array} The selection to keep.
+ */
+function reconcileTagSelection( previous, next ) {
+	const had = previous.map( String ).includes( NO_TAG );
+	const has = next.map( String ).includes( NO_TAG );
+
+	if ( has && ! had ) {
+		return [ NO_TAG ];
+	}
+
+	if ( has && next.length > 1 ) {
+		return next.filter( ( id ) => String( id ) !== NO_TAG );
+	}
+
+	return next;
+}
+
 function buildFilter( form, scope, brandField ) {
 	const conditions = [];
 
@@ -937,11 +1141,23 @@ function buildFilter( form, scope, brandField ) {
 		} );
 	}
 	if ( form.tag && form.tag.length ) {
-		conditions.push( {
-			field: 'tag',
-			operator: operatorFor( form.tagMode ),
-			value: form.tag.map( Number ),
-		} );
+		if ( form.tag.map( String ).includes( NO_TAG ) ) {
+			// "Without tag" asks about the taxonomy rather than about which terms,
+			// so it carries no value — the same shape the attribute pair below uses
+			// when no value is picked. The mode still governs, and reads the way the
+			// rest of the row does: the selection is what to keep, so excluding the
+			// untagged leaves exactly the products that do carry a tag.
+			conditions.push( {
+				field: 'tag',
+				operator: 'not_in' === form.tagMode ? 'exists' : 'not_exists',
+			} );
+		} else {
+			conditions.push( {
+				field: 'tag',
+				operator: operatorFor( form.tagMode ),
+				value: form.tag.map( Number ),
+			} );
+		}
 	}
 	if ( form.brand.length && brandField ) {
 		conditions.push( {
@@ -986,6 +1202,24 @@ function buildFilter( form, scope, brandField ) {
 function useOperationPoll( operation, setOperation, onDone ) {
 	const timer = useRef( null );
 
+	// Counts polls that never answered. It exists to restart the chain, because the
+	// chain is driven by `operation` changing: each answer replaces the snapshot,
+	// which re-runs this effect, which asks again. A request that fails replaces
+	// nothing, so before this it scheduled no successor and the panel stopped asking
+	// for the rest of the session — however long the run went on.
+	//
+	// Reported live on 2026-09-06: the host was stopped mid-run and started again
+	// fifteen minutes later, the operation recovered by itself and finished all
+	// 1,596 objects, and this panel still read 300 while the history a few
+	// centimetres below it had moved on to 1,200 and then to done. Neither the run
+	// nor the stored counter was wrong. The only thing that had died was this timer,
+	// killed by the one dropped request at the moment the server went away.
+	//
+	// The list below had this same defect and was rewritten for it; this hook was
+	// left behind. Counting the failures rather than swallowing them is what makes
+	// the retry a state change, which is the only thing this effect responds to.
+	const [ missed, setMissed ] = useState( 0 );
+
 	useEffect( () => {
 		if ( ! operation ) {
 			return undefined;
@@ -995,16 +1229,39 @@ function useOperationPoll( operation, setOperation, onDone ) {
 			return undefined;
 		}
 
-		timer.current = setTimeout( () => {
-			apiFetch( {
-				path: `/catalogops/v1/operations/${ operation.id }`,
-			} )
-				.then( setOperation )
-				.catch( () => {} );
-		}, 1500 );
+		let cancelled = false;
 
-		return () => clearTimeout( timer.current );
-	}, [ operation, setOperation, onDone ] );
+		timer.current = setTimeout(
+			() => {
+				apiFetch( {
+					path: `/catalogops/v1/operations/${ operation.id }`,
+				} )
+					.then( ( next ) => {
+						if ( cancelled ) {
+							return;
+						}
+						// Both setters, and the order does not matter: React batches
+						// them into one re-render, so the effect re-runs once and
+						// schedules one successor. Resetting to nought when it is
+						// already nought is a no-op, so an uninterrupted run pays
+						// nothing for this.
+						setOperation( next );
+						setMissed( 0 );
+					} )
+					.catch( () => {
+						if ( ! cancelled ) {
+							setMissed( ( n ) => n + 1 );
+						}
+					} );
+			},
+			missed > 0 ? OPERATION_RETRY_MS : OPERATION_POLL_MS
+		);
+
+		return () => {
+			cancelled = true;
+			clearTimeout( timer.current );
+		};
+	}, [ operation, setOperation, onDone, missed ] );
 }
 
 /**
@@ -1164,7 +1421,8 @@ function useWaitingSeconds( active ) {
 const SLOW_START_SECONDS = 20;
 
 /**
- * A labelled progress bar for an in-flight or finished operation.
+ * A labelled progress bar for an operation that is still running, and the report
+ * for one that finished with something to explain.
  *
  * Applying does not start the work — it queues it, and the background runner
  * picks it up on its own schedule. On a site where WP-Cron only fires on the
@@ -1172,6 +1430,9 @@ const SLOW_START_SECONDS = 20;
  * indistinguishable from a stuck one. So an operation that has processed nothing
  * yet gets an explicitly indeterminate bar and a spinner: something is happening,
  * it just is not measurable yet. If the wait runs long, the bar says why.
+ *
+ * It renders nothing at all once a run has finished cleanly — see the guard
+ * below.
  *
  * @param {Object} props    Component props.
  * @param {Object} props.op The operation to render.
@@ -1181,6 +1442,48 @@ function ProgressBar( { op } ) {
 	const waiting = ! settled && op.processed === 0;
 	const waited = useWaitingSeconds( waiting );
 	const skipped = ( op.skip_reasons || [] ).filter( ( r ) => r.count > 0 );
+
+	// Once a run is over the bar has answered its question and every part of it that
+	// measures progress is a leftover, sitting above a history row that carries the
+	// same figures and keeps them. So the counter and the bar both go.
+	//
+	// What can outlive the run is what it could not do. That is not progress, it is
+	// an outcome, and it is the one thing the history row does not say on its face.
+	// It was tried the other way first — keeping the whole panel whenever anything
+	// was skipped, on the grounds that the counter gives the explanation its scale —
+	// and a real run settled the argument: 3,042 items changed and 4 left alone
+	// because they already held the value, which is a footnote, and it held a full
+	// green completed bar on the screen to say so.
+	if ( settled ) {
+		if ( op.failed === 0 && skipped.length === 0 ) {
+			return null;
+		}
+
+		return (
+			<div className="catalogops-progress">
+				{ op.failed > 0 && (
+					<p>
+						{ sprintf(
+							/* translators: %d: number of items that could not be changed. */
+							_n(
+								'%d item could not be changed.',
+								'%d items could not be changed.',
+								op.failed,
+								'catalogops'
+							),
+							op.failed
+						) }
+					</p>
+				) }
+				{ skipped.length > 0 && (
+					<div className="catalogops-progress__note">
+						<p>{ __( 'Not changed:', 'catalogops' ) }</p>
+						<ReasonList items={ skipped } />
+					</div>
+				) }
+			</div>
+		);
+	}
 
 	return (
 		<div
@@ -1247,12 +1550,6 @@ function ProgressBar( { op } ) {
 						'catalogops'
 					) }
 				</p>
-			) }
-			{ settled && skipped.length > 0 && (
-				<div className="catalogops-progress__note">
-					<p>{ __( 'Not changed:', 'catalogops' ) }</p>
-					<ReasonList items={ skipped } />
-				</div>
 			) }
 		</div>
 	);
@@ -1567,6 +1864,18 @@ function BulkEdit( {
 		!! preview && preview.matched > 0 && preview.applicable === 0;
 	const omittedBy = ( preview && preview.omitted_by ) || [];
 	const previewWarnings = ( preview && preview.warnings ) || [];
+
+	// The schedule form's own summary is the last thing read before creating
+	// something that will run unattended, so it is a notice like the preview
+	// panel's rather than a loose paragraph of numbers under a form. Green only
+	// when something would actually change: a schedule that would write nothing
+	// is the case worth catching before it is saved, not after it has fired.
+	let schedulePreviewTone = 'notice-info';
+
+	if ( preview ) {
+		schedulePreviewTone =
+			preview.applicable > 0 ? 'notice-success' : 'notice-warning';
+	}
 
 	/**
 	 * How many items were omitted under one reason code.
@@ -2512,7 +2821,9 @@ function BulkEdit( {
 									</div>
 								</div>
 
-								<div className="catalogops-filter-row catalogops-schedule-preview">
+								<div
+									className={ `catalogops-filter-row catalogops-schedule-preview notice ${ schedulePreviewTone }` }
+								>
 									{ preview ? (
 										<>
 											<p>
@@ -2587,37 +2898,7 @@ function BulkEdit( {
 
 			{ confirming && (
 				<div className="catalogops-confirm">
-					{ ! backupAck ? (
-						<>
-							<p className="catalogops-confirm__lead">
-								{ __(
-									'Before your first change: CatalogOps is safe, but it is not a backup.',
-									'catalogops'
-								) }
-							</p>
-							<label
-								className="catalogops-confirm__ack"
-								htmlFor="catalogops-backup-ack"
-							>
-								<input
-									id="catalogops-backup-ack"
-									type="checkbox"
-									checked={ backupChecked }
-									onChange={ ( e ) =>
-										setBackupChecked( e.target.checked )
-									}
-								/>
-								{ sprintf(
-									/* translators: %d: the number of days changes remain reversible. */
-									__(
-										'I have a recent backup, and I understand this change can be undone for %d days from History.',
-										'catalogops'
-									),
-									retentionDays || 30
-								) }
-							</label>
-						</>
-					) : (
+					{ backupAck && (
 						<p className="catalogops-confirm__lead">
 							{ __(
 								'Apply this change to every matching item?',
@@ -2625,6 +2906,10 @@ function BulkEdit( {
 							) }
 						</p>
 					) }
+					<BackupReminder
+						checked={ backupChecked }
+						onCheck={ setBackupChecked }
+					/>
 					<div className="catalogops-confirm__actions">
 						{ /* Green because this is the one that runs — the same
 						     vocabulary the row actions already use, and the
@@ -2868,38 +3153,85 @@ function UndoPanel( { op, onDone } ) {
 	const [ operation, setOperation ] = useState( null );
 	const [ error, setError ] = useState( '' );
 	const [ busy, setBusy ] = useState( false );
+	const [ page, setPage ] = useState( 1 );
+	// Draft is what is typed; sku is the applied search, on Enter or Search —
+	// the same split the audit table uses, so a half-typed SKU does not re-query.
+	const [ draft, setDraft ] = useState( '' );
+	const [ sku, setSku ] = useState( '' );
+	const [ confirming, setConfirming ] = useState( false );
+	const [ backupChecked, setBackupChecked ] = useState( false );
+	const [ loading, setLoading ] = useState( true );
+	const onboarding = useContext( OnboardingContext );
 
 	useOperationPoll( operation, setOperation, onDone );
 
+	// Its own flag, not `busy`: busy also covers starting the undo, and the table
+	// must not say "Loading…" while the run it is about to launch is being queued.
 	const loadPreview = useCallback(
-		( withPolicy ) => {
+		( withPolicy, atPage, forSku ) => {
+			setLoading( true );
 			setBusy( true );
 			setError( '' );
 			apiFetch( {
 				path: `/catalogops/v1/operations/${ op.id }/undo/preview`,
 				method: 'POST',
-				data: { conflict_policy: withPolicy },
+				data: {
+					conflict_policy: withPolicy,
+					page: atPage,
+					per_page: CHANGES_PER_PAGE,
+					sku: forSku,
+				},
 			} )
 				.then( setPreview )
 				.catch( ( err ) => setError( err.message ) )
-				.finally( () => setBusy( false ) );
+				.finally( () => {
+					setBusy( false );
+					setLoading( false );
+				} );
 		},
 		[ op.id ]
 	);
 
 	useEffect( () => {
-		loadPreview( policy );
-	}, [ policy, loadPreview ] );
+		loadPreview( policy, page, sku );
+	}, [ policy, page, sku, loadPreview ] );
 
-	const driftCount = preview
-		? preview.sample.filter( ( s ) => s.drift ).length
-		: 0;
+	const applySearch = () => {
+		setPage( 1 );
+		setSku( draft.trim() );
+	};
 
+	const items = preview ? preview.items : [];
+	const driftCount = items.filter( ( s ) => s.drift ).length;
+	const pages = Math.max(
+		1,
+		Math.ceil( ( preview ? preview.matched : 0 ) / CHANGES_PER_PAGE )
+	);
+
+	// Confirmed on the panel, like deleting an operation or stopping a run, rather
+	// than through window.confirm: a browser dialog cannot state the numbers or
+	// which conflict policy is about to be used, which is the whole of what the
+	// user is agreeing to here.
 	const runUndo = () => {
-		// eslint-disable-next-line no-alert
-		if ( ! window.confirm( __( 'Run this undo now?', 'catalogops' ) ) ) {
-			return;
+		// The backup reminder guards this as it guards Apply, and with a sharper
+		// reason: an undo writes at the same scale, it cannot itself be undone, and
+		// under Force it discards work done after the operation — the one thing this
+		// plugin can destroy that it never recorded and so can never give back.
+		if ( ! onboarding.backup_ack ) {
+			if ( ! backupChecked ) {
+				return;
+			}
+
+			apiFetch( {
+				path: '/catalogops/v1/settings/onboarding',
+				method: 'POST',
+				data: { backup_ack: true },
+			} ).catch( () => {} );
+
+			onboarding.onAcknowledge();
 		}
+
+		setConfirming( false );
 		setBusy( true );
 		setError( '' );
 		apiFetch( {
@@ -2945,6 +3277,18 @@ function UndoPanel( { op, onDone } ) {
 					/>{ ' ' }
 					{ __( 'Force — overwrite anyway', 'catalogops' ) }
 				</label>
+				{ /* Drift is the one word here that means nothing until someone
+				     explains it, and the choice above decides whether a later edit
+				     survives — so the explanation is on the panel rather than
+				     behind a tooltip, naming what each option does to it. */ }
+				<div className="notice notice-info">
+					<p>
+						{ __(
+							'“Drift” means the item changed after this operation ran — by hand, an import, or another plugin: Skip leaves those items exactly as they are now, while Force restores the value from before the operation and discards the later change.',
+							'catalogops'
+						) }
+					</p>
+				</div>
 			</fieldset>
 
 			{ error && (
@@ -2953,29 +3297,87 @@ function UndoPanel( { op, onDone } ) {
 				</div>
 			) }
 
+			{ /* Outside the panel below, not inside it. The panel only exists once a
+			     preview has arrived, so a notice placed within it could never appear
+			     on the first open — which is the one time the wait is long enough to
+			     need explaining, because the server is reading each object's current
+			     value to work out what has drifted. */ }
+			{ loading && ! operation && (
+				<p className="catalogops-loading">
+					{ __( 'Loading…', 'catalogops' ) }
+				</p>
+			) }
+
 			{ preview && ! operation && (
 				<div className="catalogops-preview">
-					<p>
-						{ sprintf(
-							/* translators: %d: number of recorded changes. */
-							__( '%d changes will be reverted.', 'catalogops' ),
-							preview.total
-						) }
-						{ driftCount > 0 &&
-							' ' +
-								sprintf(
-									/* translators: %d: number of drifted objects in the sample. */
-									__(
-										'%d in this sample changed since the operation.',
-										'catalogops'
-									),
-									driftCount
+					{ /* Count on the left, search on the right, one line above the
+					     table — the shape the results table and the audit log already
+					     use. The search earns its place here because this is the table
+					     an undo is agreed to on: a fixed sample of the first rows left
+					     "will the one I care about be skipped?" unanswerable on a
+					     catalogue of any size. */ }
+					<div className="catalogops-results-bar">
+						<p>
+							{ sprintf(
+								/* translators: %d: number of recorded changes. */
+								__(
+									'%d changes will be reverted.',
+									'catalogops'
+								),
+								preview.total
+							) }
+							{ sku !== '' &&
+								' ' +
+									sprintf(
+										/* translators: 1: rows matching the search, 2: the SKU searched for. */
+										__(
+											'Showing the %1$d matching “%2$s” — the undo still covers all of them.',
+											'catalogops'
+										),
+										preview.matched,
+										sku
+									) }
+							{ driftCount > 0 &&
+								' ' +
+									sprintf(
+										/* translators: %d: number of drifted objects on this page. */
+										__(
+											'%d on this page changed since the operation.',
+											'catalogops'
+										),
+										driftCount
+									) }
+						</p>
+
+						<div className="catalogops-search">
+							<input
+								id={ `undo-search-${ op.id }` }
+								type="search"
+								placeholder={ __(
+									'SKU, e.g. COPS-1234',
+									'catalogops'
 								) }
-					</p>
+								aria-label={ __( 'Find by SKU', 'catalogops' ) }
+								value={ draft }
+								onChange={ ( e ) => setDraft( e.target.value ) }
+								onKeyDown={ ( e ) =>
+									e.key === 'Enter' && applySearch()
+								}
+							/>
+							<button
+								className="button"
+								onClick={ applySearch }
+								disabled={ busy }
+							>
+								{ __( 'Search', 'catalogops' ) }
+							</button>
+						</div>
+					</div>
+
 					<table className="wp-list-table widefat fixed striped">
 						<thead>
 							<tr>
-								<th>{ __( 'Object', 'catalogops' ) }</th>
+								<th>{ __( 'SKU', 'catalogops' ) }</th>
 								<th>{ __( 'Field', 'catalogops' ) }</th>
 								<th>{ __( 'Now', 'catalogops' ) }</th>
 								<th>{ __( 'Restore to', 'catalogops' ) }</th>
@@ -2983,14 +3385,35 @@ function UndoPanel( { op, onDone } ) {
 							</tr>
 						</thead>
 						<tbody>
-							{ preview.sample.map( ( s, i ) => (
+							{ items.length === 0 && ! loading && (
+								<tr>
+									<td colSpan="5">
+										{ sku === ''
+											? __(
+													'Nothing to revert.',
+													'catalogops'
+											  )
+											: __(
+													'No item with that SKU was changed by this run.',
+													'catalogops'
+											  ) }
+									</td>
+								</tr>
+							) }
+							{ items.map( ( s, i ) => (
 								<tr
 									key={ i }
 									className={
 										s.action === 'skip' ? 'is-drift' : ''
 									}
 								>
-									<td>{ s.id }</td>
+									<td>
+										{ s.sku || (
+											<span className="catalogops-muted">
+												#{ s.id }
+											</span>
+										) }
+									</td>
 									<td>{ s.field }</td>
 									<td className="catalogops-num">
 										{ s.current }
@@ -3016,13 +3439,127 @@ function UndoPanel( { op, onDone } ) {
 							) ) }
 						</tbody>
 					</table>
-					<button
-						className="button button-primary"
-						onClick={ runUndo }
-						disabled={ busy || running || preview.total === 0 }
-					>
-						{ __( 'Run undo', 'catalogops' ) }
-					</button>
+
+					<Pagination
+						page={ page }
+						pages={ pages }
+						busy={ busy }
+						onPage={ setPage }
+					/>
+
+					{ /* Everything above is the evidence — the rows, the search, the
+					     pager. Everything below acts on it. The rule says which is
+					     which, so the button does not read as another table control. */ }
+					<hr className="catalogops-divider" />
+
+					{ /* The button gives way to the question rather than sitting
+					     above it: two "Run undo" controls on screen at once leaves
+					     the user guessing which one is the real one. Disabled on the
+					     whole undo being empty, never on the page or the search being
+					     empty — searching narrows what is shown, not what would
+					     run. */ }
+					{ ! confirming && (
+						<button
+							className="button catalogops-button--undo"
+							onClick={ () => setConfirming( true ) }
+							disabled={ busy || running || preview.total === 0 }
+						>
+							{ __( 'Run undo', 'catalogops' ) }
+						</button>
+					) }
+
+					{ confirming && (
+						<div className="catalogops-confirm">
+							<p className="catalogops-confirm__lead">
+								{ sprintf(
+									/* translators: 1: operation id, 2: number of recorded changes. */
+									__(
+										'Undo operation #%1$d — %2$d recorded changes?',
+										'catalogops'
+									),
+									op.id,
+									preview.total
+								) }
+							</p>
+							<p>
+								{ policy === 'skip'
+									? __(
+											'Every item still holding the value this run gave it goes back to what it was before. Anything changed since is left exactly as it is now and reported as skipped.',
+											'catalogops'
+									  )
+									: __(
+											'Every item goes back to what it was before this run — including those changed since, whose later value is discarded. This is the forcing option.',
+											'catalogops'
+									  ) }
+							</p>
+							<p>
+								{ __(
+									'It runs in the background and can be paused from the history while it works. Undoing cannot itself be undone.',
+									'catalogops'
+								) }
+							</p>
+							{ /* Only present when the server found a schedule behind this
+							     run that is still active. Undoing pauses it, and saying so
+							     here is the only place the two facts meet: without it the
+							     next tick rebuilds the same operation from the same stored
+							     template and writes back exactly what is being reverted,
+							     and the schedules card is a different screen that would
+							     contradict the history long after the change was already
+							     back. */ }
+							{ preview.schedule && (
+								<p>
+									{ sprintf(
+										/* translators: %s: the schedule's name, or #id when it has none. */
+										__(
+											'This run came from the schedule “%s”, which is still active. Undoing pauses it, so it cannot put the change back — resume it from Schedules whenever you want it running again.',
+											'catalogops'
+										),
+										preview.schedule.name ||
+											`#${ preview.schedule.id }`
+									) }
+								</p>
+							) }
+							<BackupReminder
+								checked={ backupChecked }
+								onCheck={ setBackupChecked }
+							/>
+							<div className="catalogops-confirm__actions">
+								{ /* Orange, like the undo icon in the row above: this
+								     app gives reversing its own colour, and the
+								     confirmation is not the place to change dialect. */ }
+								<button
+									className="button catalogops-button--undo"
+									onClick={ runUndo }
+									disabled={
+										busy ||
+										( ! onboarding.backup_ack &&
+											! backupChecked )
+									}
+								>
+									{ __( 'Run undo', 'catalogops' ) }
+								</button>
+								<button
+									className="button"
+									onClick={ () => setConfirming( false ) }
+									disabled={ busy }
+								>
+									{ __( 'Cancel', 'catalogops' ) }
+								</button>
+								{ busy && (
+									<span
+										className="catalogops-inline-loading"
+										aria-live="polite"
+									>
+										<span
+											className="catalogops-spinner"
+											aria-hidden="true"
+										/>
+										{ __( 'Starting…', 'catalogops' ) }
+									</span>
+								) }
+							</div>
+						</div>
+					) }
 				</div>
 			) }
 
@@ -3086,8 +3623,11 @@ function IconButton( {
  * @param {Object}   props.op        The operation.
  * @param {Function} props.onChanged Called when an undo or delete from this row
  *                                   finishes, so the list reloads.
+ * @param {boolean}  props.offline   Whether the last poll failed, in which case
+ *                                   the row's numbers are stale and its controls
+ *                                   are withheld rather than shown as usable.
  */
-function OperationRow( { op, onChanged } ) {
+function OperationRow( { op, onChanged, offline = false } ) {
 	const [ open, setOpen ] = useState( null ); // 'changes' | 'undo' | 'delete' | null
 	const [ busy, setBusy ] = useState( false );
 	const [ error, setError ] = useState( '' );
@@ -3098,6 +3638,23 @@ function OperationRow( { op, onChanged } ) {
 	// Deleting mid-write would strand the operation's remaining chunks, so the
 	// control is closed off until the run is cancelled.
 	const stillRunning = op.status === 'queued' || op.status === 'running';
+
+	// One control, one result — a paused run with its frozen list intact — under
+	// two names, because the user is not doing the same thing. Pausing a run that is
+	// working is a considered interruption; stopping one that has died is how you
+	// take it back, and it is the only way to, since a stalled run still holds the
+	// write lock and Resume is therefore not offered. The stalled notice below tells
+	// them to press Stop, so the button has to say Stop.
+	const stopping = op.is_stalled;
+
+	// Silence worth mentioning, well short of silence worth alarming about. Chunks
+	// land seconds apart, so a minute without one is already unusual — but saying so
+	// quietly, with a number that grows, is a different act from declaring the run
+	// dead, and the reader can tell the two apart without being told which is which.
+	const quiet =
+		! op.is_stalled &&
+		typeof op.quiet_seconds === 'number' &&
+		op.quiet_seconds >= QUIET_AFTER_SECONDS;
 
 	const confirmDelete = () => {
 		setBusy( true );
@@ -3114,15 +3671,63 @@ function OperationRow( { op, onChanged } ) {
 			.finally( () => setBusy( false ) );
 	};
 
+	// The route has existed since M2 and nothing called it: the history offered a
+	// disabled Delete whose tooltip told you to cancel the run first, and there was
+	// nowhere to do that. Undo is refused while an operation is active, so without
+	// this the only way to stop a run that is writing the wrong thing was to wait
+	// for it to finish.
+	const confirmResume = () => {
+		setBusy( true );
+		setError( '' );
+		apiFetch( {
+			path: `/catalogops/v1/operations/${ op.id }/resume`,
+			method: 'POST',
+		} )
+			.then( () => {
+				setOpen( null );
+				onChanged();
+			} )
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusy( false ) );
+	};
+
+	const confirmCancel = () => {
+		setBusy( true );
+		setError( '' );
+		apiFetch( {
+			// Two routes, because they mean two different things to the schedule
+			// behind the run: stopping a working run is the user's decision and
+			// pauses it, taking back a dead one is a machine failure and must not.
+			path: `/catalogops/v1/operations/${ op.id }/${
+				stopping ? 'take-over' : 'cancel'
+			}`,
+			method: 'POST',
+		} )
+			.then( () => {
+				setOpen( null );
+				onChanged();
+			} )
+			.catch( ( err ) => setError( err.message ) )
+			.finally( () => setBusy( false ) );
+	};
+
 	return (
 		<>
 			<tr>
 				<td>{ op.source }</td>
 				<td>
+					{ /* A run whose host died stays `running` with a progress bar that
+					     has simply stopped — the same badge and the same numbers as a
+					     slow one. The server decides which it is, from the threshold the
+					     watchdog itself uses, so the two can never disagree. */ }
 					<span
-						className={ `catalogops-badge catalogops-status-badge is-${ op.status }` }
+						className={ `catalogops-badge catalogops-status-badge is-${
+							op.is_stalled ? 'stalled' : op.status
+						}` }
 					>
-						{ op.status }
+						{ op.is_stalled
+							? __( 'Not responding', 'catalogops' )
+							: op.status }
 					</span>
 				</td>
 				<td className="catalogops-num">
@@ -3148,7 +3753,12 @@ function OperationRow( { op, onChanged } ) {
 					) }
 				</td>
 				<td>{ op.user_name || '—' }</td>
-				<td>{ op.created_at }</td>
+				{ /* The site's clock, not GMT — and the fallback keeps an older
+				     payload readable rather than blank. The schedules card next to
+				     this one has always shown local time, so a raw GMT stamp here
+				     did not read as a timezone question: it read as the run having
+				     fired at the wrong hour. */ }
+				<td>{ op.created_at_local || op.created_at }</td>
 				<td className="catalogops-cell--actions">
 					<div className="catalogops-actions">
 						<IconButton
@@ -3167,6 +3777,34 @@ function OperationRow( { op, onChanged } ) {
 								isActive={ open === 'undo' }
 							/>
 						) }
+						{ stillRunning && (
+							<IconButton
+								icon={ stopping ? 'dismiss' : 'controls-pause' }
+								variant="pause"
+								label={
+									stopping
+										? __( 'Stop this run', 'catalogops' )
+										: __( 'Pause this run', 'catalogops' )
+								}
+								onClick={ () => toggle( 'cancel' ) }
+								isActive={ open === 'cancel' }
+								disabled={ offline }
+							/>
+						) }
+						{ /* Only when there is frozen work left and nothing is
+						     writing it — a run the watchdog failed after a restart,
+						     or one that was stopped. Green: it is the one that
+						     runs. */ }
+						{ op.can_resume && (
+							<IconButton
+								icon="controls-play"
+								variant="run"
+								label={ __( 'Resume this run', 'catalogops' ) }
+								onClick={ () => toggle( 'resume' ) }
+								isActive={ open === 'resume' }
+								disabled={ offline }
+							/>
+						) }
 						<IconButton
 							icon="trash"
 							variant="danger"
@@ -3175,22 +3813,215 @@ function OperationRow( { op, onChanged } ) {
 							label={
 								stillRunning
 									? __(
-											'Cancel the run before deleting it',
+											'Pause the run before deleting it',
 											'catalogops'
 									  )
 									: __( 'Delete from history', 'catalogops' )
 							}
 							onClick={ () => toggle( 'delete' ) }
 							isActive={ open === 'delete' }
-							disabled={ stillRunning }
+							disabled={ stillRunning || offline }
 						/>
 					</div>
 				</td>
 			</tr>
+			{ /* Its own full-width row, never a cell. Put in the Status column this
+			     text pushed Progress, By, Created and Actions into a narrow strip and
+			     wrapped the icon buttons one under another — a table that reflows
+			     because one row has something to say is worse than the silence it
+			     replaced. Always visible rather than behind a toggle: a run nobody is
+			     writing is not a detail to go looking for. */ }
+			{ ( op.is_stalled || quiet ) && (
+				<tr className="catalogops-detail">
+					<td colSpan="6">
+						<p className="catalogops-muted">
+							{ op.is_stalled
+								? sprintf(
+										/* translators: 1: how long it has been quiet, e.g. "12m 4s". 2: number of items still frozen and unwritten. */
+										__(
+											'Nothing has written this for %1$s. It is picked up again automatically, and its schedule keeps running — or Stop it to take over, which keeps the %2$d frozen items for Resume to finish.',
+											'catalogops'
+										),
+										quietFor( op.quiet_seconds ),
+										op.pending
+								  )
+								: sprintf(
+										/* translators: %s: how long it has been quiet, e.g. "1m 20s". */
+										__(
+											'No progress for %s. A pause between chunks is normal; if the run has stopped, it is restarted automatically.',
+											'catalogops'
+										),
+										quietFor( op.quiet_seconds )
+								  ) }
+						</p>
+					</td>
+				</tr>
+			) }
 			{ open && (
 				<tr className="catalogops-detail">
 					<td colSpan="6">
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
+						{ open === 'resume' && (
+							<div className="catalogops-confirm">
+								<p className="catalogops-confirm__lead">
+									{ sprintf(
+										/* translators: 1: operation id, 2: items still waiting. */
+										__(
+											'Resume operation #%1$d — %2$d items still waiting?',
+											'catalogops'
+										),
+										op.id,
+										op.pending
+									) }
+								</p>
+								<p>
+									{ __(
+										'It carries on down the list this run froze when it started, so it changes exactly what was approved then. Running the filter again instead would resolve it against the catalog as it is now, which may no longer be the same set of products.',
+										'catalogops'
+									) }
+								</p>
+								{ error && (
+									<div className="notice notice-error">
+										<p>{ error }</p>
+									</div>
+								) }
+								<div className="catalogops-confirm__actions">
+									<button
+										className="button catalogops-button--go"
+										onClick={ confirmResume }
+										disabled={ busy }
+									>
+										{ __( 'Resume', 'catalogops' ) }
+									</button>
+									<button
+										className="button"
+										onClick={ () => setOpen( null ) }
+										disabled={ busy }
+									>
+										{ __( 'Leave it', 'catalogops' ) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ __( 'Starting…', 'catalogops' ) }
+										</span>
+									) }
+								</div>
+							</div>
+						) }
+						{ open === 'cancel' && (
+							<div className="catalogops-confirm">
+								{ /* Two whole calls rather than one with a computed format
+								     string: the .pot scanner reads literals, so a ternary
+								     inside sprintf() or __() extracts as nothing at all and
+								     the sentence never reaches a translator. */ }
+								<p className="catalogops-confirm__lead">
+									{ stopping
+										? sprintf(
+												/* translators: %d: operation id. */
+												__(
+													'Stop operation #%d?',
+													'catalogops'
+												),
+												op.id
+										  )
+										: sprintf(
+												/* translators: %d: operation id. */
+												__(
+													'Pause operation #%d?',
+													'catalogops'
+												),
+												op.id
+										  ) }
+								</p>
+								<p>
+									{ sprintf(
+										/* translators: 1: objects already written, 2: objects targeted. */
+										__(
+											'It stops at the end of the chunk it is writing now. The %1$d of %2$d items already changed stay changed — this is not the same as undoing — but once it has stopped you can undo it from this row.',
+											'catalogops'
+										),
+										op.processed,
+										op.target_count
+									) }
+								</p>
+								{ /* Said before the click, not discovered after it — and
+								     the two cases say opposite things on purpose. Stopping
+								     a working run is a decision about the change, so its
+								     schedule pauses with it. Taking back a run whose
+								     process died is not a decision about anything, so the
+								     schedule keeps its hours: nobody should have to get up
+								     in the night because a server restarted. */ }
+								{ op.schedule_id && ! stopping && (
+									<p>
+										{ __(
+											'This run came from a schedule. That schedule is paused too, so it does not begin the same work again on its next tick — resume it from Schedules when you want it running.',
+											'catalogops'
+										) }
+									</p>
+								) }
+								{ op.schedule_id && stopping && (
+									<p>
+										{ __(
+											'This run came from a schedule. The schedule keeps running on its usual hours — a run that stopped responding is a machine failure, not a change of mind, so nothing about the schedule is altered.',
+											'catalogops'
+										) }
+									</p>
+								) }
+								{ error && (
+									<div className="notice notice-error">
+										<p>{ error }</p>
+									</div>
+								) }
+								<div className="catalogops-confirm__actions">
+									<button
+										className="button"
+										onClick={ confirmCancel }
+										disabled={ busy }
+									>
+										{ stopping
+											? __( 'Stop the run', 'catalogops' )
+											: __(
+													'Pause the run',
+													'catalogops'
+											  ) }
+									</button>
+									<button
+										className="button"
+										onClick={ () => setOpen( null ) }
+										disabled={ busy }
+									>
+										{ __( 'Keep running', 'catalogops' ) }
+									</button>
+									{ busy && (
+										<span
+											className="catalogops-inline-loading"
+											aria-live="polite"
+										>
+											<span
+												className="catalogops-spinner"
+												aria-hidden="true"
+											/>
+											{ stopping
+												? __(
+														'Stopping…',
+														'catalogops'
+												  )
+												: __(
+														'Pausing…',
+														'catalogops'
+												  ) }
+										</span>
+									) }
+								</div>
+							</div>
+						) }
 						{ open === 'undo' && (
 							<UndoPanel
 								op={ op }
@@ -3274,8 +4105,11 @@ function OperationRow( { op, onChanged } ) {
  * @param {Object}   props            Component props.
  * @param {number}   props.refreshKey Bumping this reloads the list.
  * @param {Function} props.onChanged  Called when an undo finishes.
+ * @param {boolean}  props.firingSoon Whether a schedule is due, so a row is
+ *                                    about to appear here without anyone in
+ *                                    the browser having asked for it.
  */
-function History( { refreshKey, onChanged } ) {
+function History( { refreshKey, onChanged, firingSoon = false } ) {
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ tick, setTick ] = useState( 0 );
@@ -3286,8 +4120,39 @@ function History( { refreshKey, onChanged } ) {
 	const [ perPage, setPerPage ] = useState( 10 );
 	const timer = useRef( null );
 
+	// The list re-asks the server on a cadence that follows the work: fast while
+	// something is moving, slow while nothing is — but never stopped.
+	//
+	// It used to schedule the next poll only when the response it had just received
+	// already contained a running operation, which made it self-sustaining but not
+	// self-starting. A tab left open while every operation was finished went
+	// dormant for good, so a run a schedule began at 03:00 was invisible until
+	// someone reloaded — exactly the unattended case schedules exist for. The slow
+	// cadence is what notices a run beginning; the fast one is what follows it.
+	//
+	// A hidden tab does not fetch at all, and coming back to it asks immediately,
+	// so returning shows the current state rather than the one it was left with.
 	useEffect( () => {
 		let cancelled = false;
+
+		const again = ( ms ) => {
+			if ( ! cancelled ) {
+				timer.current = setTimeout(
+					() => setTick( ( t ) => t + 1 ),
+					ms
+				);
+			}
+		};
+
+		if ( document.hidden ) {
+			again( HISTORY_POLL_IDLE_MS );
+
+			return () => {
+				cancelled = true;
+				clearTimeout( timer.current );
+			};
+		}
+
 		apiFetch( { path: `/catalogops/v1/operations?page=${ page }` } )
 			.then( ( res ) => {
 				if ( cancelled ) {
@@ -3296,23 +4161,48 @@ function History( { refreshKey, onChanged } ) {
 				setItems( res.items );
 				setTotal( res.total || res.items.length );
 				setPerPage( res.per_page || 10 );
-				// Keep polling while any operation is still moving, so a queued or
-				// running op — e.g. a schedule's "Run now" — visibly progresses to
-				// completion here without a manual refresh.
-				if ( res.items.some( ( op ) => ! isTerminal( op ) ) ) {
-					timer.current = setTimeout(
-						() => setTick( ( t ) => t + 1 ),
-						2000
-					);
-				}
+				setError( '' );
+				// Fast while something is moving, and equally fast while a
+				// schedule is due — that is the window in which a row is about to
+				// appear here, and this list has no other way to know it is coming.
+				const moving = res.items.some( ( op ) => ! isTerminal( op ) );
+				again(
+					moving || firingSoon
+						? HISTORY_POLL_ACTIVE_MS
+						: HISTORY_POLL_IDLE_MS
+				);
 			} )
-			.catch( ( err ) => ! cancelled && setError( err.message ) );
+			.catch( ( err ) => {
+				if ( cancelled ) {
+					return;
+				}
+				setError( err.message );
+				// A failed poll must not be the end of polling: one dropped request
+				// would otherwise freeze the list for the rest of the session, which
+				// is the failure this whole effect was rewritten to remove.
+				again( HISTORY_POLL_IDLE_MS );
+			} );
 
 		return () => {
 			cancelled = true;
 			clearTimeout( timer.current );
 		};
-	}, [ refreshKey, tick, page ] );
+		// firingSoon belongs here: when a schedule becomes due the pending slow
+		// timer has to be replaced by a fast one, not waited out.
+	}, [ refreshKey, tick, page, firingSoon ] );
+
+	useEffect( () => {
+		const onVisibility = () => {
+			if ( ! document.hidden ) {
+				setTick( ( t ) => t + 1 );
+			}
+		};
+
+		document.addEventListener( 'visibilitychange', onVisibility );
+
+		return () =>
+			document.removeEventListener( 'visibilitychange', onVisibility );
+	}, [] );
 
 	return (
 		<div className="catalogops-history">
@@ -3356,6 +4246,12 @@ function History( { refreshKey, onChanged } ) {
 								key={ op.id }
 								op={ op }
 								onChanged={ onChanged }
+								// Every row's numbers are as old as the last poll
+								// that worked. While polling is failing, offering
+								// controls invites a click that cannot arrive — and
+								// worse, one decided on a snapshot that may be
+								// minutes stale.
+								offline={ error !== '' }
 							/>
 						) )
 					) }
@@ -3779,10 +4675,19 @@ function SchedulerSetup( { lead = false } ) {
  * @param {Function} props.onDelete Deletes the row.
  */
 function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
-	const [ confirming, setConfirming ] = useState( false );
+	// 'delete' | 'resume' | null — two questions worth asking before acting, and
+	// only one of them can be open at a time.
+	const [ confirming, setConfirming ] = useState( null );
 
 	const done = schedule.status === 'completed';
 	const name = schedule.name || `#${ schedule.id }`;
+
+	// Pausing hides a schedule from the supervisor but does not stop its clock, and
+	// resuming does not reset it: a schedule paused past its due time is due again
+	// the moment it comes back, so Resume is a delayed Run now. Worth a question
+	// first — but only when it is actually true, or the warning becomes noise on
+	// every schedule that was paused early and is nowhere near its time.
+	const resumesIntoARun = schedule.is_overdue;
 
 	return (
 		<>
@@ -3828,7 +4733,16 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 								icon="update"
 								variant="accent"
 								label={ __( 'Resume', 'catalogops' ) }
-								onClick={ () => onAct( schedule.id, 'resume' ) }
+								onClick={ () =>
+									resumesIntoARun
+										? setConfirming(
+												confirming === 'resume'
+													? null
+													: 'resume'
+										  )
+										: onAct( schedule.id, 'resume' )
+								}
+								isActive={ confirming === 'resume' }
 								disabled={ busy }
 							/>
 						) }
@@ -3836,14 +4750,89 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 							icon="trash"
 							variant="danger"
 							label={ __( 'Delete schedule', 'catalogops' ) }
-							onClick={ () => setConfirming( ! confirming ) }
-							isActive={ confirming }
+							onClick={ () =>
+								setConfirming(
+									confirming === 'delete' ? null : 'delete'
+								)
+							}
+							isActive={ confirming === 'delete' }
 							disabled={ busy }
 						/>
 					</div>
 				</td>
 			</tr>
-			{ confirming && (
+			{ /* A schedule that stopped has to say why, or the only control on offer —
+			     Resume — just stops it again on the next tick. Its own full-width row
+			     rather than the Status cell: these reasons are whole sentences now,
+			     and in a cell they squeezed Repeat, Next run, Last run and Actions
+			     into a strip and wrapped the buttons one under another. The text is
+			     the server's own message, rendered as it arrives, like every other
+			     error in this app. */ }
+			{ schedule.paused_reason && (
+				<tr className="catalogops-detail">
+					<td colSpan="6">
+						<p className="catalogops-muted">
+							{ schedule.paused_reason }
+						</p>
+					</td>
+				</tr>
+			) }
+			{ confirming === 'resume' && (
+				<tr className="catalogops-detail">
+					<td colSpan="6">
+						<div className="catalogops-confirm">
+							<p className="catalogops-confirm__lead">
+								{ sprintf(
+									/* translators: %s: schedule name. */
+									__(
+										'Resume “%s” — it will run shortly.',
+										'catalogops'
+									),
+									name
+								) }
+							</p>
+							<p>
+								{ sprintf(
+									/* translators: 1: the schedule's due time, 2: minutes between supervisor runs. */
+									__(
+										'Its next run was due at %1$s, which has passed — pausing hid it, but did not move it. Resuming makes it due again, so it will run within about %2$d minutes.',
+										'catalogops'
+									),
+									schedule.next_run_local ||
+										schedule.next_run,
+									CRON.supervisorMinutes || 5
+								) }
+							</p>
+							<p>
+								{ __(
+									'It runs once, not once for every run it missed, and then goes back to its normal times.',
+									'catalogops'
+								) }
+							</p>
+							<div className="catalogops-confirm__actions">
+								<button
+									className="button button-primary"
+									onClick={ () => {
+										setConfirming( null );
+										onAct( schedule.id, 'resume' );
+									} }
+									disabled={ busy }
+								>
+									{ __( 'Resume it', 'catalogops' ) }
+								</button>
+								<button
+									className="button"
+									onClick={ () => setConfirming( null ) }
+									disabled={ busy }
+								>
+									{ __( 'Leave it paused', 'catalogops' ) }
+								</button>
+							</div>
+						</div>
+					</td>
+				</tr>
+			) }
+			{ confirming === 'delete' && (
 				<tr className="catalogops-detail">
 					<td colSpan="6">
 						<div className="catalogops-confirm">
@@ -3867,7 +4856,7 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 								<button
 									className="button catalogops-button--danger"
 									onClick={ () => {
-										setConfirming( false );
+										setConfirming( null );
 										onDelete( schedule.id );
 									} }
 									disabled={ busy }
@@ -3876,7 +4865,7 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 								</button>
 								<button
 									className="button"
-									onClick={ () => setConfirming( false ) }
+									onClick={ () => setConfirming( null ) }
 									disabled={ busy }
 								>
 									{ __( 'Cancel', 'catalogops' ) }
@@ -3890,11 +4879,13 @@ function ScheduleRow( { schedule, busy, onAct, onDelete } ) {
 	);
 }
 
-function Schedules( { refreshKey, onRan } ) {
+function Schedules( { refreshKey, onRan, onFiringSoon } ) {
 	const canSchedule = can( 'canSchedule' );
 	const [ items, setItems ] = useState( [] );
 	const [ error, setError ] = useState( '' );
 	const [ localKey, setLocalKey ] = useState( 0 );
+	const [ tick, setTick ] = useState( 0 );
+	const timer = useRef( null );
 	// The schedule row a request is in flight for, so its buttons show a spinner
 	// and disable rather than leaving the user unsure anything happened.
 	const [ busyId, setBusyId ] = useState( null );
@@ -3903,15 +4894,88 @@ function Schedules( { refreshKey, onRan } ) {
 	const [ total, setTotal ] = useState( 0 );
 	const [ perPage, setPerPage ] = useState( 10 );
 
+	// This list had no timer at all, so a schedule that fired went on reading
+	// "Active", with an empty Last run and a Next run that had already passed,
+	// until someone reloaded the page — while the operation it had spawned was
+	// finishing in the history below. It polls on the same terms as the history
+	// now: quick while a schedule is due, unhurried otherwise, nothing at all
+	// while the tab is hidden.
 	useEffect( () => {
+		let cancelled = false;
+
+		const again = ( ms ) => {
+			if ( ! cancelled ) {
+				timer.current = setTimeout(
+					() => setTick( ( t ) => t + 1 ),
+					ms
+				);
+			}
+		};
+
+		if ( document.hidden ) {
+			again( HISTORY_POLL_IDLE_MS );
+
+			return () => {
+				cancelled = true;
+				clearTimeout( timer.current );
+			};
+		}
+
 		apiFetch( { path: `/catalogops/v1/schedules?page=${ page }` } )
 			.then( ( res ) => {
+				if ( cancelled ) {
+					return;
+				}
 				setItems( res.items );
 				setTotal( res.total || res.items.length );
 				setPerPage( res.per_page || 10 );
+				// The history list has always cleared its own error here, and this one
+				// did not: a single dropped request — a restarted server, a dropped
+				// connection — left "Could not get a valid response from the server."
+				// above a table that was, by then, refreshing perfectly. Worse than
+				// untidy, because the notice sits beside a Paused badge and invites the
+				// reader to blame the outage for a pause that has nothing to do with it.
+				setError( '' );
+
+				// Due and still active means it is about to fire, or is firing
+				// right now. The history list cannot see this and needs telling,
+				// because that is when its own new row is coming.
+				const due = res.items.some(
+					( s ) => 'active' === s.status && s.is_overdue
+				);
+
+				if ( onFiringSoon ) {
+					onFiringSoon( due );
+				}
+
+				again( due ? POLL_DUE_MS : HISTORY_POLL_IDLE_MS );
 			} )
-			.catch( ( err ) => setError( err.message ) );
-	}, [ refreshKey, localKey, page ] );
+			.catch( ( err ) => {
+				if ( cancelled ) {
+					return;
+				}
+				setError( err.message );
+				again( HISTORY_POLL_IDLE_MS );
+			} );
+
+		return () => {
+			cancelled = true;
+			clearTimeout( timer.current );
+		};
+	}, [ refreshKey, localKey, page, tick, onFiringSoon ] );
+
+	useEffect( () => {
+		const onVisibility = () => {
+			if ( ! document.hidden ) {
+				setTick( ( t ) => t + 1 );
+			}
+		};
+
+		document.addEventListener( 'visibilitychange', onVisibility );
+
+		return () =>
+			document.removeEventListener( 'visibilitychange', onVisibility );
+	}, [] );
 
 	const reload = () => setLocalKey( ( k ) => k + 1 );
 
@@ -4168,6 +5232,11 @@ function App() {
 	const [ attributes, setAttributes ] = useState( [] );
 	// Bumped whenever a schedule is created or acted on, to reload the list.
 	const [ schedulesKey, setSchedulesKey ] = useState( 0 );
+	// Raised by the schedules list when one of its rows is due, and read by the
+	// history list, which has no way of knowing a run is about to appear in it.
+	// Passing the setter itself keeps the reference stable, so it can sit in the
+	// schedules effect's dependencies without re-running it on every render.
+	const [ firingSoon, setFiringSoon ] = useState( false );
 	// Whether the filter, table, and bulk edit target parent products or their
 	// variations (CONTEXT §4).
 	const [ scope, setScope ] = useState( 'product' );
@@ -4261,6 +5330,13 @@ function App() {
 	const refreshAll = useCallback( () => {
 		run( page );
 		setHistoryKey( ( k ) => k + 1 );
+		// The schedules list too, because an undo can now change it: reverting a
+		// scheduled run pauses the schedule that made it. Without this the
+		// confirmation says the schedule is about to be paused, the history row
+		// flips at once, and the card that would prove it goes on showing Active
+		// until its own poll comes round — the one screen that settles the question
+		// being the last to answer it.
+		setSchedulesKey( ( k ) => k + 1 );
 	}, [ run, page ] );
 
 	// Clear the filter, its results, and (via resetKey) the bulk-edit and
@@ -4292,536 +5368,623 @@ function App() {
 	const update = ( key ) => ( event ) =>
 		setForm( { ...form, [ key ]: event.target.value } );
 
+	// The onboarding record reaches the bulk-edit panel and the undo panel, which
+	// sit far apart in the tree and have to agree: acknowledging in one stands the
+	// other down. Falls back to acknowledged while the fetch is in flight or after
+	// it fails — a gate that appears because a request was slow is worse than none.
+	const onboardingValue = {
+		backup_ack: onboarding ? onboarding.backup_ack : true,
+		backup_ack_by: onboarding ? onboarding.backup_ack_by : '',
+		backup_ack_at: onboarding ? onboarding.backup_ack_at : '',
+		backup_ack_version: onboarding ? onboarding.backup_ack_version : '',
+		retention_days: onboarding ? onboarding.retention_days : 30,
+		onAcknowledge: () =>
+			setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) ),
+	};
+
 	return (
-		<div className="catalogops">
-			<div className="catalogops-brand">
-				<svg
-					className="catalogops-brand__mark"
-					viewBox="0 0 40 40"
-					width="40"
-					height="40"
-					aria-hidden="true"
-					focusable="false"
-					xmlns="http://www.w3.org/2000/svg"
-				>
-					<defs>
-						<linearGradient
-							id="catalogops-brand-g"
-							x1="0"
-							y1="0"
-							x2="40"
-							y2="40"
-							gradientUnits="userSpaceOnUse"
-						>
-							<stop offset="0" stopColor="#4f46e5" />
-							<stop offset="1" stopColor="#4338ca" />
-						</linearGradient>
-					</defs>
-					<rect
+		<OnboardingContext.Provider value={ onboardingValue }>
+			<div className="catalogops">
+				<div className="catalogops-brand">
+					<svg
+						className="catalogops-brand__mark"
+						viewBox="0 0 40 40"
 						width="40"
 						height="40"
-						rx="9"
-						fill="url(#catalogops-brand-g)"
-					/>
-					<path
-						d="M20 9 L31 15 L20 21 L9 15 Z"
-						fill="#fff"
-						fillOpacity="0.95"
-					/>
-					<path
-						d="M9 20 L20 26 L31 20"
-						fill="none"
-						stroke="#fff"
-						strokeWidth="2.2"
-						strokeLinecap="round"
-						strokeLinejoin="round"
-						strokeOpacity="0.7"
-					/>
-					<path
-						d="M9 25 L20 31 L31 25"
-						fill="none"
-						stroke="#fff"
-						strokeWidth="2.2"
-						strokeLinecap="round"
-						strokeLinejoin="round"
-						strokeOpacity="0.45"
-					/>
-				</svg>
-				<span className="catalogops-brand__text">
-					<span className="catalogops-brand__name">
-						Catalog<b>Ops</b>
-					</span>
-					<span className="catalogops-brand__tag">
-						{ __( 'Bulk catalog operations', 'catalogops' ) }
-					</span>
-				</span>
-			</div>
-
-			<Onboarding
-				data={ onboarding }
-				onDismiss={ () =>
-					setOnboarding( ( o ) => ( { ...o, tour_done: true } ) )
-				}
-			/>
-
-			<div className="catalogops-card catalogops-browse">
-				<h2>{ __( 'Filter products', 'catalogops' ) }</h2>
-				<div className="catalogops-controls">
-					<div className="catalogops-control-group">
-						<span className="catalogops-group-label">
-							{ __( 'Target', 'catalogops' ) }
-						</span>
-						<div className="catalogops-segmented" role="group">
-							<button
-								type="button"
-								className={ `catalogops-segmented__btn${
-									scope === 'product' ? ' is-active' : ''
-								}` }
-								onClick={ () => setScope( 'product' ) }
+						aria-hidden="true"
+						focusable="false"
+						xmlns="http://www.w3.org/2000/svg"
+					>
+						<defs>
+							<linearGradient
+								id="catalogops-brand-g"
+								x1="0"
+								y1="0"
+								x2="40"
+								y2="40"
+								gradientUnits="userSpaceOnUse"
 							>
-								{ __( 'Products', 'catalogops' ) }
-							</button>
-							<button
-								type="button"
-								className={ `catalogops-segmented__btn${
-									scope === 'variation' ? ' is-active' : ''
-								}` }
-								onClick={ () => setScope( 'variation' ) }
-							>
-								{ __( 'Variations', 'catalogops' ) }
-							</button>
-						</div>
-					</div>
-
-					<div className="catalogops-control-group">
-						<span className="catalogops-group-label">
-							{ __( 'Filter', 'catalogops' ) }
+								<stop offset="0" stopColor="#4f46e5" />
+								<stop offset="1" stopColor="#4338ca" />
+							</linearGradient>
+						</defs>
+						<rect
+							width="40"
+							height="40"
+							rx="9"
+							fill="url(#catalogops-brand-g)"
+						/>
+						<path
+							d="M20 9 L31 15 L20 21 L9 15 Z"
+							fill="#fff"
+							fillOpacity="0.95"
+						/>
+						<path
+							d="M9 20 L20 26 L31 20"
+							fill="none"
+							stroke="#fff"
+							strokeWidth="2.2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							strokeOpacity="0.7"
+						/>
+						<path
+							d="M9 25 L20 31 L31 25"
+							fill="none"
+							stroke="#fff"
+							strokeWidth="2.2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							strokeOpacity="0.45"
+						/>
+					</svg>
+					<span className="catalogops-brand__text">
+						<span className="catalogops-brand__name">
+							Catalog<b>Ops</b>
 						</span>
-						<div className="catalogops-filter-rows">
-							<div className="catalogops-filter-row">
-								<div className="catalogops-field catalogops-field--multi">
-									<MultiSelect
-										label={ __( 'Category', 'catalogops' ) }
-										options={ categories }
-										value={ form.category }
-										onChange={ ( ids ) =>
-											setForm( {
-												...form,
-												category: ids,
-											} )
-										}
-										mode={ form.categoryMode }
-										onModeChange={ ( next ) =>
-											setForm( {
-												...form,
-												categoryMode: next,
-											} )
-										}
-									/>
-								</div>
+						<span className="catalogops-brand__tag">
+							{ __( 'Bulk catalog operations', 'catalogops' ) }
+						</span>
+					</span>
+				</div>
 
-								<div className="catalogops-field catalogops-field--multi">
-									<MultiSelect
-										label={ __( 'Brand', 'catalogops' ) }
-										options={ brands.map( ( b ) => ( {
-											id: b,
-											name: b,
-										} ) ) }
-										value={ form.brand }
-										onChange={ ( ids ) =>
-											setForm( { ...form, brand: ids } )
-										}
-										mode={ form.brandMode }
-										onModeChange={ ( next ) =>
-											setForm( {
-												...form,
-												brandMode: next,
-											} )
-										}
-									/>
-								</div>
+				<Onboarding
+					data={ onboarding }
+					onDismiss={ () =>
+						setOnboarding( ( o ) => ( { ...o, tour_done: true } ) )
+					}
+				/>
 
-								<div className="catalogops-field catalogops-field--multi">
-									<MultiSelect
-										label={ __( 'Tag', 'catalogops' ) }
-										options={ tags }
-										value={ form.tag }
-										onChange={ ( ids ) =>
-											setForm( {
-												...form,
-												tag: ids,
-											} )
-										}
-										mode={ form.tagMode }
-										onModeChange={ ( next ) =>
-											setForm( {
-												...form,
-												tagMode: next,
-											} )
-										}
-									/>
-								</div>
-							</div>
-
-							{ /* Stock and price are the two conditions about an
-							     item's own numbers, so they sit together and last —
-							     after the terms that say *which* items, and after
-							     the attribute pair that only exists for variations. */ }
-							<div className="catalogops-filter-row">
-								{ 'variation' === scope &&
-									attributes.length > 0 && (
-										<div className="catalogops-field">
-											<label htmlFor="catalogops-attribute">
-												{ __(
-													'Attribute',
-													'catalogops'
-												) }
-											</label>
-											<select
-												id="catalogops-attribute"
-												value={ form.attribute }
-												onChange={ ( e ) =>
-													setForm( {
-														...form,
-														attribute:
-															e.target.value,
-														attributeValues: [],
-													} )
-												}
-											>
-												<option value="">
-													{ __(
-														'Any',
-														'catalogops'
-													) }
-												</option>
-												{ attributes.map( ( a ) => (
-													<option
-														key={ a.field }
-														value={ a.field }
-													>
-														{ a.label }
-													</option>
-												) ) }
-											</select>
-										</div>
-									) }
-
-								{ 'variation' === scope &&
-									attributes.length > 0 &&
-									selectedAttribute && (
-										<div className="catalogops-field catalogops-field--multi">
-											<MultiSelect
-												label={
-													'not_in' ===
-													form.attributeMode
-														? __(
-																'Values (none if empty)',
-																'catalogops'
-														  )
-														: __(
-																'Values (any if empty)',
-																'catalogops'
-														  )
-												}
-												options={
-													selectedAttribute.terms
-												}
-												value={ form.attributeValues }
-												onChange={ ( ids ) =>
-													setForm( {
-														...form,
-														attributeValues: ids,
-													} )
-												}
-												mode={ form.attributeMode }
-												onModeChange={ ( next ) =>
-													setForm( {
-														...form,
-														attributeMode: next,
-													} )
-												}
-											/>
-										</div>
-									) }
-
-								<div className="catalogops-field">
-									<label htmlFor="catalogops-stock">
-										{ __( 'Stock', 'catalogops' ) }
-									</label>
-									<select
-										id="catalogops-stock"
-										value={ form.stockStatus }
-										onChange={ update( 'stockStatus' ) }
-									>
-										<option value="">
-											{ __( 'Any', 'catalogops' ) }
-										</option>
-										<option value="instock">
-											{ __( 'In stock', 'catalogops' ) }
-										</option>
-										<option value="outofstock">
-											{ __(
-												'Out of stock',
-												'catalogops'
-											) }
-										</option>
-									</select>
-								</div>
-
-								<div className="catalogops-field catalogops-field--price">
-									<label htmlFor="catalogops-price-min">
-										{ __( 'Price range', 'catalogops' ) }
-									</label>
-									<div className="catalogops-price-inputs">
-										<input
-											id="catalogops-price-min"
-											type="number"
-											placeholder={ __(
-												'Min',
-												'catalogops'
-											) }
-											aria-label={ __(
-												'Minimum price',
-												'catalogops'
-											) }
-											value={ form.priceMin }
-											onChange={ update( 'priceMin' ) }
-										/>
-										<input
-											id="catalogops-price-max"
-											type="number"
-											placeholder={ __(
-												'Max',
-												'catalogops'
-											) }
-											aria-label={ __(
-												'Maximum price',
-												'catalogops'
-											) }
-											value={ form.priceMax }
-											onChange={ update( 'priceMax' ) }
-										/>
-									</div>
-								</div>
-							</div>
-
-							<div className="catalogops-filter-row">
+				<div className="catalogops-card catalogops-browse">
+					<h2>{ __( 'Filter products', 'catalogops' ) }</h2>
+					<div className="catalogops-controls">
+						<div className="catalogops-control-group">
+							<span className="catalogops-group-label">
+								{ __( 'Target', 'catalogops' ) }
+							</span>
+							<div className="catalogops-segmented" role="group">
 								<button
-									className="button button-primary"
-									onClick={ () => run( 1 ) }
-									disabled={ loading }
+									type="button"
+									className={ `catalogops-segmented__btn${
+										scope === 'product' ? ' is-active' : ''
+									}` }
+									onClick={ () => setScope( 'product' ) }
 								>
-									{ scope === 'variation'
-										? __( 'Show variations', 'catalogops' )
-										: __( 'Show products', 'catalogops' ) }
+									{ __( 'Products', 'catalogops' ) }
+								</button>
+								<button
+									type="button"
+									className={ `catalogops-segmented__btn${
+										scope === 'variation'
+											? ' is-active'
+											: ''
+									}` }
+									onClick={ () => setScope( 'variation' ) }
+								>
+									{ __( 'Variations', 'catalogops' ) }
 								</button>
 							</div>
 						</div>
+
+						<div className="catalogops-control-group">
+							<span className="catalogops-group-label">
+								{ __( 'Filter', 'catalogops' ) }
+							</span>
+							<div className="catalogops-filter-rows">
+								<div className="catalogops-filter-row">
+									<div className="catalogops-field catalogops-field--multi">
+										<MultiSelect
+											label={ __(
+												'Category',
+												'catalogops'
+											) }
+											options={ categories }
+											value={ form.category }
+											onChange={ ( ids ) =>
+												setForm( {
+													...form,
+													category: ids,
+												} )
+											}
+											mode={ form.categoryMode }
+											onModeChange={ ( next ) =>
+												setForm( {
+													...form,
+													categoryMode: next,
+												} )
+											}
+										/>
+									</div>
+
+									<div className="catalogops-field catalogops-field--multi">
+										<MultiSelect
+											label={ __(
+												'Brand',
+												'catalogops'
+											) }
+											options={ brands.map( ( b ) => ( {
+												id: b,
+												name: b,
+											} ) ) }
+											value={ form.brand }
+											onChange={ ( ids ) =>
+												setForm( {
+													...form,
+													brand: ids,
+												} )
+											}
+											mode={ form.brandMode }
+											onModeChange={ ( next ) =>
+												setForm( {
+													...form,
+													brandMode: next,
+												} )
+											}
+										/>
+									</div>
+
+									<div className="catalogops-field catalogops-field--multi">
+										<MultiSelect
+											label={ __( 'Tag', 'catalogops' ) }
+											options={ [
+												{
+													id: NO_TAG,
+													name: __(
+														'Without tag',
+														'catalogops'
+													),
+												},
+												...tags,
+											] }
+											value={ form.tag }
+											onChange={ ( ids ) =>
+												setForm( {
+													...form,
+													tag: reconcileTagSelection(
+														form.tag,
+														ids
+													),
+												} )
+											}
+											mode={ form.tagMode }
+											onModeChange={ ( next ) =>
+												setForm( {
+													...form,
+													tagMode: next,
+												} )
+											}
+										/>
+									</div>
+								</div>
+
+								{ /* Stock and price are the two conditions about an
+							     item's own numbers, so they sit together and last —
+							     after the terms that say *which* items, and after
+							     the attribute pair that only exists for variations. */ }
+								<div className="catalogops-filter-row">
+									{ 'variation' === scope &&
+										attributes.length > 0 && (
+											<div className="catalogops-field">
+												<label htmlFor="catalogops-attribute">
+													{ __(
+														'Attribute',
+														'catalogops'
+													) }
+												</label>
+												<select
+													id="catalogops-attribute"
+													value={ form.attribute }
+													onChange={ ( e ) =>
+														setForm( {
+															...form,
+															attribute:
+																e.target.value,
+															attributeValues: [],
+														} )
+													}
+												>
+													<option value="">
+														{ __(
+															'Any',
+															'catalogops'
+														) }
+													</option>
+													{ attributes.map( ( a ) => (
+														<option
+															key={ a.field }
+															value={ a.field }
+														>
+															{ a.label }
+														</option>
+													) ) }
+												</select>
+											</div>
+										) }
+
+									{ 'variation' === scope &&
+										attributes.length > 0 &&
+										selectedAttribute && (
+											<div className="catalogops-field catalogops-field--multi">
+												<MultiSelect
+													label={
+														'not_in' ===
+														form.attributeMode
+															? __(
+																	'Values (none if empty)',
+																	'catalogops'
+															  )
+															: __(
+																	'Values (any if empty)',
+																	'catalogops'
+															  )
+													}
+													options={
+														selectedAttribute.terms
+													}
+													value={
+														form.attributeValues
+													}
+													onChange={ ( ids ) =>
+														setForm( {
+															...form,
+															attributeValues:
+																ids,
+														} )
+													}
+													mode={ form.attributeMode }
+													onModeChange={ ( next ) =>
+														setForm( {
+															...form,
+															attributeMode: next,
+														} )
+													}
+												/>
+											</div>
+										) }
+
+									<div className="catalogops-field">
+										<label htmlFor="catalogops-stock">
+											{ __( 'Stock', 'catalogops' ) }
+										</label>
+										<select
+											id="catalogops-stock"
+											value={ form.stockStatus }
+											onChange={ update( 'stockStatus' ) }
+										>
+											<option value="">
+												{ __( 'Any', 'catalogops' ) }
+											</option>
+											<option value="instock">
+												{ __(
+													'In stock',
+													'catalogops'
+												) }
+											</option>
+											<option value="outofstock">
+												{ __(
+													'Out of stock',
+													'catalogops'
+												) }
+											</option>
+										</select>
+									</div>
+
+									<div className="catalogops-field catalogops-field--price">
+										<label htmlFor="catalogops-price-min">
+											{ __(
+												'Price range',
+												'catalogops'
+											) }
+										</label>
+										<div className="catalogops-price-inputs">
+											<input
+												id="catalogops-price-min"
+												type="number"
+												placeholder={ __(
+													'Min',
+													'catalogops'
+												) }
+												aria-label={ __(
+													'Minimum price',
+													'catalogops'
+												) }
+												value={ form.priceMin }
+												onChange={ update(
+													'priceMin'
+												) }
+											/>
+											<input
+												id="catalogops-price-max"
+												type="number"
+												placeholder={ __(
+													'Max',
+													'catalogops'
+												) }
+												aria-label={ __(
+													'Maximum price',
+													'catalogops'
+												) }
+												value={ form.priceMax }
+												onChange={ update(
+													'priceMax'
+												) }
+											/>
+										</div>
+									</div>
+								</div>
+
+								<div className="catalogops-filter-row">
+									<button
+										className="button button-primary"
+										onClick={ () => run( 1 ) }
+										disabled={ loading }
+									>
+										{ scope === 'variation'
+											? __(
+													'Show variations',
+													'catalogops'
+											  )
+											: __(
+													'Show products',
+													'catalogops'
+											  ) }
+									</button>
+								</div>
+							</div>
+						</div>
 					</div>
-				</div>
 
-				<hr className="catalogops-divider" />
+					<hr className="catalogops-divider" />
 
-				<div className="catalogops-results-bar">
-					<p className="catalogops-status">
-						{ loading && __( 'Loading…', 'catalogops' ) }
-						{ ! loading &&
-							scope === 'variation' &&
-							sprintf(
-								/* translators: %d: number of matching variations. */
-								__( '%d matching variations', 'catalogops' ),
-								total
-							) }
-						{ ! loading &&
-							scope !== 'variation' &&
-							sprintf(
-								/* translators: %d: number of matching products. */
-								__( '%d matching products', 'catalogops' ),
-								total
-							) }
-					</p>
-					<div className="catalogops-search">
-						<input
-							id="catalogops-sku"
-							type="search"
-							placeholder={ __(
-								'SKU, e.g. COPS-1234',
-								'catalogops'
-							) }
-							aria-label={ __( 'Find by SKU', 'catalogops' ) }
-							value={ form.sku }
-							onChange={ update( 'sku' ) }
-							onKeyDown={ ( e ) => e.key === 'Enter' && run( 1 ) }
-						/>
-						<button
-							className="button"
-							onClick={ () => run( 1 ) }
-							disabled={ loading }
-						>
-							{ __( 'Search', 'catalogops' ) }
-						</button>
+					<div className="catalogops-results-bar">
+						<p className="catalogops-status">
+							{ loading && __( 'Loading…', 'catalogops' ) }
+							{ ! loading &&
+								scope === 'variation' &&
+								sprintf(
+									/* translators: %d: number of matching variations. */
+									__(
+										'%d matching variations',
+										'catalogops'
+									),
+									total
+								) }
+							{ ! loading &&
+								scope !== 'variation' &&
+								sprintf(
+									/* translators: %d: number of matching products. */
+									__( '%d matching products', 'catalogops' ),
+									total
+								) }
+						</p>
+						<div className="catalogops-search">
+							<input
+								id="catalogops-sku"
+								type="search"
+								placeholder={ __(
+									'SKU, e.g. COPS-1234',
+									'catalogops'
+								) }
+								aria-label={ __( 'Find by SKU', 'catalogops' ) }
+								value={ form.sku }
+								onChange={ update( 'sku' ) }
+								onKeyDown={ ( e ) =>
+									e.key === 'Enter' && run( 1 )
+								}
+							/>
+							<button
+								className="button"
+								onClick={ () => run( 1 ) }
+								disabled={ loading }
+							>
+								{ __( 'Search', 'catalogops' ) }
+							</button>
+						</div>
 					</div>
-				</div>
 
-				{ error && (
-					<div className="notice notice-error">
-						<p>{ error }</p>
-					</div>
-				) }
+					{ error && (
+						<div className="notice notice-error">
+							<p>{ error }</p>
+						</div>
+					) }
 
-				{ ! loading && otherScope && (
-					<ScopeHint other={ otherScope } onSwitch={ setScope } />
-				) }
+					{ ! loading && otherScope && (
+						<ScopeHint other={ otherScope } onSwitch={ setScope } />
+					) }
 
-				{ /* On a catalogue of thousands the table shows ten and the pager
+					{ /* On a catalogue of thousands the table shows ten and the pager
 				     says "of 1859", which nobody is going to walk. Naming the
 				     window makes the table honest, and points at the control that
 				     answers a question about one product. */ }
-				{ ! loading && items.length > 0 && total > items.length && (
-					<p className="catalogops-table-caption">
-						{ sprintf(
-							/* translators: 1: first row shown, 2: last row shown, 3: total matches. */
-							__(
-								'Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one.',
-								'catalogops'
-							),
-							( page - 1 ) * PER_PAGE + 1,
-							( page - 1 ) * PER_PAGE + items.length,
-							total
-						) }
-					</p>
-				) }
+					{ ! loading && items.length > 0 && total > items.length && (
+						<p className="catalogops-table-caption">
+							{ sprintf(
+								/* translators: 1: first row shown, 2: last row shown, 3: total matches. */
+								__(
+									'Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one.',
+									'catalogops'
+								),
+								( page - 1 ) * PER_PAGE + 1,
+								( page - 1 ) * PER_PAGE + items.length,
+								total
+							) }
+						</p>
+					) }
 
-				<table
-					className={ `wp-list-table widefat fixed striped${
-						loading ? ' catalogops-loading-dim' : ''
-					}` }
-				>
-					<thead>
-						<tr>
-							{ /* SKU leads, as it does in the preview and the audit
-							     log: it is how a product is named out loud. The id
-							     is addressing, not information. Brand and tags earn
-							     their columns by being filterable — filtering on
-							     something the results do not show is a guess. */ }
-							<th>{ __( 'SKU', 'catalogops' ) }</th>
-							<th>{ __( 'Name', 'catalogops' ) }</th>
-							<th>{ __( 'Brand', 'catalogops' ) }</th>
-							<th>{ __( 'Tags', 'catalogops' ) }</th>
-							<th className="catalogops-num">
-								{ __( 'Cost', 'catalogops' ) }
-							</th>
-							<th className="catalogops-num">
-								{ __( 'Price', 'catalogops' ) }
-							</th>
-							<th className="catalogops-num">
-								{ __( 'Sale price', 'catalogops' ) }
-							</th>
-							<th>{ __( 'Stock', 'catalogops' ) }</th>
-							<th className="catalogops-num">
-								{ __( 'Qty', 'catalogops' ) }
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						{ items.length === 0 && ! loading ? (
+					<table
+						className={ `wp-list-table widefat fixed striped${
+							loading ? ' catalogops-loading-dim' : ''
+						}` }
+					>
+						<thead>
 							<tr>
-								<td colSpan="9">
-									{ __(
-										'No items match this filter.',
-										'catalogops'
-									) }
-								</td>
+								{ /* SKU leads, as it does in the preview and the audit
+							     log: it is how a product is named out loud. The id
+							     is addressing, not information. Category, brand and
+							     tags earn their columns by being filterable —
+							     filtering on something the results do not show is a
+							     guess — and they run in the order the filter's own
+							     controls do. */ }
+								<th>{ __( 'SKU', 'catalogops' ) }</th>
+								<th>{ __( 'Name', 'catalogops' ) }</th>
+								<th>{ __( 'Categories', 'catalogops' ) }</th>
+								<th>{ __( 'Brand', 'catalogops' ) }</th>
+								<th>{ __( 'Tags', 'catalogops' ) }</th>
+								<th className="catalogops-num">
+									{ __( 'Cost', 'catalogops' ) }
+								</th>
+								<th className="catalogops-num">
+									{ __( 'Price', 'catalogops' ) }
+								</th>
+								<th className="catalogops-num">
+									{ __( 'Sale price', 'catalogops' ) }
+								</th>
+								<th>{ __( 'Stock', 'catalogops' ) }</th>
+								<th className="catalogops-num">
+									{ __( 'Qty', 'catalogops' ) }
+								</th>
 							</tr>
-						) : (
-							items.map( ( item ) => (
-								<tr key={ item.id }>
-									<td>{ item.sku }</td>
-									<td>{ item.name }</td>
-									<td>
-										{ item.brand || (
-											<span className="catalogops-muted">
-												—
-											</span>
+						</thead>
+						<tbody>
+							{ items.length === 0 && ! loading ? (
+								<tr>
+									<td colSpan="10">
+										{ __(
+											'No items match this filter.',
+											'catalogops'
 										) }
-									</td>
-									<td>
-										{ item.tags && item.tags.length > 0 ? (
-											item.tags.join( ', ' )
-										) : (
-											<span className="catalogops-muted">
-												—
-											</span>
-										) }
-									</td>
-									<td className="catalogops-num">
-										{ item.cost === null ||
-										item.cost === undefined ? (
-											<span className="catalogops-muted">
-												—
-											</span>
-										) : (
-											item.cost
-										) }
-									</td>
-									<td className="catalogops-num">
-										{ item.price }
-									</td>
-									<td className="catalogops-num">
-										{ item.sale_price === null ||
-										item.sale_price === undefined ? (
-											<span className="catalogops-muted">
-												—
-											</span>
-										) : (
-											item.sale_price
-										) }
-									</td>
-									<td>
-										<span
-											className={ `catalogops-badge catalogops-badge--${ stockBadge(
-												item.stock_status
-											) }` }
-										>
-											{ item.stock_status }
-										</span>
-									</td>
-									<td className="catalogops-num">
-										{ item.stock_quantity }
 									</td>
 								</tr>
-							) )
-						) }
-					</tbody>
-				</table>
+							) : (
+								items.map( ( item ) => (
+									<tr key={ item.id }>
+										<td>{ item.sku }</td>
+										<td>{ item.name }</td>
+										<td>
+											{ item.categories &&
+											item.categories.length > 0 ? (
+												item.categories.join( ', ' )
+											) : (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) }
+										</td>
+										<td>
+											{ item.brand || (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) }
+										</td>
+										<td>
+											{ item.tags &&
+											item.tags.length > 0 ? (
+												item.tags.join( ', ' )
+											) : (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) }
+										</td>
+										<td className="catalogops-num">
+											{ item.cost === null ||
+											item.cost === undefined ? (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) : (
+												item.cost
+											) }
+										</td>
+										<td className="catalogops-num">
+											{ item.price }
+										</td>
+										<td className="catalogops-num">
+											{ item.sale_price === null ||
+											item.sale_price === undefined ? (
+												<span className="catalogops-muted">
+													—
+												</span>
+											) : (
+												item.sale_price
+											) }
+										</td>
+										<td>
+											<span
+												className={ `catalogops-badge catalogops-badge--${ stockBadge(
+													item.stock_status
+												) }` }
+											>
+												{ item.stock_status }
+											</span>
+										</td>
+										<td className="catalogops-num">
+											{ item.stock_quantity }
+										</td>
+									</tr>
+								) )
+							) }
+						</tbody>
+					</table>
 
-				<Pagination
-					page={ page }
-					pages={ pages }
-					busy={ loading }
-					onPage={ run }
+					<Pagination
+						page={ page }
+						pages={ pages }
+						busy={ loading }
+						onPage={ run }
+					/>
+				</div>
+
+				<BulkEdit
+					filter={ appliedFilter }
+					resetKey={ resetKey }
+					onDone={ onApplyDone }
+					onScheduleCreated={ onScheduleCreated }
+					backupAck={ onboarding ? onboarding.backup_ack : true }
+					onBackupAck={ () =>
+						setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) )
+					}
+					retentionDays={
+						onboarding ? onboarding.retention_days : 30
+					}
 				/>
+
+				<Schedules
+					refreshKey={ schedulesKey }
+					onRan={ refreshAll }
+					onFiringSoon={ setFiringSoon }
+				/>
+
+				<History
+					refreshKey={ historyKey }
+					onChanged={ refreshAll }
+					firingSoon={ firingSoon }
+				/>
+
+				<RetentionSetting />
 			</div>
-
-			<BulkEdit
-				filter={ appliedFilter }
-				resetKey={ resetKey }
-				onDone={ onApplyDone }
-				onScheduleCreated={ onScheduleCreated }
-				backupAck={ onboarding ? onboarding.backup_ack : true }
-				onBackupAck={ () =>
-					setOnboarding( ( o ) => ( { ...o, backup_ack: true } ) )
-				}
-				retentionDays={ onboarding ? onboarding.retention_days : 30 }
-			/>
-
-			<Schedules refreshKey={ schedulesKey } onRan={ refreshAll } />
-
-			<History refreshKey={ historyKey } onChanged={ refreshAll } />
-
-			<RetentionSetting />
-		</div>
+		</OnboardingContext.Provider>
 	);
 }
 

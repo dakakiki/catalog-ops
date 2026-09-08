@@ -164,6 +164,104 @@ final class VariationQueryTest extends WP_UnitTestCase {
 		$this->assertSame( array(), $none );
 	}
 
+	/**
+	 * Pins the one empty-set answer this release changes: under the variation
+	 * scope, an attribute filter whose named terms have all been deleted matches
+	 * nothing, and its negation matches every variation.
+	 *
+	 * Those are the answers the product scope has always given — taxonomy_clause()
+	 * resolves a vanished term to `1 = 0` / `1 = 1` — and the variation clause now
+	 * agrees. On 0.7.1 it returned an empty fragment instead, which build_where()
+	 * skips, so the condition vanished and BOTH directions returned every
+	 * variation: "size is Large" and "size is not Large" answered identically.
+	 *
+	 * Note this is not the unknown-field refusal. `attribute:pa_size` is a
+	 * well-shaped key; that its term is gone is a question with a real answer, not
+	 * an unanswerable one.
+	 */
+	public function test_a_variation_attribute_whose_terms_are_gone_matches_nothing(): void {
+		list( , $variations ) = $this->make_variable_product(
+			array( 'Small' => 10, 'Medium' => 50, 'Large' => 90 )
+		);
+
+		// Delete the size the Large variation was built for. The variation keeps its
+		// attribute_pa_size meta; only the term it named is gone.
+		$deleted = $this->large;
+		wp_delete_term( $deleted, $this->size_tax );
+
+		$none = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::IN, array( $deleted ) ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertSame( array(), $none, 'a deleted attribute term can be carried by nothing' );
+
+		$all = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::NOT_IN, array( $deleted ) ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertEqualsCanonicalizing( array_values( $variations ), $all, 'and every variation lacks it' );
+	}
+
+	/**
+	 * "Not equal to" excludes on the variation-attribute path too.
+	 *
+	 * This builder kept its own list of which operators were negative — `NOT_IN`
+	 * and `NOT_EXISTS` — and, like the taxonomy one, forgot `NOT_EQUALS`. Asked to
+	 * leave out the Large variations it returned exactly those, on both branches:
+	 * the live one here, and the vanished-term sentinel below. The rule is shared
+	 * now ({@see \CatalogOps\Query\Operator::is_negative()}).
+	 */
+	public function test_not_equals_on_a_variation_attribute_excludes_that_size(): void {
+		list( , $variations ) = $this->make_variable_product(
+			array(
+				'Small' => 10,
+				'Large' => 20,
+			)
+		);
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::NOT_EQUALS, $this->large ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		$this->assertNotContains( $variations['Large'], $ids, 'The excluded size came back.' );
+		$this->assertContains( $variations['Small'], $ids );
+	}
+
+	public function test_not_equals_on_a_deleted_variation_term_matches_everything(): void {
+		list( , $variations ) = $this->make_variable_product(
+			array(
+				'Small' => 10,
+				'Large' => 20,
+			)
+		);
+
+		$deleted = $this->large;
+		wp_delete_term( $deleted, $this->size_tax );
+
+		$ids = $this->engine->resolve(
+			new Filter(
+				array( new Condition( 'attribute:' . $this->size_tax, Operator::NOT_EQUALS, $deleted ) ),
+				Filter::RELATION_AND,
+				Query_Scope::VARIATION
+			)
+		);
+
+		// Nothing can carry a term that is gone, so excluding it excludes nobody.
+		$this->assertEqualsCanonicalizing( array_values( $variations ), $ids );
+	}
+
 	public function test_variation_meta_filters_on_the_variations_own_meta(): void {
 		list( , $variations ) = $this->make_variable_product( array( 'Small' => 10, 'Medium' => 50 ) );
 

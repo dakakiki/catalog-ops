@@ -38,4 +38,19 @@ interface Operation_Scheduler {
 	 * @param int $op_id Operation id.
 	 */
 	public function cancel_operation( int $op_id ): void;
+
+	/**
+	 * Let go of chunks this operation left claimed and unfinished, and report how
+	 * many there were.
+	 *
+	 * Distinct from {@see cancel_operation()}, which unschedules work that is still
+	 * *waiting*. This is for work that was taken and never given back: a process that
+	 * died mid-chunk leaves its queue entry claimed, and a claim held by nobody stops
+	 * the queue from starting anything else at all. Recovery cannot re-enqueue over
+	 * it; it has to be let go first.
+	 *
+	 * @param int $op_id Operation id.
+	 * @return int How many abandoned chunks were released.
+	 */
+	public function release_stuck_chunks( int $op_id ): int;
 }

@@ -71,6 +71,76 @@ final class QueryControllerTest extends WP_UnitTestCase {
 		$this->assertSame( array( 'QC Clearance' ), $data['items'][0]['tags'] );
 	}
 
+	public function test_rows_carry_the_category_the_filter_opens_with(): void {
+		// Category is the filter's first control and the one most people reach for,
+		// and it was the one column the results did not show — the same "filter on
+		// what you cannot see" gap brand and tags were added to close. Both
+		// taxonomies come back from one statement, so this also pins that reading
+		// them together did not lose either.
+		$id       = $this->make_product( 40 );
+		$category = wp_insert_term( 'QC Seasonal Wear', 'product_cat' );
+		$tag      = wp_insert_term( 'QC Markdown', 'product_tag' );
+
+		wp_set_object_terms( $id, array( (int) $category['term_id'] ), 'product_cat' );
+		wp_set_object_terms( $id, array( (int) $tag['term_id'] ), 'product_tag' );
+
+		$item = $this->dispatch( array() )['items'][0];
+
+		$this->assertContains( 'QC Seasonal Wear', $item['categories'] );
+		$this->assertSame( array( 'QC Markdown' ), $item['tags'] );
+		// The two must not bleed into each other: a category is not a tag.
+		$this->assertNotContains( 'QC Markdown', $item['categories'] );
+		$this->assertNotContains( 'QC Seasonal Wear', $item['tags'] );
+	}
+
+	public function test_a_term_name_with_an_ampersand_reads_as_written(): void {
+		// WordPress stores term names entity-encoded, and this table reads wp_terms
+		// straight through $wpdb, so nothing decodes them on the way out. React then
+		// renders the value as text and escapes it again, so the row showed
+		// "Home &amp; Kitchen" while the filter's own dropdown — which decodes —
+		// said "Home & Kitchen" for the very same term.
+		global $wpdb;
+
+		$id       = $this->make_product( 40 );
+		$category = wp_insert_term( 'QC Home and Kitchen', 'product_cat' );
+		$term_id  = (int) $category['term_id'];
+
+		// Written as the encoded form the real catalogue holds, rather than trusting
+		// wp_insert_term to encode it, so the test pins the decode and not WordPress.
+		$wpdb->update( $wpdb->terms, array( 'name' => 'QC Home &amp; Kitchen' ), array( 'term_id' => $term_id ), array( '%s' ), array( '%d' ) );
+		clean_term_cache( $term_id, 'product_cat' );
+
+		wp_set_object_terms( $id, array( $term_id ), 'product_cat' );
+
+		$item = $this->dispatch( array() )['items'][0];
+
+		$this->assertContains( 'QC Home & Kitchen', $item['categories'] );
+		$this->assertNotContains( 'QC Home &amp; Kitchen', $item['categories'] );
+	}
+
+	public function test_a_variation_shows_its_parents_categories_and_tags(): void {
+		// A variation carries no terms of its own; it inherits the parent's, which
+		// is also how the filter matches them — for categories exactly as for tags.
+		list( $parent, $variations ) = $this->make_variable_product();
+		$category                    = wp_insert_term( 'QC Parent Cat', 'product_cat' );
+
+		wp_set_object_terms( $parent, array( (int) $category['term_id'] ), 'product_cat' );
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params( array( 'scope' => 'variation', 'filter' => array() ) );
+
+		$response = rest_do_request( $request );
+		$this->assertSame( 200, $response->get_status() );
+
+		$rows = $response->get_data()['items'];
+		$this->assertNotEmpty( $rows );
+		$this->assertContains( $variations['Large'], array_column( $rows, 'id' ) );
+
+		foreach ( $rows as $row ) {
+			$this->assertContains( 'QC Parent Cat', $row['categories'] );
+		}
+	}
+
 	public function test_a_variation_shows_its_parents_tags(): void {
 		// A variation carries no terms of its own; it inherits the parent's, which
 		// is also how the filter matches them.
@@ -238,6 +308,95 @@ final class QueryControllerTest extends WP_UnitTestCase {
 		// equally empty table would be noise.
 		$this->assertSame( 0, $data['total'] );
 		$this->assertNull( $data['other_scope'] );
+	}
+
+	/**
+	 * Pins that a condition naming a field the engine cannot answer comes back as a
+	 * 400 whose message names the field, so the admin app can put an inline notice
+	 * on the condition that needs fixing.
+	 *
+	 * 0.7.1 answered 200 and listed the whole catalogue instead: `clause_for()`
+	 * returned an empty SQL fragment for an unknown field, `build_where()` skipped
+	 * it, and the filter ran with one condition fewer — matching strictly more
+	 * products than were asked for, in preview and in the run alike. The code is
+	 * asserted as well as the status because a 500-shaped failure can present as a
+	 * status in some setups, and this endpoint had no try/catch of its own, so a
+	 * refusal here surfaced as a PHP fatal.
+	 */
+	public function test_a_filter_naming_an_unknown_field_answers_400_not_a_fatal(): void {
+		// Present so a dropped condition would be visible as a 200 listing it.
+		$this->make_product( 10 );
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'filter' => array(
+					'conditions' => array( array( 'field' => 'acf:clearance', 'operator' => '=', 'value' => 'yes' ) ),
+				),
+			)
+		);
+
+		$response = rest_do_request( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'catalogops_invalid_request', $data['code'] );
+		$this->assertStringContainsString( 'acf:clearance', $data['message'] );
+	}
+
+	/**
+	 * Pins that a mistyped operator token is a 400 naming the token.
+	 *
+	 * 0.7.1 built the operator with `Operator::from()`, which raises \ValueError —
+	 * an \Error, not an \Exception — so every `catch ( InvalidArgumentException )`
+	 * at the REST boundary missed it and a typo in the filter JSON was an uncaught
+	 * fatal rather than a message the user could act on.
+	 */
+	public function test_an_unknown_operator_token_answers_400_not_a_fatal(): void {
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'filter' => array(
+					'conditions' => array( array( 'field' => 'price', 'operator' => 'roughly', 'value' => 50 ) ),
+				),
+			)
+		);
+
+		$response = rest_do_request( $request );
+		$data     = $response->get_data();
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'catalogops_invalid_request', $data['code'] );
+		$this->assertStringContainsString( 'roughly', $data['message'] );
+	}
+
+	/**
+	 * A guard for behaviour that must not change: a well-formed filter still gets a
+	 * 200 and still gets the empty-result hint.
+	 *
+	 * `query()` was restructured so that `Filter::from_array()`, `resolve()` and
+	 * `other_scope()` share one try — the hint re-asks the same filter, and it only
+	 * asks when the first call found nothing, which is exactly the state a filter
+	 * naming a vanished field reaches. This pins that the shared try neither
+	 * changed the happy path nor swallowed the second scope's count.
+	 */
+	public function test_the_empty_result_hint_still_works_after_the_guard(): void {
+		$this->make_product( 10 );
+		$this->make_variable_product();
+
+		// dispatch() asserts the 200 itself; the hint has to ride along with it.
+		$data = $this->dispatch(
+			array( 'conditions' => array( array( 'field' => 'price', 'operator' => '>', 'value' => 30 ) ) )
+		);
+
+		$this->assertSame( 0, $data['total'] );
+		$this->assertSame(
+			array(
+				'scope' => 'variation',
+				'total' => 1,
+			),
+			$data['other_scope']
+		);
 	}
 
 	/**

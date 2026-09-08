@@ -11,6 +11,7 @@ namespace CatalogOps\Tests\Integration\Query;
 
 use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Filter_Field_Unavailable;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Engine;
 use WC_Product_Attribute;
@@ -266,6 +267,71 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertSame( array(), $ids );
 	}
 
+	/**
+	 * "Not equal to" excludes, on every path that can be asked it.
+	 *
+	 * It used to include. `taxonomy_clause()` and `variation_attribute_clause()`
+	 * each kept their own list of which operators were negative, both listed
+	 * `NOT_IN` and `NOT_EXISTS`, and neither remembered `NOT_EQUALS` — so it fell
+	 * through to the *positive* membership branch and `category != 5` returned
+	 * exactly the products it had been asked to leave out. An exclusion that
+	 * inverts is the worst shape a filter bug can take: the count looks
+	 * reasonable, the preview agrees with the run, and the edit lands on precisely
+	 * the wrong products. `meta_clause()` kept a third copy of the same rule and
+	 * happened to get it right, which is why nobody noticed.
+	 *
+	 * The rule lives in {@see Operator::is_negative()} now, so these three paths
+	 * cannot disagree again.
+	 */
+	public function test_not_equals_excludes_rather_than_includes(): void {
+		$inside  = $this->make_product( array( 'category' => $this->cat_a ) );
+		$outside = $this->make_product( array( 'category' => $this->cat_b ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::NOT_EQUALS, $this->cat_a ) ) )
+		);
+
+		$this->assertNotContains( $inside, $ids, 'The excluded category came back.' );
+		$this->assertContains( $outside, $ids );
+
+		// Its positive twin still means what it says, so the pair is symmetric.
+		$positive = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::EQUALS, $this->cat_a ) ) )
+		);
+
+		$this->assertContains( $inside, $positive );
+		$this->assertNotContains( $outside, $positive );
+	}
+
+	public function test_not_equals_on_a_meta_key_keeps_objects_without_it(): void {
+		// The path that was already right, pinned so the shared rule cannot break
+		// it: an exclusion has to keep the objects that carry no such value at all.
+		// They are, definitively, not that brand.
+		$acme      = $this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$globex    = $this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
+		$unbranded = $this->make_product( array() );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'meta:_brand', Operator::NOT_EQUALS, 'Acme' ) ) )
+		);
+
+		$this->assertNotContains( $acme, $ids );
+		$this->assertContains( $globex, $ids );
+		$this->assertContains( $unbranded, $ids );
+	}
+
+	public function test_not_equals_on_a_term_that_does_not_exist_matches_everything(): void {
+		// The sentinel branch had the same split rule: excluding a term nothing can
+		// carry excludes nobody, and asking it with != used to answer "nothing".
+		$product = $this->make_product( array( 'category' => $this->cat_a ) );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'category', Operator::NOT_EQUALS, 99999999 ) ) )
+		);
+
+		$this->assertContains( $product, $ids );
+	}
+
 	public function test_not_in_a_term_that_does_not_exist_matches_everything(): void {
 		// The mirror of the above: nothing can carry a term that is not there, so
 		// excluding it excludes nobody.
@@ -291,6 +357,155 @@ final class QueryEngineTest extends WP_UnitTestCase {
 
 		$this->assertEqualsCanonicalizing( array( $acme, $globex ), $ids );
 		$this->assertNotContains( $hooli, $ids );
+	}
+
+	/**
+	 * The shape, not the answer — because the answer is identical either way and
+	 * that is exactly how this went unnoticed.
+	 *
+	 * The rule this engine is built around is that positive set membership is
+	 * JOINed, never tested as `l.product_id IN (SELECT …)`, because every one of
+	 * those invites MySQL to re-plan the whole query. It was applied to categories
+	 * and tags and never carried across to meta — so brand, the one meta field the
+	 * UI offers, kept writing the hazardous form. Measured on the live catalogue on
+	 * 2026-09-06, with each brand on ~10,000 products: four brands with nothing else
+	 * selected did not finish inside 45 seconds, and took 4.4s once joined. The user
+	 * met it as a filter that stopped responding.
+	 *
+	 * A results assertion cannot catch that — both shapes return the same rows —
+	 * so this reads the SQL the engine actually emits.
+	 */
+	public function test_positive_meta_membership_is_joined_rather_than_tested(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+
+		$seen = $this->capture_sql(
+			function (): void {
+				$this->engine->count(
+					new Filter(
+						array(
+							new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+							new Condition( 'meta:_brand', Operator::IN, array( 'Acme', 'Globex' ) ),
+						)
+					)
+				);
+			}
+		);
+
+		$this->assertNotSame( '', $seen, 'no query was captured, so nothing was tested' );
+		$this->assertStringContainsString( 'co_meta1', $seen, 'the meta condition did not become a join' );
+		$this->assertMatchesRegularExpression( '/INNER JOIN \(\s*SELECT DISTINCT pm\.post_id/', $seen );
+		$this->assertStringNotContainsString( 'l.product_id IN (', $seen );
+	}
+
+	/**
+	 * Negation keeps the tested form on purpose: an anti-join gives the optimiser no
+	 * join order to re-plan around, and a join would silently drop every product
+	 * that has no such meta row — which is precisely the set an exclusion must keep.
+	 */
+	public function test_meta_exclusion_stays_out_of_the_join(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+
+		$seen = $this->capture_sql(
+			function (): void {
+				$this->engine->count(
+					new Filter( array( new Condition( 'meta:_brand', Operator::NOT_IN, array( 'Acme' ) ) ) )
+				);
+			}
+		);
+
+		$this->assertStringContainsString( 'l.product_id NOT IN (', $seen );
+		$this->assertStringNotContainsString( 'co_meta', $seen );
+	}
+
+	/**
+	 * A join is an AND, so under OR the condition has to stay in the WHERE or it
+	 * would quietly narrow the filter instead of widening it.
+	 */
+	public function test_meta_membership_under_or_is_not_joined(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+
+		$seen = $this->capture_sql(
+			function (): void {
+				$this->engine->count(
+					new Filter(
+						array(
+							new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+							new Condition( 'meta:_brand', Operator::IN, array( 'Acme' ) ),
+						),
+						Filter::RELATION_OR
+					)
+				);
+			}
+		);
+
+		$this->assertStringContainsString( 'l.product_id IN (', $seen );
+		$this->assertStringNotContainsString( 'co_meta', $seen );
+	}
+
+	/**
+	 * Run something and return the longest statement it sent to MySQL — the engine's
+	 * own, rather than the small lookups around it.
+	 *
+	 * @param callable $run What to run.
+	 */
+	private function capture_sql( callable $run ): string {
+		$seen = '';
+
+		$watch = static function ( $query ) use ( &$seen ) {
+			if ( str_contains( $query, 'wc_product_meta_lookup' ) && strlen( $query ) > strlen( $seen ) ) {
+				$seen = $query;
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $watch );
+
+		try {
+			$run();
+		} finally {
+			remove_filter( 'query', $watch );
+		}
+
+		return $seen;
+	}
+
+	/**
+	 * "Without tag" in the filter, which asks about the taxonomy rather than about
+	 * which terms — the shape behind the tag list's one entry that is not a tag.
+	 */
+	public function test_tag_not_exists_matches_only_untagged_products(): void {
+		$tag = $this->ensure_term( 'QE Tag A', 'product_tag' );
+
+		$tagged   = $this->make_product( array( 'price' => 10 ) );
+		$untagged = $this->make_product( array( 'price' => 20 ) );
+		wp_set_object_terms( $tagged, array( $tag ), 'product_tag' );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'tag', Operator::NOT_EXISTS ) ) )
+		);
+
+		$this->assertContains( $untagged, $ids );
+		$this->assertNotContains( $tagged, $ids );
+	}
+
+	/**
+	 * Its opposite, which the same control produces in "is not" mode: excluding the
+	 * untagged leaves exactly the products that carry a tag.
+	 */
+	public function test_tag_exists_matches_only_tagged_products(): void {
+		$tag = $this->ensure_term( 'QE Tag B', 'product_tag' );
+
+		$tagged   = $this->make_product( array( 'price' => 10 ) );
+		$untagged = $this->make_product( array( 'price' => 20 ) );
+		wp_set_object_terms( $tagged, array( $tag ), 'product_tag' );
+
+		$ids = $this->engine->resolve(
+			new Filter( array( new Condition( 'tag', Operator::EXISTS ) ) )
+		);
+
+		$this->assertContains( $tagged, $ids );
+		$this->assertNotContains( $untagged, $ids );
 	}
 
 	public function test_sku_contains_search(): void {
@@ -435,6 +650,173 @@ final class QueryEngineTest extends WP_UnitTestCase {
 		$this->assertSame( array( $match ), $ids );
 		$this->assertNotContains( $wrong_cat, $ids );
 		$this->assertNotContains( $too_cheap, $ids );
+	}
+
+	/**
+	 * Pins that a field the engine cannot answer is refused, not dropped.
+	 *
+	 * The filter reads "in category A *and* on clearance", and `acf:clearance` is
+	 * the shape a third-party field key takes — a plugin's own prefix the engine
+	 * has never claimed. In 0.7.1 `clause_for()` fell through to
+	 * `return array( '', array() )`, `build_where()` skipped the empty fragment,
+	 * and the filter ran as "in category A" alone: both products below came back,
+	 * a strictly *wider* set than was asked for. Preview and run resolved the same
+	 * widened filter and agreed, so nothing downstream could notice — which is why
+	 * widening is the one direction that may never happen quietly.
+	 */
+	public function test_an_unknown_field_is_refused_rather_than_silently_widening(): void {
+		// The two products 0.7.1 handed back for a filter that asked for neither.
+		$this->make_product( array( 'category' => $this->cat_a ) );
+		$this->make_product( array( 'category' => $this->cat_a ) );
+
+		$filter = new Filter(
+			array(
+				new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+				new Condition( 'acf:clearance', Operator::EQUALS, 1 ),
+			)
+		);
+
+		try {
+			$this->engine->resolve( $filter );
+			$this->fail( 'Expected the engine to refuse a filter naming an unknown field.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			// The message names the offending key so the user can repair the filter.
+			$this->assertStringContainsString( 'acf:clearance', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that the refusal covers `count()` as well as `resolve()`.
+	 *
+	 * The two public entry points have to agree: `count()` is what the preview
+	 * asks, `resolve()` is what the freezing path asks. A fix on only one of them
+	 * would let the preview refuse while the write went ahead against the wider
+	 * set — or the reverse, a preview promising a count the run then refuses.
+	 * 0.7.1 answered 2 here: every product in the category, clearance ignored.
+	 */
+	public function test_count_refuses_an_unknown_field_too(): void {
+		$this->make_product( array( 'category' => $this->cat_a ) );
+		$this->make_product( array( 'category' => $this->cat_a ) );
+
+		$filter = new Filter(
+			array(
+				new Condition( 'category', Operator::IN, array( $this->cat_a ) ),
+				new Condition( 'acf:clearance', Operator::EQUALS, 1 ),
+			)
+		);
+
+		try {
+			$this->engine->count( $filter );
+			$this->fail( 'Expected count() to refuse a filter naming an unknown field.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'acf:clearance', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that a known field asked an impossible comparison is refused.
+	 *
+	 * The field key is fine in both halves; it is the operator the column cannot
+	 * make — "price contains 5" on a numeric column, "sku greater than 5" on a
+	 * text one. 0.7.1 dropped each condition whole, so a one-condition filter
+	 * became no filter and matched the entire published catalogue.
+	 *
+	 * Two throws, so two assertions: PHPUnit stops at the first expected
+	 * exception, and the second half would never run under one `expectException`.
+	 */
+	public function test_a_comparison_the_column_cannot_make_is_refused(): void {
+		// On 0.7.1 this product answered both filters below.
+		$this->make_product(
+			array(
+				'price' => 50,
+				'sku'   => 'COPS-REFUSE-1',
+			)
+		);
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'price', Operator::CONTAINS, '5' ) ) )
+			);
+			$this->fail( 'Expected a "contains" comparison on price to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'price', $e->getMessage() );
+		}
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'sku', Operator::GREATER_THAN, 5 ) ) )
+			);
+			$this->fail( 'Expected a "greater than" comparison on sku to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'sku', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that a half-built "between" is refused rather than ignored.
+	 *
+	 * A range with only its low end is a filter the user is still writing, and it
+	 * cannot be run as asked. 0.7.1 returned an empty fragment for it, which under
+	 * a single-condition filter is the widest possible answer: every published
+	 * product, including the one below that is nowhere near the range.
+	 */
+	public function test_a_between_filter_with_one_end_is_refused(): void {
+		$this->make_product( array( 'price' => 500 ) );
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'price', Operator::BETWEEN, array( 10 ) ) ) )
+			);
+			$this->fail( 'Expected a one-ended "between" filter to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'between', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Pins that a prefix with no identifier after it is refused.
+	 *
+	 * `meta:` names no key. It is not a typo anyone types by hand: it is what a
+	 * site whose `catalogops_brand_meta_key` filter returns an empty string emits
+	 * from `/fields/brands`, so the brand dropdown builds a condition on nothing.
+	 * In 0.7.1 `meta_clause()` was still reached with an empty key and returned an
+	 * empty fragment, so "brand is Acme" quietly meant "every product".
+	 */
+	public function test_a_meta_prefix_with_no_key_is_refused(): void {
+		$this->make_product( array( 'meta' => array( '_brand' => 'Acme' ) ) );
+		$this->make_product( array( 'meta' => array( '_brand' => 'Globex' ) ) );
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'meta:', Operator::IN, array( 'Acme' ) ) ) )
+			);
+			$this->fail( 'Expected a "meta:" key with nothing after the colon to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'meta:', $e->getMessage() );
+		}
+	}
+
+	/**
+	 * The same half-built range over a meta key, which widens by a different route.
+	 *
+	 * A meta condition keeps its subquery whatever the value test comes to, so an
+	 * empty test did not drop the condition — it decayed it into "has a `_cost` at
+	 * all". Both products below carry one, so 0.7.1 answered a one-ended range with
+	 * every costed product, and the price path and the meta path disagreed about
+	 * the identical mistake.
+	 */
+	public function test_a_one_ended_between_on_a_meta_key_is_refused_too(): void {
+		$this->make_product( array( 'meta' => array( '_cost' => '12.00' ) ) );
+		$this->make_product( array( 'meta' => array( '_cost' => '900.00' ) ) );
+
+		try {
+			$this->engine->resolve(
+				new Filter( array( new Condition( 'meta:_cost', Operator::BETWEEN, array( 10 ) ) ) )
+			);
+			$this->fail( 'Expected a one-ended "between" on a meta key to be refused.' );
+		} catch ( Filter_Field_Unavailable $e ) {
+			$this->assertStringContainsString( 'between', $e->getMessage() );
+		}
 	}
 
 	/**

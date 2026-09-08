@@ -77,6 +77,36 @@ final class SchemaTest extends WP_UnitTestCase {
 		$this->assertTrue( $this->table_exists( $this->schema->operations_table() ) );
 	}
 
+	/**
+	 * Pins migration 7: a fresh install leaves `paused_reason` on the schedules
+	 * table, so a schedule the runner pauses has somewhere to record what stopped
+	 * it. On 0.7.1 the migration did not exist and the column was absent — the
+	 * only account of the failure was the exception escaping into Action
+	 * Scheduler's log, which containing the throw takes away.
+	 */
+	public function test_the_schedules_table_records_why_a_schedule_paused(): void {
+		$this->schema->install();
+
+		$this->assertTrue(
+			$this->column_exists( $this->schema->schedules_table(), 'paused_reason' )
+		);
+	}
+
+	/**
+	 * Pins migration 8: a fresh install leaves `schedule_id` on the operations
+	 * table, so a run can name the schedule that made it. Before it, the only link
+	 * ran the other way and one row deep — `schedules.last_op_id`, overwritten on
+	 * every fire — so undoing any run but the newest could not find the schedule
+	 * that was about to apply the change again.
+	 */
+	public function test_the_operations_table_records_the_schedule_that_ran_it(): void {
+		$this->schema->install();
+
+		$this->assertTrue(
+			$this->column_exists( $this->schema->operations_table(), 'schedule_id' )
+		);
+	}
+
 	public function test_maybe_upgrade_installs_when_behind(): void {
 		$this->assertFalse( $this->table_exists( $this->schema->changes_table() ) );
 
@@ -129,5 +159,19 @@ final class SchemaTest extends WP_UnitTestCase {
 				$table
 			)
 		);
+	}
+
+	private function column_exists( string $table, string $column ): bool {
+		global $wpdb;
+
+		$count = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s',
+				$table,
+				$column
+			)
+		);
+
+		return $count > 0;
 	}
 }
