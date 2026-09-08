@@ -59,6 +59,61 @@ final class OperationsRepositoryTest extends Operations_Database_Case {
 		$this->assertContains( 'conflict_policy', $columns );
 	}
 
+	public function test_migration_added_the_note_and_schedule_name_columns(): void {
+		global $wpdb;
+
+		$columns = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s',
+				$this->schema->operations_table()
+			)
+		);
+
+		$this->assertContains( 'schedule_name', $columns );
+		$this->assertContains( 'note', $columns );
+	}
+
+	/**
+	 * The two answers the history could not give: which schedule, and why.
+	 */
+	public function test_a_note_and_a_schedule_name_round_trip(): void {
+		$operations = new Operations( $GLOBALS['wpdb'], $this->schema );
+
+		$id = $operations->create(
+			new Filter(),
+			array( new Set_Value( 'regular_price', '9.99' ) ),
+			Operation_Mode::SAFE,
+			Operation_Source::SCHEDULE,
+			1,
+			7,
+			null,
+			null,
+			'Weekly repricing',
+			'Supplier raised prices, approved by Ana'
+		);
+
+		$operation = $operations->find( $id );
+
+		$this->assertNotNull( $operation );
+		$this->assertSame( 7, $operation->schedule_id );
+		$this->assertSame( 'Weekly repricing', $operation->schedule_name );
+		$this->assertSame( 'Supplier raised prices, approved by Ana', $operation->note );
+	}
+
+	/**
+	 * A run with neither reads as null rather than as an empty string, so the
+	 * history can show nothing at all rather than an empty line where a reason
+	 * would be. Every row written before migration 9 is in exactly this state.
+	 */
+	public function test_a_run_with_no_note_and_no_schedule_reads_as_null(): void {
+		$operations = new Operations( $GLOBALS['wpdb'], $this->schema );
+		$operation  = $operations->find( $this->make_operation() );
+
+		$this->assertNotNull( $operation );
+		$this->assertNull( $operation->schedule_name );
+		$this->assertNull( $operation->note );
+	}
+
 	public function test_undo_metadata_round_trips(): void {
 		$id = $this->operations->create(
 			new Filter(),

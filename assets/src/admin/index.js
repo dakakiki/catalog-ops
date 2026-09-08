@@ -1879,6 +1879,11 @@ function BulkEdit( {
 	// is mandatory (CONTEXT §9): a required acknowledgement, not a throwaway
 	// dialog. Once acknowledged, applying just asks for a plain confirmation.
 	const [ confirming, setConfirming ] = useState( false );
+	// The user's reason for this run, kept beside the confirmation rather than in
+	// the form: it is written while looking at the count, and cleared the moment
+	// the run starts so the next one cannot inherit it. A stale reason is worse
+	// than none — it reads as deliberate.
+	const [ note, setNote ] = useState( '' );
 	const [ backupChecked, setBackupChecked ] = useState( false );
 
 	// When the change should run: straight away, or on a schedule (the same filter
@@ -2053,6 +2058,7 @@ function BulkEdit( {
 	// (and, the first time, the backup acknowledgement) is satisfied.
 	const doApply = () => {
 		setConfirming( false );
+		setNote( '' );
 		setBusyWith( 'apply' );
 		setError( '' );
 		// The preview is superseded by the running operation, and any previous
@@ -2063,7 +2069,14 @@ function BulkEdit( {
 		apiFetch( {
 			path: '/catalogops/v1/operations',
 			method: 'POST',
-			data: { filter, actions: buildActions() },
+			data: {
+				filter,
+				actions: buildActions(),
+				// Trimmed here so a box holding only spaces is the same as an
+				// empty one: the column is nullable and the history shows nothing
+				// rather than an empty line.
+				note: note.trim(),
+			},
 		} )
 			.then( setOperation )
 			.catch( failed( 'apply' ) )
@@ -3202,6 +3215,37 @@ function BulkEdit( {
 						checked={ backupChecked }
 						onCheck={ setBackupChecked }
 					/>
+
+					{ /* The history records what changed, when, by whom and how
+					     many. This is the only place it can learn WHY, which is
+					     the question asked months later when somebody wants to
+					     know why three thousand prices moved.
+
+					     Optional, and it stays optional: a note demanded on the
+					     last step before a destructive action is a note filled in
+					     with a full stop. It sits here rather than in the form
+					     because this is already a deliberate pause, so it costs no
+					     extra step — and because a reason written while looking at
+					     the count is a better reason than one written before. */ }
+					<div className="catalogops-field catalogops-confirm__note">
+						<label htmlFor="catalogops-apply-note">
+							{ __(
+								'Note for the history (optional)',
+								'catalogops'
+							) }
+						</label>
+						<input
+							id="catalogops-apply-note"
+							type="text"
+							maxLength={ 191 }
+							value={ note }
+							placeholder={ __(
+								'e.g. supplier raised prices, approved by Ana',
+								'catalogops'
+							) }
+							onChange={ ( e ) => setNote( e.target.value ) }
+						/>
+					</div>
 					<div className="catalogops-confirm__actions">
 						{ /* Green because this is the one that runs — the same
 						     vocabulary the row actions already use, and the
@@ -3873,13 +3917,21 @@ function UndoPanel( { op, onDone } ) {
  * `data-tooltip` draws a styled tooltip on hover and on keyboard focus. No
  * `title`, or the browser's own tooltip would surface on top of that one.
  *
- * @param {Object}   props          Component props.
- * @param {string}   props.icon     Dashicons name, without the `dashicons-` prefix.
- * @param {string}   props.label    What the button does.
- * @param {string}   props.variant  Colour role: 'view', 'undo' or 'danger'.
- * @param {Function} props.onClick  Click handler.
- * @param {boolean}  props.isActive Whether its panel is currently open.
- * @param {boolean}  props.disabled Whether it is unavailable.
+ * The two are the same string for every button but one. A button whose tooltip
+ * carries CONTENT rather than a name — the history's note — needs them apart: the
+ * bubble should show the note, while the accessible name has to say what the note
+ * is before reading it out.
+ *
+ * @param {Object}   props             Component props.
+ * @param {string}   props.icon        Dashicons name, without the `dashicons-` prefix.
+ * @param {string}   props.label       What the button does; the accessible name.
+ * @param {string}   props.variant     Colour role: 'view', 'undo' or 'danger'.
+ * @param {Function} props.onClick     Click handler.
+ * @param {boolean}  props.isActive    Whether its panel is currently open.
+ * @param {boolean}  props.disabled    Whether it is unavailable.
+ * @param {string}   props.tooltip     Bubble text, when it differs from the label.
+ * @param {boolean}  props.wideTooltip Let the bubble wrap, for a sentence rather
+ *                                     than a couple of words.
  */
 function IconButton( {
 	icon,
@@ -3888,16 +3940,18 @@ function IconButton( {
 	onClick,
 	isActive = false,
 	disabled = false,
+	tooltip = '',
+	wideTooltip = false,
 } ) {
 	return (
 		<button
 			type="button"
 			className={ `catalogops-icon-button catalogops-icon-button--${ variant }${
 				isActive ? ' is-active' : ''
-			}` }
+			}${ wideTooltip ? ' has-wide-tooltip' : '' }` }
 			onClick={ onClick }
 			disabled={ disabled }
-			data-tooltip={ label }
+			data-tooltip={ tooltip || label }
 			aria-label={ label }
 		>
 			<span
@@ -4006,7 +4060,26 @@ function OperationRow( { op, onChanged, offline = false } ) {
 	return (
 		<>
 			<tr>
-				<td>{ op.source }</td>
+				<td>
+					{ op.source }
+					{ /* Which schedule made this run. The name is the one stored on
+					     the row when it was created, not one looked up now: a
+					     schedule that is deleted or renamed must not be able to
+					     rewrite the history of the runs it made. An older run, or
+					     one whose schedule was gone before the name was ever
+					     recorded, falls back to the id — an unnamed attribution is
+					     still an attribution, and blank would lose it. */ }
+					{ op.schedule_id && (
+						<span className="catalogops-source-schedule">
+							{ op.schedule_name ||
+								sprintf(
+									/* translators: %d: the schedule's id, shown when its name was never recorded or the schedule is gone. */
+									__( 'schedule #%d', 'catalogops' ),
+									op.schedule_id
+								) }
+						</span>
+					) }
+				</td>
 				<td>
 					{ /* A run whose host died stays `running` with a progress bar that
 					     has simply stopped — the same badge and the same numbers as a
@@ -4053,6 +4126,50 @@ function OperationRow( { op, onChanged, offline = false } ) {
 				<td>{ op.created_at_local || op.created_at }</td>
 				<td className="catalogops-cell--actions">
 					<div className="catalogops-actions">
+						{ /* First in the row, because it is the only one that
+						     is not always there. The others sit in a fixed order
+						     by consequence — look, undo, stop, delete — and a
+						     button that appears and disappears in the middle of
+						     that shifts every icon after it, so the same action
+						     is under the pointer in one row and not the next.
+						     Leading, it moves nothing.
+
+						     Shown only when there is one, which is the whole
+						     design: printing every note down the table buries the
+						     history under its own explanations, but a note nobody
+						     can tell is there is a note nobody wrote. The icon's
+						     PRESENCE carries that — you can see which runs were
+						     explained without reading any of them — and hovering
+						     reads the note itself, at no height.
+
+						     It still opens on click, and that is not redundant: a
+						     tooltip does not exist on a touch screen, and text
+						     inside one cannot be selected or copied. Hover is the
+						     quick path; the panel is the one that always works. */ }
+						{ op.note && (
+							<IconButton
+								// A speech bubble, not a document. `format-aside`
+								// sat beside `list-view` in the same green and the
+								// two were read as one control twice over — same
+								// shape, same meaning-colour. This says "somebody
+								// wrote something" and nothing else does.
+								icon="admin-comments"
+								variant="note"
+								// The tooltip IS the note, so hovering reads it
+								// without a click. The accessible name has to say
+								// what it is rather than only what it says, and a
+								// screen reader gets both in one string.
+								label={ sprintf(
+									/* translators: %s: the note the user wrote before running this operation. */
+									__( 'Why this was run: %s', 'catalogops' ),
+									op.note
+								) }
+								tooltip={ op.note }
+								wideTooltip
+								onClick={ () => toggle( 'note' ) }
+								isActive={ open === 'note' }
+							/>
+						) }
 						<IconButton
 							icon="list-view"
 							variant="view"
@@ -4152,6 +4269,9 @@ function OperationRow( { op, onChanged, offline = false } ) {
 			{ open && (
 				<tr className="catalogops-detail">
 					<td colSpan="6">
+						{ open === 'note' && (
+							<p className="catalogops-op-note">{ op.note }</p>
+						) }
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
 						{ open === 'resume' && (
 							<div className="catalogops-confirm">

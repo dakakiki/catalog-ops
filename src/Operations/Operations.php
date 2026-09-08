@@ -57,6 +57,12 @@ final class Operations {
 	 * @param int|null                                $schedule_id     Schedule that spawned this run.
 	 * @param int|null                                $parent_op_id    Parent operation, for undo.
 	 * @param Conflict_Policy|null                    $conflict_policy Drift policy (undo only).
+	 * @param string|null                             $schedule_name   What the schedule was called
+	 *                                                                 at this moment; stored rather
+	 *                                                                 than looked up, so deleting or
+	 *                                                                 renaming the schedule cannot
+	 *                                                                 rewrite this run's history.
+	 * @param string|null                             $note            The user's reason for the run.
 	 * @return int The new operation id.
 	 */
 	public function create(
@@ -67,7 +73,9 @@ final class Operations {
 		int $user_id,
 		?int $schedule_id = null,
 		?int $parent_op_id = null,
-		?Conflict_Policy $conflict_policy = null
+		?Conflict_Policy $conflict_policy = null,
+		?string $schedule_name = null,
+		?string $note = null
 	): int {
 		$this->wpdb->insert(
 			$this->schema->operations_table(),
@@ -86,8 +94,10 @@ final class Operations {
 				'mode'            => $mode->value,
 				'batch_size'      => 0,
 				'conflict_policy' => null === $conflict_policy ? null : $conflict_policy->value,
+				'schedule_name'   => $schedule_name,
+				'note'            => $note,
 			),
-			array( '%s', '%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s' )
+			array( '%s', '%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s', '%s', '%s' )
 		);
 
 		return (int) $this->wpdb->insert_id;
@@ -405,6 +415,10 @@ final class Operations {
 			null === $row['completed_at'] ? null : (string) $row['completed_at'],
 			null === $row['last_progress_at'] ? null : (string) $row['last_progress_at'],
 			empty( $row['conflict_policy'] ) ? null : Conflict_Policy::from( (string) $row['conflict_policy'] ),
+			// Absent on every row written before migration 9, and on every run that
+			// had no schedule or no note. Null reads correctly for all three.
+			isset( $row['schedule_name'] ) && '' !== $row['schedule_name'] ? (string) $row['schedule_name'] : null,
+			isset( $row['note'] ) && '' !== $row['note'] ? (string) $row['note'] : null,
 		);
 	}
 }

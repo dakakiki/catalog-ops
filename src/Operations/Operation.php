@@ -41,6 +41,10 @@ final class Operation {
 	 * @param string|null                      $completed_at     Completion time, or null.
 	 * @param string|null                      $last_progress_at Heartbeat time, or null.
 	 * @param Conflict_Policy|null             $conflict_policy  Drift policy (undo only; null otherwise).
+	 * @param string|null                      $schedule_name    What the schedule was CALLED when
+	 *                                                           this ran; a snapshot, so deleting or
+	 *                                                           renaming it cannot rewrite history.
+	 * @param string|null                      $note             Why the user ran it, in their words.
 	 */
 	public function __construct(
 		public readonly int $id,
@@ -60,6 +64,13 @@ final class Operation {
 		public readonly ?string $completed_at,
 		public readonly ?string $last_progress_at,
 		public readonly ?Conflict_Policy $conflict_policy = null,
+		// What the schedule was CALLED when this ran. A snapshot rather than a
+		// join: a deleted schedule would otherwise take the name of every run it
+		// made with it, and a renamed one would silently relabel its own history.
+		public readonly ?string $schedule_name = null,
+		// Why the user ran this, in their words. The one thing the row cannot
+		// reconstruct from what it already knows.
+		public readonly ?string $note = null,
 	) {}
 
 	/**

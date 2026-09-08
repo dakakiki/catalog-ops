@@ -128,6 +128,17 @@ final class Operations_Controller {
 							'enum'    => array( 'safe' ),
 							'default' => 'safe',
 						),
+						// Why the user is running this, in their words. Optional
+						// always: a note demanded on the last step before a
+						// destructive action is a note filled in with a full stop.
+						// Capped at the column's width so a long one is refused
+						// here rather than silently cut in half by MySQL.
+						'note' => array(
+							'type'              => 'string',
+							'required'          => false,
+							'maxLength'         => 191,
+							'sanitize_callback' => 'sanitize_text_field',
+						),
 					),
 				),
 				array(
@@ -351,12 +362,16 @@ final class Operations_Controller {
 		}
 
 		try {
+			$note = trim( (string) $request->get_param( 'note' ) );
+
 			$op_id = $this->service->create(
 				$filter,
 				$actions,
 				Operation_Mode::SAFE,
 				Operation_Source::UI,
-				get_current_user_id()
+				get_current_user_id(),
+				null,
+				'' === $note ? null : $note
 			);
 
 			$this->service->queue( $op_id );
@@ -768,6 +783,15 @@ final class Operations_Controller {
 			// it; the undo panel, which names the schedule, can afford the lookup
 			// because its preview is fetched once rather than per row on a poll.
 			'schedule_id'        => $operation->schedule_id,
+			// What the schedule was CALLED when this ran, stored on the row rather
+			// than joined — so a schedule that is deleted or renamed cannot rewrite
+			// the history of the runs it made. Null for every run created before
+			// migration 9, and for every run that had no schedule; the id above is
+			// still there for anything that needs the live one.
+			'schedule_name'      => $operation->schedule_name,
+			// The user's own reason for the run. The history knows what changed,
+			// when, by whom and how many; this is the only place it can learn why.
+			'note'               => $operation->note,
 			'conflict_policy'    => null === $operation->conflict_policy ? null : $operation->conflict_policy->value,
 			'user_id'            => $operation->user_id,
 			'user_name'          => $this->user_name( $operation->user_id ),
