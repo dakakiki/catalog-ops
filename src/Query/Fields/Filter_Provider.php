@@ -49,6 +49,21 @@ interface Filter_Provider {
 	public function module(): string;
 
 	/**
+	 * The heading this provider's fields appear under in the filter.
+	 *
+	 * A sibling of {@see module()} rather than something derived from it: that one
+	 * returns a slug the licence gate compares, this one returns text a shop owner
+	 * reads, and deriving the second from the first means the client keeping a map of
+	 * module names — which is the admin bundle learning about ACF, exactly what
+	 * `options_route` exists to avoid.
+	 *
+	 * Translated by the provider, because only the provider knows its own text
+	 * domain. Keep it short: it is a section heading above a row of controls, not a
+	 * description, and every field already carries its own label.
+	 */
+	public function label(): string;
+
+	/**
 	 * The filterable fields this provider offers.
 	 *
 	 * Unlike {@see storage_for()}, this method may look things up: it is called to

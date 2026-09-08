@@ -126,6 +126,17 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	}
 
 	/**
+	 * The heading these fields sit under.
+	 *
+	 * "ACF fields" rather than "Advanced Custom Fields": the plugin's own admin menu,
+	 * its field-group screens and its documentation all say ACF, so that is the name
+	 * the person who built these fields knows them by.
+	 */
+	public function label(): string {
+		return __( 'ACF fields', 'catalogops' );
+	}
+
+	/**
 	 * Whether this provider owns a key.
 	 *
 	 * Prefix test only, and that is a requirement rather than laziness: this is asked
@@ -271,20 +282,20 @@ final class Acf_Filter_Provider implements Filter_Provider {
 
 		return new Filter_Field(
 			self::PREFIX . (string) $definition['key'],
-			$this->label( $definition, $by_id ),
+			$this->field_label( $definition, $by_id ),
 			$control,
 			$operators,
 			$scopes,
 			Filter_Control::VALUE_SET === $control
 				? Acf_Options_Controller::ROUTE . '?field=' . rawurlencode( (string) $definition['key'] )
 				: '',
-			$this->label( $definition, $by_id ),
+			$this->field_label( $definition, $by_id ),
 			false
 		);
 	}
 
 	/**
-	 * A label a user can tell apart from the other twenty.
+	 * A field label a user can tell apart from the other twenty.
 	 *
 	 * ACF labels are written per group and repeat freely — two groups each with a
 	 * "Value", a repeater whose sub-field is "Label". Prefixing the ancestor chain is
@@ -294,7 +305,7 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 * @param array<string, mixed>             $definition Hydrated definition.
 	 * @param array<int, array<string, mixed>> $by_id      Every acf-field row by id.
 	 */
-	private function label( array $definition, array $by_id ): string {
+	private function field_label( array $definition, array $by_id ): string {
 		$parts  = array();
 		$parent = (int) ( $definition['parent'] ?? 0 );
 

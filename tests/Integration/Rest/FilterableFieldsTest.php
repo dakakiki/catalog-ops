@@ -42,6 +42,12 @@ final class FilterableFieldsTest extends WP_UnitTestCase {
 		$this->assertSame( 'text', $field['control'] );
 		$this->assertSame( 'Supplier', $field['column_label'] );
 		$this->assertSame( 'acf', $field['module'] );
+		// The heading the client groups this field under. Served, never derived: a
+		// client that turned the slug 'acf' into "ACF fields" itself would have to be
+		// taught every future module's name, which is the coupling `options_route`
+		// exists to avoid. Without this the section renders with no heading at all,
+		// which is what it looked like before there was a group.
+		$this->assertSame( 'Test module', $field['module_label'] );
 		$this->assertTrue( $field['available'] );
 	}
 
@@ -125,6 +131,10 @@ final class FilterableFieldsTest extends WP_UnitTestCase {
 
 			public function module(): string {
 				return 'acf';
+			}
+
+			public function label(): string {
+				return 'Test module';
 			}
 
 			public function filter_fields(): array {

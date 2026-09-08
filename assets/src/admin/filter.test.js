@@ -14,6 +14,7 @@
 import {
 	buildFilter,
 	emptyForm,
+	groupModuleFields,
 	moduleValue,
 	NO_TAG,
 	operatorFor,
@@ -479,5 +480,97 @@ describe( 'moduleValue', () => {
 	it( 'sends nothing for an empty set', () => {
 		expect( moduleValue( 'term_set', [] ) ).toBeUndefined();
 		expect( moduleValue( 'value_set', [ '' ] ) ).toBeUndefined();
+	} );
+} );
+
+describe( 'groupModuleFields', () => {
+	const field = ( key, module, label, scopes = [ 'product' ] ) => ( {
+		key,
+		module,
+		module_label: label,
+		scopes,
+		control: 'text',
+		operators: [ '=' ],
+		available: true,
+	} );
+
+	it( 'puts every field of one module under a single heading', () => {
+		const groups = groupModuleFields(
+			[
+				field( 'acf:a', 'acf', 'ACF fields' ),
+				field( 'acf:b', 'acf', 'ACF fields' ),
+				field( 'acf:c', 'acf', 'ACF fields' ),
+			],
+			'product'
+		);
+
+		expect( groups ).toHaveLength( 1 );
+		expect( groups[ 0 ].label ).toBe( 'ACF fields' );
+		expect( groups[ 0 ].fields.map( ( f ) => f.key ) ).toEqual( [
+			'acf:a',
+			'acf:b',
+			'acf:c',
+		] );
+	} );
+
+	it( 'keeps modules apart and keeps the order the server sent', () => {
+		const groups = groupModuleFields(
+			[
+				field( 'acf:a', 'acf', 'ACF fields' ),
+				field( 'wpml:lang', 'wpml', 'Translation' ),
+				field( 'acf:b', 'acf', 'ACF fields' ),
+			],
+			'product'
+		);
+
+		// Two groups, not three: a module interleaved with another still gets one
+		// heading, and the first appearance fixes where it sits.
+		expect( groups.map( ( g ) => g.module ) ).toEqual( [ 'acf', 'wpml' ] );
+		expect( groups[ 0 ].fields ).toHaveLength( 2 );
+		expect( groups[ 1 ].fields ).toHaveLength( 1 );
+	} );
+
+	// A control that cannot produce a condition is a control that lies — the same
+	// rule that hides the attribute row under the product scope.
+	it( 'drops fields that mean nothing in this scope', () => {
+		const groups = groupModuleFields(
+			[
+				field( 'acf:a', 'acf', 'ACF fields', [ 'product' ] ),
+				field( 'acf:v', 'acf', 'ACF fields', [ 'variation' ] ),
+			],
+			'variation'
+		);
+
+		expect( groups ).toHaveLength( 1 );
+		expect( groups[ 0 ].fields.map( ( f ) => f.key ) ).toEqual( [
+			'acf:v',
+		] );
+	} );
+
+	it( 'yields no group at all when nothing applies to the scope', () => {
+		const groups = groupModuleFields(
+			[ field( 'acf:a', 'acf', 'ACF fields', [ 'product' ] ) ],
+			'variation'
+		);
+
+		expect( groups ).toEqual( [] );
+	} );
+
+	// The heading is the server's to write. A client that fell back to the module
+	// slug would print "acf" as a heading, and would have to be taught every
+	// future module's name — the coupling `options_route` exists to avoid.
+	it( 'leaves the heading empty rather than inventing one from the slug', () => {
+		const groups = groupModuleFields(
+			[ { key: 'x:a', module: 'x', scopes: [ 'product' ] } ],
+			'product'
+		);
+
+		expect( groups[ 0 ].label ).toBe( '' );
+		expect( groups[ 0 ].module ).toBe( 'x' );
+	} );
+
+	it( 'survives an empty or missing field list', () => {
+		expect( groupModuleFields( [], 'product' ) ).toEqual( [] );
+		expect( groupModuleFields( undefined, 'product' ) ).toEqual( [] );
 	} );
 } );

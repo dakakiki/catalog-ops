@@ -1862,3 +1862,29 @@ vocabulary. Scoped and class+class deep for the same reason as
 .catalogops-detail table.wp-list-table > tbody > tr:hover {
 	background: var(--co-accent-tint);
 }
+
+/* --- Module field groups ----------------------------------------------- */
+
+/* Fields a module registers sit under their own heading, separated from the
+   built-in controls by a rule. Without it the ACF rows read as eight more
+   WooCommerce fields that had been added carelessly: nothing on screen said
+   where the plugin's own filter stopped and a third party's began, which is
+   exactly the question a shop owner asks when a field does not behave the way
+   the others do. */
+.catalogops-module-group {
+	border-top: 1px solid var(--co-border);
+	padding-top: 14px;
+}
+
+/* Same type as a field label — this is a heading for a band of controls, not a
+   section title competing with the page's own headings. Slightly stronger
+   colour, because it names a source rather than a value. */
+.catalogops-module-heading {
+	margin: 0 0 10px;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1.4;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--co-ink);
+}

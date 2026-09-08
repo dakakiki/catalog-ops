@@ -140,6 +140,9 @@ final class Fields_Controller {
 				'options_route' => $field->options_route,
 				'column_label'  => $field->column_label,
 				'module'        => $entry['module'],
+				// The heading the client groups this field under. Served rather than
+				// derived, so the admin bundle never learns a module's name.
+				'module_label'  => $entry['label'],
 				'available'     => $entry['available'],
 			);
 		}

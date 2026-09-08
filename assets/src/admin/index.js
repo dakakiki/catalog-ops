@@ -28,6 +28,7 @@ import { __, _n, sprintf } from '@wordpress/i18n';
 import {
 	buildFilter,
 	emptyForm,
+	groupModuleFields,
 	NO_TAG,
 	reconcileTagSelection,
 } from './filter';
@@ -5685,41 +5686,52 @@ function App() {
 								</div>
 
 								{ /* The fields modules add, below the built-in
-								     controls rather than mixed into them. A field
-								     that means nothing in this scope is not
-								     rendered, for the same reason the attribute
-								     row is hidden under the product scope: a
-								     control that cannot produce a condition is a
-								     control that lies. */ }
-								{ moduleFields.filter( ( f ) =>
-									( f.scopes || [] ).includes( scope )
-								).length > 0 && (
-									<div className="catalogops-filter-fields">
-										{ moduleFields
-											.filter( ( f ) =>
-												( f.scopes || [] ).includes(
-													scope
-												)
-											)
-											.map( ( f ) => (
-												<ModuleField
-													key={ f.key }
-													field={ f }
-													row={
-														form.modules[ f.key ]
-													}
-													onChange={ ( next ) =>
-														setForm( {
-															...form,
-															modules: {
-																...form.modules,
-																[ f.key ]: next,
-															},
-														} )
-													}
-												/>
-											) ) }
-									</div>
+								     controls rather than mixed into them, and
+								     under a heading of their own. Appending them
+								     bare read as eight more built-in controls
+								     that had simply been added badly — nothing
+								     said where WooCommerce stopped and ACF began.
+								     A field that means nothing in this scope is
+								     not rendered, for the same reason the
+								     attribute row is hidden under the product
+								     scope: a control that cannot produce a
+								     condition is a control that lies. */ }
+								{ groupModuleFields( moduleFields, scope ).map(
+									( group ) => (
+										<div
+											className="catalogops-module-group"
+											key={ group.module }
+										>
+											{ group.label && (
+												<div className="catalogops-module-heading">
+													{ group.label }
+												</div>
+											) }
+											<div className="catalogops-filter-row">
+												{ group.fields.map( ( f ) => (
+													<ModuleField
+														key={ f.key }
+														field={ f }
+														row={
+															form.modules[
+																f.key
+															]
+														}
+														onChange={ ( next ) =>
+															setForm( {
+																...form,
+																modules: {
+																	...form.modules,
+																	[ f.key ]:
+																		next,
+																},
+															} )
+														}
+													/>
+												) ) }
+											</div>
+										</div>
+									)
 								) }
 
 								<div className="catalogops-filter-row">

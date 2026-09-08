@@ -356,3 +356,52 @@ export function buildFilter( form, scope, moduleFields = [] ) {
 
 	return { relation: 'AND', scope, conditions };
 }
+
+/**
+ * Group the module fields that apply to a scope, ready to render.
+ *
+ * Three jobs, all of which were being done badly by not being done at all: drop
+ * the fields that mean nothing in this scope, gather what is left under one
+ * heading per module, and keep the order the server sent.
+ *
+ * **The heading comes from `module_label`, never from the module slug.** A client
+ * that maps `'acf'` to "ACF fields" has learned a module's name, and the next
+ * module has to be taught here too — the same coupling `options_route` exists to
+ * avoid. A provider that sends no label gets no heading rather than a made-up one.
+ *
+ * Insertion order is the server's order, which is ACF's own field order within a
+ * group. A shop owner arranged those fields; re-sorting them alphabetically here
+ * would throw that away for nothing.
+ *
+ * @param {Array}  fields Descriptors from /fields/filterable.
+ * @param {string} scope  'product' or 'variation'.
+ * @return {Array} Groups of { module, label, fields }, in server order.
+ */
+export function groupModuleFields( fields, scope ) {
+	const groups = [];
+	const byModule = new Map();
+
+	( fields || [] ).forEach( ( field ) => {
+		if ( ! field || ! ( field.scopes || [] ).includes( scope ) ) {
+			return;
+		}
+
+		// Keyed by module, not by label: two providers sharing a heading are still
+		// two modules, and the licence gate is per module.
+		const key = field.module || '';
+
+		if ( ! byModule.has( key ) ) {
+			const group = {
+				module: key,
+				label: field.module_label || '',
+				fields: [],
+			};
+			byModule.set( key, group );
+			groups.push( group );
+		}
+
+		byModule.get( key ).fields.push( field );
+	} );
+
+	return groups;
+}
