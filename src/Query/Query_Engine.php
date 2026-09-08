@@ -7,6 +7,8 @@
 
 namespace CatalogOps\Query;
 
+use CatalogOps\Query\Fields\Filter_Providers;
+use CatalogOps\Query\Fields\Storage_Compiler;
 use CatalogOps\Query\Requirements\Requirement;
 use wpdb;
 
@@ -30,12 +32,35 @@ final class Query_Engine {
 	private wpdb $wpdb;
 
 	/**
+	 * The module field registry, or null when the engine answers core keys only.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $providers;
+
+	/**
+	 * Compiles a provider's storage descriptor into SQL. Built once so its
+	 * memoisation lasts the request — a preview renders its filter 2+N+W times.
+	 *
+	 * @var Storage_Compiler|null
+	 */
+	private ?Storage_Compiler $compiler = null;
+
+	/**
 	 * Build the engine over a database handle.
 	 *
-	 * @param wpdb $wpdb WordPress database handle.
+	 * The registry is nullable, and that is not laziness: thirteen sites construct
+	 * a bare `new Query_Engine( $wpdb )` — twelve tests and the EXPLAIN harness —
+	 * and a required argument would edit every one of them for no behavioural
+	 * reason and bury the real diff. A null registry means "core keys only", which
+	 * is exactly what those callers want.
+	 *
+	 * @param wpdb                  $wpdb      WordPress database handle.
+	 * @param Filter_Providers|null $providers Module field registry, if any.
 	 */
-	public function __construct( wpdb $wpdb ) {
-		$this->wpdb = $wpdb;
+	public function __construct( wpdb $wpdb, ?Filter_Providers $providers = null ) {
+		$this->wpdb      = $wpdb;
+		$this->providers = $providers;
 	}
 
 	/**
@@ -323,7 +348,17 @@ final class Query_Engine {
 		// this the seam where a question the engine cannot answer has to be refused.
 		// Dropping it removed a constraint, and under AND that hands back a *larger*
 		// set than was asked for, previewed and applied identically.
-		Filter_Fields::assert_field( $condition->field );
+		//
+		// A key this engine does not answer itself is offered to the registry before
+		// it is refused, and the ORDER is the whole safety property. The check used
+		// to be unconditional, which made the fall-through below provably dead;
+		// asking `handles()` first keeps every core key on exactly the path it was
+		// measured on, and only a key the engine has no builder for can reach a
+		// provider. A module therefore cannot redefine `price`, and a typo cannot
+		// reach anything: {@see provider_clause()} refuses when nobody claims it.
+		if ( ! Filter_Fields::handles( $condition->field ) ) {
+			return $this->provider_clause( $condition, $scope, $join_slot );
+		}
 
 		$field = $condition->field;
 
@@ -371,6 +406,71 @@ final class Query_Engine {
 		// not a fall-through so a ninth field added here without a matching entry in
 		// Filter_Fields fails loudly instead of quietly matching everything.
 		return $this->refuse( $condition, 'no clause builder claims that field.' );
+	}
+
+	/**
+	 * Answer a condition through a registered module, or refuse it.
+	 *
+	 * The seam the whole of M7 exists to open, and it is deliberately narrow. The
+	 * registry validates the field, the scope, the operator and the licence before
+	 * the provider is touched, so `storage_for()` is only ever called for a
+	 * question the field said it could answer. What comes back is a description of
+	 * where a value lives; {@see Storage_Compiler} writes every byte of the SQL.
+	 *
+	 * A provider's own code runs inside the try, and any failure it has becomes a
+	 * refusal rather than a fatal. That matters more than it sounds: unconverted, a
+	 * module's TypeError would be a 500 on the results table, and on the unattended
+	 * path it would escape `Schedule_Runner::fire()`'s catch as an Error rather
+	 * than an Exception and starve every later schedule on the tick. Converted, it
+	 * pauses that one schedule with a recorded reason.
+	 *
+	 * @param Condition   $condition The condition.
+	 * @param Query_Scope $scope     The object type being queried.
+	 * @param int|null    $join_slot Alias number, or null under an OR relation.
+	 * @return array{0: string, 1: list<mixed>, 2?: string, 3?: list<mixed>}
+	 *
+	 * @throws Filter_Field_Unavailable When no module answers this field.
+	 */
+	private function provider_clause( Condition $condition, Query_Scope $scope, ?int $join_slot ): array {
+		if ( null === $this->providers ) {
+			return $this->refuse( $condition, 'no clause builder claims that field.' );
+		}
+
+		// Throws Filter_Field_Unavailable for an unknown, dropped, out-of-scope or
+		// undeclared-operator field, and License_Limited for an ungated module —
+		// which is a different exception on purpose, so the client answers 402 and
+		// can offer the upgrade instead of a dead end.
+		$field    = $this->providers->field_for( $condition, $scope );
+		$provider = $this->providers->for( $condition->field );
+
+		try {
+			$storage = $provider->storage_for( $condition->field, $scope );
+		} catch ( Filter_Field_Unavailable $e ) {
+			throw $e;
+		} catch ( \Throwable $e ) {
+			return $this->refuse(
+				$condition,
+				sprintf( 'the module that provides it could not answer (%s).', $e->getMessage() )
+			);
+		}
+
+		if ( null === $this->compiler ) {
+			$this->compiler = new Storage_Compiler( $this->wpdb );
+		}
+
+		$clause = $this->compiler->compile(
+			$field,
+			$storage,
+			$condition->operator,
+			$condition->value,
+			$scope,
+			$join_slot
+		);
+
+		// Unwrapped into the private four-slot tuple only here, at the boundary. The
+		// tuple stays unpublished and the compiler is the only thing that fills a
+		// Clause, so its slots cannot be transposed by anyone.
+		return array( $clause->where, $clause->where_args, $clause->join, $clause->join_args );
 	}
 
 	/**

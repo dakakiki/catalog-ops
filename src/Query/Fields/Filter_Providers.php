@@ -12,6 +12,7 @@ use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Query\Condition;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Filter_Field_Unavailable;
+use CatalogOps\Query\Filter_Fields;
 use CatalogOps\Query\Query_Scope;
 
 /**
@@ -35,23 +36,6 @@ use CatalogOps\Query\Query_Scope;
  * not, and a test asserting that it is would pass for the wrong reason.
  */
 final class Filter_Providers {
-
-	/**
-	 * Filter keys the engine answers itself; a provider may not claim one.
-	 *
-	 * Resolution is first-claim-wins, so without this a module registering `price` or
-	 * `category` would silently redefine what a core filter means.
-	 *
-	 * @var list<string>
-	 */
-	private const RESERVED = array( 'price', 'stock_quantity', 'stock_status', 'sku', 'category', 'tag' );
-
-	/**
-	 * Reserved key prefixes, matched with `str_starts_with()`.
-	 *
-	 * @var list<string>
-	 */
-	private const RESERVED_PREFIXES = array( 'attribute:', 'meta:' );
 
 	/**
 	 * Registered providers, in resolution order.
@@ -255,19 +239,15 @@ final class Filter_Providers {
 	/**
 	 * Whether a key belongs to the engine's own dispatch.
 	 *
+	 * Delegated to {@see Filter_Fields} rather than kept as a second copy of the
+	 * same six keys and two prefixes. Two lists would drift, and the drift would be
+	 * silent in the dangerous direction: a key that stopped being reserved here
+	 * becomes claimable by a module, which then redefines what a core filter means
+	 * for every saved filter already using it.
+	 *
 	 * @param string $key Filter key.
 	 */
 	private function is_core_key( string $key ): bool {
-		if ( in_array( $key, self::RESERVED, true ) ) {
-			return true;
-		}
-
-		foreach ( self::RESERVED_PREFIXES as $prefix ) {
-			if ( str_starts_with( $key, $prefix ) ) {
-				return true;
-			}
-		}
-
-		return false;
+		return Filter_Fields::handles( $key );
 	}
 }

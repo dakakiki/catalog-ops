@@ -27,6 +27,7 @@ use CatalogOps\Operations\Schedules;
 use CatalogOps\Operations\Scheduler;
 use CatalogOps\Operations\Watchdog;
 use CatalogOps\Operations\Write_Rules;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Query\Saved_Filters;
 use CatalogOps\Rest\Fields_Controller;
@@ -285,11 +286,28 @@ final class Plugin {
 		);
 
 		$this->container->singleton(
+			Filter_Providers::class,
+			static fn( Container $container ): Filter_Providers => new Filter_Providers(
+				$container->get( License::class )
+				// Empty on purpose. The seam is live — Query_Engine offers it every
+				// key it has no builder for, and refuses when nobody claims one — but
+				// no module registers yet and there is no public hook to register
+				// through. Publishing the filter is the point of no return for the
+				// provider API (it freezes the interfaces, the enums and the named
+				// constructors), and it comes after the EXPLAIN harness has measured
+				// every shape the compiler emits and after the UI can render a field
+				// nobody hardcoded. An empty registry changes no statement this
+				// engine produces today, which is exactly what makes it safe to land
+				// on its own.
+			)
+		);
+
+		$this->container->singleton(
 			Query_Engine::class,
-			static function (): Query_Engine {
+			static function ( Container $container ): Query_Engine {
 				global $wpdb;
 
-				return new Query_Engine( $wpdb );
+				return new Query_Engine( $wpdb, $container->get( Filter_Providers::class ) );
 			}
 		);
 
@@ -390,7 +408,8 @@ final class Plugin {
 				$container->get( Scheduler::class ),
 				$container->get( License::class ),
 				$container->get( Write_Rules::class ),
-				$container->get( Schedules::class )
+				$container->get( Schedules::class ),
+				$container->get( Filter_Providers::class )
 			)
 		);
 

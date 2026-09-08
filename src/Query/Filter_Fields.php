@@ -95,9 +95,15 @@ final class Filter_Fields {
 	/**
 	 * Whether a clause builder claims this key.
 	 *
+	 * Public because it is the one list of what the engine answers itself, and two
+	 * other places need to ask it rather than keep a second copy that drifts:
+	 * {@see Query_Engine::clause_for()} asks before offering a key to a provider,
+	 * and {@see \CatalogOps\Query\Fields\Filter_Providers} asks so a module cannot
+	 * claim a key that would silently redefine what a core filter means.
+	 *
 	 * @param string $field The filter field key.
 	 */
-	private static function handles( string $field ): bool {
+	public static function handles( string $field ): bool {
 		if ( in_array( $field, self::CORE, true ) ) {
 			return true;
 		}

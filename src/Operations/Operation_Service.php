@@ -12,6 +12,7 @@ use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Operations\Actions\Formula;
 use CatalogOps\Operations\Fields\Field_Providers;
 use CatalogOps\Query\Condition;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Filter_Field_Unavailable;
 use CatalogOps\Query\Filter_Fields;
@@ -117,6 +118,13 @@ final class Operation_Service {
 	private ?Schedules $schedules;
 
 	/**
+	 * Module filter-field registry, or null when only core keys are answerable.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $filter_fields;
+
+	/**
 	 * How many objects the preview shows worked out in full. Ten is a sample, not
 	 * a set: enough to see the shape of the change, few enough to load quickly and
 	 * to read without scrolling. The search covers "but I want to see that one".
@@ -150,25 +158,29 @@ final class Operation_Service {
 	/**
 	 * Build the service.
 	 *
-	 * @param Query_Engine        $engine     Query engine.
-	 * @param Operations          $operations Operations repository.
-	 * @param Changes             $changes    Changes repository.
-	 * @param Field_Providers     $providers  Field provider registry.
-	 * @param Lock                $lock       Single-writer lock.
-	 * @param Operation_Scheduler $scheduler Scheduler for chunk hand-off/cancel.
-	 * @param License|null        $license    Plan gating; defaults to unlimited
-	 *                                        (unlicensed development and tests).
-	 * @param Write_Rules|null    $rules      Applicability rules; the default set is
-	 *                                        stateless, so it is built when omitted.
-	 * @param Schedules|null      $schedules  Schedules repository, so undoing a
-	 *                                        scheduled run can stop the schedule that
-	 *                                        would re-apply it. Unlike the two above,
-	 *                                        omitting it is not a neutral default: the
-	 *                                        pause simply does not happen. The
-	 *                                        container always supplies it; it is
-	 *                                        optional only so the many tests that
-	 *                                        never involve a schedule need not build
-	 *                                        one.
+	 * @param Query_Engine          $engine     Query engine.
+	 * @param Operations            $operations Operations repository.
+	 * @param Changes               $changes    Changes repository.
+	 * @param Field_Providers       $providers  Field provider registry.
+	 * @param Lock                  $lock       Single-writer lock.
+	 * @param Operation_Scheduler   $scheduler Scheduler for chunk hand-off/cancel.
+	 * @param License|null          $license    Plan gating; defaults to unlimited
+	 *                                          (unlicensed development and tests).
+	 * @param Write_Rules|null      $rules      Applicability rules; the default set is
+	 *                                          stateless, so it is built when omitted.
+	 * @param Schedules|null        $schedules  Schedules repository, so undoing a
+	 *                                          scheduled run can stop the schedule that
+	 *                                          would re-apply it. Unlike the two above,
+	 *                                          omitting it is not a neutral default: the
+	 *                                          pause simply does not happen. The
+	 *                                          container always supplies it; it is
+	 *                                          optional only so the many tests that
+	 *                                          never involve a schedule need not build
+	 *                                          one.
+	 * @param Filter_Providers|null $filter_fields Module filter-field registry. Null
+	 *                                        means only the engine's own keys are
+	 *                                        answerable, which is what every test
+	 *                                        that predates the provider seam wants.
 	 */
 	public function __construct(
 		Query_Engine $engine,
@@ -179,18 +191,46 @@ final class Operation_Service {
 		Operation_Scheduler $scheduler,
 		?License $license = null,
 		?Write_Rules $rules = null,
-		?Schedules $schedules = null
+		?Schedules $schedules = null,
+		?Filter_Providers $filter_fields = null
 	) {
-		$this->engine     = $engine;
-		$this->operations = $operations;
-		$this->changes    = $changes;
-		$this->providers  = $providers;
-		$this->lock       = $lock;
-		$this->scheduler  = $scheduler;
-		$this->license    = $license ?? License::unlimited();
-		$this->rules      = $rules ?? new Write_Rules();
-		$this->schedules  = $schedules;
-		$this->evaluator  = new Evaluator( $providers, $this->rules );
+		$this->engine        = $engine;
+		$this->operations    = $operations;
+		$this->changes       = $changes;
+		$this->providers     = $providers;
+		$this->lock          = $lock;
+		$this->scheduler     = $scheduler;
+		$this->license       = $license ?? License::unlimited();
+		$this->rules         = $rules ?? new Write_Rules();
+		$this->schedules     = $schedules;
+		$this->filter_fields = $filter_fields;
+		$this->evaluator     = new Evaluator( $providers, $this->rules );
+	}
+
+	/**
+	 * Refuse a filter this installation cannot answer, before anything is counted,
+	 * created or frozen.
+	 *
+	 * Two checks, one seam. Without a registry this is the static core-key list and
+	 * nothing else, which is what every test and the EXPLAIN harness want. With
+	 * one, the registry validates each non-core condition's field, scope, operator
+	 * and licence — everything the engine would validate later, asked here so the
+	 * refusal names the field at the boundary that owns the decision rather than
+	 * mid-statement.
+	 *
+	 * @param Filter $filter The filter to check.
+	 *
+	 * @throws \CatalogOps\Query\Filter_Field_Unavailable When a field cannot answer.
+	 * @throws License_Limited                           When a module is not licensed.
+	 */
+	private function assert_filter_answerable( Filter $filter ): void {
+		if ( null === $this->filter_fields ) {
+			Filter_Fields::assert_answerable( $filter );
+
+			return;
+		}
+
+		$this->filter_fields->assert_supported( $filter );
 	}
 
 	/**
@@ -219,7 +259,7 @@ final class Operation_Service {
 		// answered exactly must not get as far as a draft row. The engine refuses the
 		// same condition again when it resolves, but by then a row exists and — on a
 		// schedule — a tick has been spent.
-		Filter_Fields::assert_answerable( $filter );
+		$this->assert_filter_answerable( $filter );
 
 		$this->assert_fields_supported( $actions );
 		$this->assert_formulas_allowed( $actions );
@@ -272,7 +312,7 @@ final class Operation_Service {
 		// engine and was refused there — the right outcome by luck, one layer deeper
 		// than the boundary that owns the decision, and only while every clause
 		// builder keeps refusing.
-		Filter_Fields::assert_answerable( $filter );
+		$this->assert_filter_answerable( $filter );
 
 		$this->assert_fields_supported( $actions );
 		$this->assert_values_writable( $actions );
@@ -883,7 +923,7 @@ final class Operation_Service {
 		// module can have been deactivated or a field withdrawn, and the row this
 		// runs from was validated against a plugin set that no longer exists. Nothing
 		// else re-asks the question before the id set is frozen and written.
-		Filter_Fields::assert_answerable( $filter );
+		$this->assert_filter_answerable( $filter );
 
 		// The one-and-only filter resolution (CONTEXT §2), narrowed to the objects
 		// the edit can actually change: those carrying every field it reads, and
