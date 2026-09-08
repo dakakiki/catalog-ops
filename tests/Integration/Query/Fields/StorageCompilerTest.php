@@ -86,16 +86,77 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * And a column that cannot be NULL does not pay for the guard.
+	 * And every other lookup column is guarded too, because every one of them is
+	 * nullable. This test asserted the opposite until a review checked WooCommerce's
+	 * DDL: `min_price` and `max_price` default to NULL outright, and all six columns
+	 * are declared NULL. Guarding a column that happens never to be NULL costs one
+	 * predicate the optimiser discards; not guarding one that is costs products,
+	 * silently, out of an exclusion.
 	 */
-	public function test_excluding_a_non_nullable_column_is_a_bare_negation(): void {
+	public function test_every_lookup_column_exclusion_keeps_the_rows_with_no_value(): void {
 		$clause = $this->compile(
 			Field_Storage::lookup_column( Lookup_Column::SKU ),
 			Operator::NOT_EQUALS,
 			'ABC'
 		);
 
-		$this->assertSame( 'NOT ( l.sku = %s )', $this->sql( $clause->where ) );
+		$this->assertSame( '( l.sku IS NULL OR NOT ( l.sku = %s ) )', $this->sql( $clause->where ) );
+
+		$price = $this->compile(
+			Field_Storage::lookup_column( Lookup_Column::MIN_PRICE ),
+			Operator::NOT_EQUALS,
+			100
+		);
+
+		$this->assertSame( '( l.min_price IS NULL OR NOT ( l.min_price = %f ) )', $this->sql( $price->where ) );
+	}
+
+	/**
+	 * A taxonomy answers membership and nothing else. Its value kind is INTEGER,
+	 * which declares the ordered operators, so without this refusal "brand greater
+	 * than 7" compiled to "brand is 7" and returned a confident wrong set.
+	 */
+	public function test_a_taxonomy_refuses_an_ordered_comparison(): void {
+		$this->expectException( Filter_Field_Unavailable::class );
+		$this->expectExceptionMessageMatches( '/can only be matched, not compared/' );
+
+		$this->compile( Field_Storage::taxonomy( 'product_cat' ), Operator::GREATER_THAN, 7 );
+	}
+
+	/**
+	 * A value map is invited to expand — "in Acme, including its sub-brands" — so
+	 * the operand cap has to be checked on its output, not only its input.
+	 */
+	public function test_an_expanding_value_map_is_capped_too(): void {
+		$explode = new class() implements Value_Map {
+
+			public function map( array $values ): array {
+				return range( 1, Field_Storage::MAX_OPERANDS + 1 );
+			}
+		};
+
+		$this->expectException( Filter_Field_Unavailable::class );
+		$this->expectExceptionMessageMatches( '/more than 1000 values/' );
+
+		$this->compile( Field_Storage::taxonomy( 'product_cat', $explode ), Operator::IN, array( 1 ) );
+	}
+
+	/**
+	 * Presence on a meta key means a value, not merely a row. WordPress leaves a
+	 * row holding '' when a field is cleared rather than deleted, and counting that
+	 * as present makes the preview promise objects the run then skips as
+	 * EMPTY_INPUT — wrong by exactly that many.
+	 */
+	public function test_meta_presence_requires_a_non_empty_value(): void {
+		$clause = $this->compile(
+			Field_Storage::post_meta( 'co_cost', Value_Kind::NUMERIC_TEXT ),
+			Operator::EXISTS,
+			'',
+			Query_Scope::PRODUCT,
+			null
+		);
+
+		$this->assertStringContainsString( "pm.meta_value <> ''", $this->sql( $clause->where ) );
 	}
 
 	// -----------------------------------------------------------------------

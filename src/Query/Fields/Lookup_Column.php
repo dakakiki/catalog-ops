@@ -35,11 +35,27 @@ enum Lookup_Column: string {
 
 	/**
 	 * Whether the column is nullable, so the compiler knows to guard a negative
-	 * comparison with `IS NULL OR NOT ( … )`. `stock_quantity` is NULL on every
-	 * product that does not manage stock, and `col != 5` silently excludes those.
+	 * comparison with `IS NULL OR NOT ( … )`.
+	 *
+	 * Every one of them is, and an earlier version of this method claimed only
+	 * `stock_quantity` was — which would have made `price != 100` silently drop
+	 * every product whose `min_price` is NULL, since `NULL != 100` is UNKNOWN
+	 * rather than true. WooCommerce's own DDL, verified against a live table:
+	 *
+	 *     `sku`            varchar(100) NULL default ''
+	 *     `min_price`      decimal(19,4) NULL default NULL
+	 *     `max_price`      decimal(19,4) NULL default NULL
+	 *     `onsale`         tinyint(1) NULL default 0
+	 *     `stock_quantity` double NULL default NULL
+	 *     `stock_status`   varchar(100) NULL default 'instock'
+	 *
+	 * The method stays rather than becoming a constant `true`, because it is where
+	 * that evidence lives and where a future WooCommerce schema change would be
+	 * recorded. A guard on a column that happens never to be NULL costs one
+	 * predicate the optimiser discards; being wrong the other way costs products.
 	 */
 	public function is_nullable(): bool {
-		return self::STOCK_QUANTITY === $this;
+		return true;
 	}
 
 	/**

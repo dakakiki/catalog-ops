@@ -106,6 +106,13 @@ final class Storage_Compiler {
 
 		if ( ! $presence && null !== $storage->value_map ) {
 			$operands = $this->map( $field, $storage, $positive, $value, $scope, $operands );
+
+			// Capped again on the way out, not only on the way in. A map is invited
+			// to EXPAND — the documented example is "in Acme, including its
+			// sub-brands" — so a deep hierarchy can turn three operands into
+			// thousands of placeholders, which is a statement measured in megabytes
+			// and a plan the optimiser has never seen.
+			$this->assert_operand_count( $field, $operands );
 		}
 
 		// 4. An empty operand set is a real answer, not a failure: nothing in the
@@ -131,7 +138,7 @@ final class Storage_Compiler {
 		// 6. Shape.
 		return match ( $storage->kind ) {
 			Storage_Kind::LOOKUP_COLUMN => $this->lookup_clause( $field, $storage, $positive, $negative, $operands ),
-			Storage_Kind::TAXONOMY      => $this->taxonomy_clause( $storage, $negative, $operands, $object_column, $join_slot ),
+			Storage_Kind::TAXONOMY      => $this->taxonomy_clause( $field, $storage, $positive, $negative, $operands, $object_column, $join_slot ),
 			Storage_Kind::POST_META,
 			Storage_Kind::POST_META_ROWS => $this->post_meta_clause( $field, $storage, $positive, $negative, $operands, $object_column, $join_slot ),
 			Storage_Kind::RELATED_ROWS  => $this->related_clause( $field, $storage, $positive, $negative, $operands, $object_column, $join_slot ),
@@ -156,16 +163,7 @@ final class Storage_Compiler {
 			? array_values( (array) $value )
 			: array( $value );
 
-		if ( count( $raw ) > Field_Storage::MAX_OPERANDS ) {
-			$this->unavailable(
-				sprintf(
-					'The filter on "%1$s" carries more than %2$d values, which is more than one condition can ask.',
-					$field->key,
-					Field_Storage::MAX_OPERANDS
-				),
-				$field->key
-			);
-		}
+		$this->assert_operand_count( $field, $raw );
 
 		$cast = $this->numeric_comparison( $storage->value_kind, $operator )
 			? Value_Kind::DECIMAL
@@ -290,24 +288,43 @@ final class Storage_Compiler {
 	 * semi-join under OR. Exclusion stays a correlated `NOT EXISTS`: that is the
 	 * measured choice for this table and it is NULL-safe by construction.
 	 *
-	 * The operands are term_taxonomy_ids by the time they arrive — the engine's
-	 * {@see Value_Map} resolves them — so the subquery reads term_relationships
-	 * alone. That single-table property is what {@see Field_Storage}'s no-dot rule
-	 * exists to protect.
+	 * The operands arrive as term ids and are resolved to term_taxonomy_ids here,
+	 * so the subquery reads term_relationships alone. That single-table property is
+	 * what {@see Field_Storage}'s no-dot rule exists to protect — and the
+	 * resolution is also the only thing that names the taxonomy, since
+	 * term_relationships has no taxonomy column of its own.
 	 *
-	 * @param Field_Storage          $storage   Where the value lives.
-	 * @param bool                   $negative  Whether the operator was negative.
-	 * @param list<int|float|string> $operands The mapped tt_ids.
-	 * @param string                 $object_column    The object column.
-	 * @param int|null               $join_slot Alias number, or null under OR.
+	 * @param Filter_Field           $field         The descriptor, to name a refusal.
+	 * @param Field_Storage          $storage       Where the value lives.
+	 * @param Operator               $positive      The positive operator.
+	 * @param bool                   $negative      Whether the operator was negative.
+	 * @param list<int|float|string> $operands      The term ids asked for.
+	 * @param string                 $object_column The object column.
+	 * @param int|null               $join_slot     Alias number, or null under OR.
+	 *
+	 * @throws Filter_Field_Unavailable When the comparison is not membership.
 	 */
 	private function taxonomy_clause(
+		Filter_Field $field,
 		Field_Storage $storage,
+		Operator $positive,
 		bool $negative,
 		array $operands,
 		string $object_column,
 		?int $join_slot
 	): Clause {
+		// Membership is the only question this shape can answer, and it used to
+		// answer every operator as membership without saying so. A taxonomy's value
+		// kind is INTEGER, whose declared operators include >, >=, <, <= and
+		// BETWEEN — so "brand greater than 7" compiled to "brand is 7" and returned
+		// a confident wrong set. Refusing names the field and the comparison.
+		if ( ! in_array( $positive, array( Operator::EQUALS, Operator::IN, Operator::EXISTS ), true ) ) {
+			$this->refuse(
+				$field,
+				sprintf( 'a term can only be matched, not compared with "%s".', $positive->value )
+			);
+		}
+
 		// The taxonomy has to reach the SQL, and the only place it can is here.
 		// term_relationships carries object_id and term_taxonomy_id and nothing
 		// else — no taxonomy column — so a subquery over it alone cannot say which
@@ -402,8 +419,14 @@ final class Storage_Compiler {
 			$key_args = array( $storage->key_prefix );
 		}
 
+		// Presence means a value, not merely a row. A meta row holding '' is what
+		// WordPress leaves behind when a field is cleared rather than deleted, and
+		// counting it as present would make "has a cost price" match products whose
+		// cost was emptied — then an Adjust over it skips them as EMPTY_INPUT and
+		// the preview is wrong by exactly that many. The same test
+		// {@see \CatalogOps\Query\Requirements\Meta_Present} already uses.
 		list( $value_test, $value_args ) = Operator::EXISTS === $positive
-			? array( '', array() )
+			? array( "pm.meta_value <> ''", array() )
 			: $this->comparison( $field, 'pm.meta_value', $storage->value_kind, $positive, $operands );
 
 		$where = $key_test . ( '' === $value_test ? '' : ' AND ' . $value_test );
@@ -638,6 +661,29 @@ final class Storage_Compiler {
 				Operator::BETWEEN,
 			),
 			true
+		);
+	}
+
+	/**
+	 * Refuse an operand list longer than one condition may carry.
+	 *
+	 * @param Filter_Field $field    The descriptor, to name the field.
+	 * @param mixed[]      $operands The list.
+	 *
+	 * @throws Filter_Field_Unavailable When it is too long.
+	 */
+	private function assert_operand_count( Filter_Field $field, array $operands ): void {
+		if ( count( $operands ) <= Field_Storage::MAX_OPERANDS ) {
+			return;
+		}
+
+		$this->unavailable(
+			sprintf(
+				'The filter on "%1$s" carries more than %2$d values, which is more than one condition can ask.',
+				$field->key,
+				Field_Storage::MAX_OPERANDS
+			),
+			$field->key
 		);
 	}
 
