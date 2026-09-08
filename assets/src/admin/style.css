@@ -2139,3 +2139,40 @@ vocabulary. Scoped and class+class deep for the same reason as
 	flex: 1 1 0;
 	min-width: 0;
 }
+
+/* A set control still fetching its own options.
+
+   The placeholder already says "Loading…", and this is the other half of the
+   same sentence: the control is dimmed and refuses the pointer, because opening
+   a picker mid-fetch shows an empty list, and an empty list is what a module
+   with nothing to offer looks like. The two states want opposite things from the
+   reader — one is worth waiting for, the other is worth giving up on — so they
+   must not look alike. */
+.catalogops-field.is-loading .catalogops-ms__control {
+	opacity: 0.55;
+	pointer-events: none;
+	background-image: linear-gradient(
+		90deg,
+		transparent 0%,
+		var(--co-hover) 50%,
+		transparent 100%
+	);
+	background-size: 200% 100%;
+	animation: catalogops-loading 1.1s ease-in-out infinite;
+}
+
+@keyframes catalogops-loading {
+	from {
+		background-position: 150% 0;
+	}
+	to {
+		background-position: -50% 0;
+	}
+}
+
+/* Motion is decoration here; the dimming and the word carry the meaning. */
+@media ( prefers-reduced-motion: reduce ) {
+	.catalogops-field.is-loading .catalogops-ms__control {
+		animation: none;
+	}
+}

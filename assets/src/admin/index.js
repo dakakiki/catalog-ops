@@ -227,6 +227,19 @@ const CURRENCY =
 	( window.catalogopsConfig && window.catalogopsConfig.currency ) || '';
 
 /**
+ * Whether this site has any module registered, answered by the server at page
+ * load so the filter knows a section is coming before it has asked for one.
+ *
+ * Defaults to false, and that direction matters: an unknown answer must not draw
+ * a placeholder for a section that will never arrive. A site that does have
+ * modules simply gets its section without a placeholder, which is what happened
+ * before this existed.
+ */
+const MODULES_EXPECTED = Boolean(
+	window.catalogopsConfig && window.catalogopsConfig.hasModules
+);
+
+/**
  * Whether the current plan permits a capability. Unknown flags default to true
  * (fail open); only an explicit `false` from the server gates the control.
  *
@@ -1038,17 +1051,42 @@ function MultiSelect( {
 function ModuleField( { field, row, onChange } ) {
 	const [ options, setOptions ] = useState( [] );
 
+	// Whether this field's own options are still on their way. A set control with
+	// nothing in it looks exactly like a set control whose module has no values to
+	// offer, and the two want opposite things from the reader — one is worth
+	// waiting for, the other is worth giving up on.
+	const [ loadingOptions, setLoadingOptions ] = useState( false );
+
 	// Fetched from the route the DESCRIPTOR names, not from a path this file
 	// knows. That is the whole point of `options_route`: a module can serve its
 	// own options without the client learning anything about it.
 	useEffect( () => {
 		if ( ! field.options_route || ! field.available ) {
-			return;
+			return undefined;
 		}
 
+		// Guards the two setState calls below against an answer that arrives after
+		// this field is gone — a scope switch drops every module row at once.
+		let live = true;
+
+		setLoadingOptions( true );
+
 		apiFetch( { path: field.options_route } )
-			.then( ( res ) => setOptions( res.terms || res.options || [] ) )
-			.catch( () => {} );
+			.then( ( res ) => {
+				if ( live ) {
+					setOptions( res.terms || res.options || [] );
+				}
+			} )
+			.catch( () => {} )
+			.finally( () => {
+				if ( live ) {
+					setLoadingOptions( false );
+				}
+			} );
+
+		return () => {
+			live = false;
+		};
 	}, [ field.options_route, field.available ] );
 
 	const value = row && undefined !== row.value ? row.value : '';
@@ -1087,6 +1125,7 @@ function ModuleField( { field, row, onChange } ) {
 		// option already answers to the sentinel — an ACF choice key is a string
 		// and could in principle collide.
 		const offersPresence =
+			! loadingOptions &&
 			( field.operators || [] ).includes( 'not_exists' ) &&
 			! options.some( ( one ) => String( one.id ) === NO_VALUE );
 
@@ -1101,12 +1140,20 @@ function ModuleField( { field, row, onChange } ) {
 			: options;
 
 		return (
-			<div className="catalogops-field">
+			<div
+				className={ `catalogops-field${
+					loadingOptions ? ' is-loading' : ''
+				}` }
+			>
 				<MultiSelect
 					label={ field.label }
 					options={ withPresence }
 					value={ Array.isArray( value ) ? value : [] }
-					placeholder={ __( 'Any', 'catalogops' ) }
+					placeholder={
+						loadingOptions
+							? __( 'Loading…', 'catalogops' )
+							: __( 'Any', 'catalogops' )
+					}
 					mode={ 'not_in' === mode ? 'not_in' : 'in' }
 					// "Without a value" and a real choice cannot both be
 					// meaningful: nothing carries a badge and carries none. The
@@ -5444,6 +5491,7 @@ function App() {
 	const [ tags, setTags ] = useState( [] );
 	const [ brands, setBrands ] = useState( [] );
 	const [ moduleFields, setModuleFields ] = useState( [] );
+	const [ moduleFieldsLoaded, setModuleFieldsLoaded ] = useState( false );
 	const [ attributes, setAttributes ] = useState( [] );
 	// Bumped whenever a schedule is created or acted on, to reload the list.
 	const [ schedulesKey, setSchedulesKey ] = useState( 0 );
@@ -5494,9 +5542,14 @@ function App() {
 		// The fields modules register. An installation with none answers an empty
 		// list, and the section below then renders nothing at all — which is what
 		// every site looks like until a module ships.
+		//
+		// The `finally` is what separates "not asked yet" from "asked, nothing
+		// came back". Both are an empty list, and they must not look alike: the
+		// first is worth holding a place for, the second is worth forgetting.
 		apiFetch( { path: '/catalogops/v1/fields/filterable' } )
 			.then( ( res ) => setModuleFields( res.fields || [] ) )
-			.catch( () => {} );
+			.catch( () => {} )
+			.finally( () => setModuleFieldsLoaded( true ) );
 	}, [] );
 
 	// The terms of the currently-selected attribute, for the value dropdown.
@@ -5959,6 +6012,24 @@ function App() {
 								     attribute row is hidden under the product
 								     scope: a control that cannot produce a
 								     condition is a control that lies. */ }
+								{ /* A module section is coming, so the filter holds
+								     its place rather than reflowing when the
+								     descriptors land. Only when the server said at
+								     page load that a module is registered: a site
+								     with none must never see a section appear and
+								     be taken away again, which is the whole reason
+								     `hasModules` is asked of the registry rather
+								     than guessed from an empty list. Same
+								     treatment the results table uses below, since
+								     it is the same kind of wait. */ }
+								{ ! moduleFieldsLoaded && MODULES_EXPECTED && (
+									<div className="catalogops-module-group">
+										<p className="catalogops-loading">
+											{ __( 'Loading…', 'catalogops' ) }
+										</p>
+									</div>
+								) }
+
 								{ groupModuleFields( moduleFields, scope ).map(
 									( group ) => (
 										<ModuleGroup

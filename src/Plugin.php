@@ -370,7 +370,8 @@ final class Plugin {
 			Admin_Page::class,
 			static fn( Container $container ): Admin_Page => new Admin_Page(
 				$plugin_file,
-				$container->get( License::class )
+				$container->get( License::class ),
+				$container->get( Filter_Providers::class )
 			)
 		);
 

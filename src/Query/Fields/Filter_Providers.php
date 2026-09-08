@@ -74,6 +74,24 @@ final class Filter_Providers {
 	}
 
 	/**
+	 * Whether any provider is registered at all.
+	 *
+	 * A constant-time question, and deliberately a different one from "are there
+	 * any fields": answering that would mean asking every provider to discover its
+	 * site's fields, which is a database read, on every admin page load, to decide
+	 * whether to draw a placeholder.
+	 *
+	 * The admin app uses it to know at first paint whether a module section is
+	 * coming, so a site with no modules never shows one and takes it away again.
+	 * A site whose only module happens to register nothing — ACF installed with no
+	 * field group on products — shows the placeholder briefly and then nothing,
+	 * which is the one case this trades away and the rarer one.
+	 */
+	public function has_providers(): bool {
+		return array() !== $this->providers;
+	}
+
+	/**
 	 * Every filterable field across all providers, for the filter UI.
 	 *
 	 * Fields whose module the licence does not permit are still listed and flagged
