@@ -13,11 +13,15 @@
 
 import {
 	buildFilter,
+	defaultModuleOperator,
 	emptyForm,
 	groupModuleFields,
+	moduleOperators,
 	moduleValue,
 	NO_TAG,
 	operatorFor,
+	operatorTakesRange,
+	operatorTakesValue,
 	reconcileTagSelection,
 } from './filter';
 
@@ -339,20 +343,38 @@ describe( 'module fields', () => {
 	const conditions = ( modules, fields = [ supplier ], scope = 'product' ) =>
 		buildFilter( { ...emptyForm(), modules }, scope, fields ).conditions;
 
-	it( 'adds a condition for a filled row', () => {
+	it( 'sends the operator the row is set to, verbatim', () => {
 		expect(
-			conditions( { 'acf:supplier': { value: 'Globex', mode: 'in' } } )
+			conditions( { 'acf:supplier': { value: 'Globex', mode: '=' } } )
 		).toEqual( [
 			{ field: 'acf:supplier', operator: '=', value: 'Globex' },
 		] );
-	} );
 
-	it( 'uses the exclusion operator the field declares', () => {
 		expect(
 			conditions( {
-				'acf:supplier': { value: 'Globex', mode: 'not_in' },
+				'acf:supplier': { value: 'Globex', mode: '!=' },
 			} )[ 0 ].operator
 		).toBe( '!=' );
+	} );
+
+	// A row the user has not touched still has to mean something: the value box
+	// is what they type into first, and the operator is left where it opened.
+	it( 'falls back to the default operator when the row names none', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: 'Globex' } } )[ 0 ].operator
+		).toBe( '=' );
+	} );
+
+	// The field list can change under a form that is already open — a licence
+	// lapses, an ACF field is deleted and rebuilt with fewer operators. An
+	// operator the field does not declare is refused by the registry, and a
+	// refusal stops the WHOLE filter rather than just this row.
+	it( 'drops a row whose operator the field does not declare', () => {
+		expect(
+			conditions( {
+				'acf:supplier': { value: 'Globex', mode: 'between' },
+			} )
+		).toEqual( [] );
 	} );
 
 	it( 'adds nothing for a row nobody filled in', () => {
@@ -572,5 +594,137 @@ describe( 'groupModuleFields', () => {
 	it( 'survives an empty or missing field list', () => {
 		expect( groupModuleFields( [], 'product' ) ).toEqual( [] );
 		expect( groupModuleFields( undefined, 'product' ) ).toEqual( [] );
+	} );
+} );
+
+describe( 'module field operators', () => {
+	const field = ( operators ) => ( {
+		key: 'acf:x',
+		control: 'text',
+		operators,
+		scopes: [ 'product' ],
+		available: true,
+	} );
+
+	it( 'offers only what the field declares, in menu order', () => {
+		// Declared in a deliberately jumbled order: the menu must not inherit it,
+		// or the same field reads differently depending on how a provider happened
+		// to list its operators.
+		expect(
+			moduleOperators( field( [ 'between', 'exists', '=', '>' ] ) )
+		).toEqual( [ '=', '>', 'between', 'exists' ] );
+	} );
+
+	it( 'offers nothing for a field that declares nothing', () => {
+		expect( moduleOperators( field( [] ) ) ).toEqual( [] );
+		expect( moduleOperators( {} ) ).toEqual( [] );
+	} );
+
+	// The regression this whole change exists for. `>`, `>=`, `<`, `<=` and
+	// `between` are declared by ACF's number and date fields, the compiler emits
+	// them and the engine answers them — and the old mode-to-operator mapping
+	// could only ever produce '=', '!=', 'in', 'not_in' or 'contains', so "cost
+	// is more than 100" was unaskable from the UI.
+	it( 'reaches the ordered operators a number field declares', () => {
+		const number = field( [
+			'=',
+			'!=',
+			'>',
+			'>=',
+			'<',
+			'<=',
+			'between',
+			'exists',
+			'not_exists',
+		] );
+
+		expect( moduleOperators( number ) ).toContain( '>' );
+		expect( moduleOperators( number ) ).toContain( 'between' );
+	} );
+
+	it( 'starts on the first operator that takes a value, not on presence', () => {
+		expect( defaultModuleOperator( field( [ '=', 'exists' ] ) ) ).toBe(
+			'='
+		);
+		expect(
+			defaultModuleOperator(
+				field( [ 'exists', 'not_exists', 'contains' ] )
+			)
+		).toBe( 'contains' );
+	} );
+
+	// A field that can only be asked about presence has nothing else to open on.
+	it( 'starts on presence when that is all the field has', () => {
+		expect(
+			defaultModuleOperator( field( [ 'exists', 'not_exists' ] ) )
+		).toBe( 'exists' );
+		expect( defaultModuleOperator( field( [] ) ) ).toBe( '' );
+	} );
+
+	it( 'knows which operators need a value and which need two', () => {
+		expect( operatorTakesValue( '=' ) ).toBe( true );
+		expect( operatorTakesValue( 'between' ) ).toBe( true );
+		expect( operatorTakesValue( 'exists' ) ).toBe( false );
+		expect( operatorTakesValue( 'not_exists' ) ).toBe( false );
+
+		expect( operatorTakesRange( 'between' ) ).toBe( true );
+		expect( operatorTakesRange( '>' ) ).toBe( false );
+	} );
+} );
+
+describe( 'module conditions across the operator range', () => {
+	const cost = {
+		key: 'acf:cost',
+		control: 'number',
+		operators: [ '=', '>', '<', 'between', 'exists', 'not_exists' ],
+		scopes: [ 'product' ],
+		available: true,
+	};
+
+	const conditions = ( modules ) =>
+		buildFilter( { ...emptyForm(), modules }, 'product', [ cost ] )
+			.conditions;
+
+	it( 'sends an ordered comparison with a number, not a string', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '100', mode: '>' } } )
+		).toEqual( [ { field: 'acf:cost', operator: '>', value: 100 } ] );
+	} );
+
+	it( 'sends a range as a two-element list', () => {
+		expect(
+			conditions( {
+				'acf:cost': { value: '10', to: '90', mode: 'between' },
+			} )
+		).toEqual( [
+			{ field: 'acf:cost', operator: 'between', value: [ 10, 90 ] },
+		] );
+	} );
+
+	// Half a range is not a narrower range, it is a different question — and
+	// BETWEEN with one bound missing is a condition the engine refuses, which
+	// stops the whole filter rather than this row.
+	it( 'sends nothing for half a range', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '10', mode: 'between' } } )
+		).toEqual( [] );
+		expect(
+			conditions( { 'acf:cost': { to: '90', mode: 'between' } } )
+		).toEqual( [] );
+	} );
+
+	it( 'sends presence with no value at all', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '', mode: 'not_exists' } } )
+		).toEqual( [ { field: 'acf:cost', operator: 'not_exists' } ] );
+	} );
+
+	// Presence ignores the box rather than being blocked by it. The box is
+	// removed on screen, so a value left behind when the operator changed must
+	// not leak into the condition.
+	it( 'ignores a stale value when the operator asks about presence', () => {
+		expect(
+			conditions( { 'acf:cost': { value: '100', mode: 'exists' } } )
+		).toEqual( [ { field: 'acf:cost', operator: 'exists' } ] );
 	} );
 } );

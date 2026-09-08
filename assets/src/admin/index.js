@@ -27,9 +27,13 @@ import apiFetch from '@wordpress/api-fetch';
 import { __, _n, sprintf } from '@wordpress/i18n';
 import {
 	buildFilter,
+	defaultModuleOperator,
 	emptyForm,
 	groupModuleFields,
+	moduleOperators,
 	NO_TAG,
+	operatorTakesRange,
+	operatorTakesValue,
 	reconcileTagSelection,
 } from './filter';
 import './style.css';
@@ -1044,11 +1048,12 @@ function ModuleField( { field, row, onChange } ) {
 			.catch( () => {} );
 	}, [ field.options_route, field.available ] );
 
-	const value = row ? row.value : '';
-	const mode = row ? row.mode : 'in';
+	const value = row && undefined !== row.value ? row.value : '';
+	const mode = row && row.mode ? row.mode : '';
 	const id = `catalogops-module-${ field.key.replace( /[^a-z0-9]/gi, '-' ) }`;
 
-	const set = ( next ) => onChange( { value, mode, ...next } );
+	const set = ( next ) =>
+		onChange( { value, mode, to: row && row.to ? row.to : '', ...next } );
 
 	// A field the licence does not cover is shown rather than hidden, and shown
 	// disabled rather than absent. A saved filter can already name it, and a
@@ -1065,8 +1070,6 @@ function ModuleField( { field, row, onChange } ) {
 			</div>
 		);
 	}
-
-	const presence = ( field.operators || [] ).includes( 'exists' );
 
 	// A set control gets the same picker the built-in category and tag rows use,
 	// so a module field looks and behaves like a first-party one. It carries its
@@ -1088,11 +1091,13 @@ function ModuleField( { field, row, onChange } ) {
 		);
 	}
 
-	return (
-		<div className="catalogops-field">
-			<label htmlFor={ id }>{ field.label }</label>
-
-			{ 'toggle' === field.control ? (
+	// A true/false field keeps its three-state Any/Yes/No box and gets no operator
+	// control: "Any" already means "no condition", so an operator would only offer
+	// ways of saying the same thing twice.
+	if ( 'toggle' === field.control ) {
+		return (
+			<div className="catalogops-field">
+				<label htmlFor={ id }>{ field.label }</label>
 				<select
 					id={ id }
 					value={ '' === value ? '' : String( value ) }
@@ -1109,40 +1114,125 @@ function ModuleField( { field, row, onChange } ) {
 					<option value="true">{ __( 'Yes', 'catalogops' ) }</option>
 					<option value="false">{ __( 'No', 'catalogops' ) }</option>
 				</select>
-			) : (
-				<input
-					id={ id }
-					type={
-						'number' === field.control || 'money' === field.control
-							? 'number'
-							: 'text'
-					}
-					value={ value }
-					disabled={ 'exists' === mode || 'not_exists' === mode }
-					onChange={ ( e ) => set( { value: e.target.value } ) }
-				/>
-			) }
+			</div>
+		);
+	}
 
-			<select
-				value={ mode }
-				aria-label={ __( 'How to match', 'catalogops' ) }
-				onChange={ ( e ) => set( { mode: e.target.value } ) }
-			>
-				<option value="in">{ __( 'is', 'catalogops' ) }</option>
-				<option value="not_in">{ __( 'is not', 'catalogops' ) }</option>
-				{ presence && (
-					<option value="exists">
-						{ __( 'has any value', 'catalogops' ) }
-					</option>
-				) }
-				{ presence && (
-					<option value="not_exists">
-						{ __( 'has no value', 'catalogops' ) }
-					</option>
-				) }
-			</select>
+	const operators = moduleOperators( field );
+	const operator = mode || defaultModuleOperator( field );
+	const numeric = 'number' === field.control || 'money' === field.control;
+	const inputType = numeric ? 'number' : 'text';
+
+	return (
+		<div className="catalogops-field">
+			{ /* The operator sits in the label row, where the multiselect already
+			     puts its include/exclude switch, because it modifies the label's
+			     question ("Cost price is more than…") rather than the value. Below
+			     the box — which is where it used to be — it read as a second
+			     control of equal weight and made every field three rows tall. */ }
+			<span className="catalogops-field__label-row">
+				<label htmlFor={ id } className="catalogops-field-label">
+					{ field.label }
+				</label>
+
+				<select
+					className="catalogops-field__op"
+					value={ operator }
+					aria-label={ sprintf(
+						/* translators: %s: the filter field's name, e.g. "Cost price". */
+						__( 'How to match %s', 'catalogops' ),
+						field.label
+					) }
+					onChange={ ( e ) => set( { mode: e.target.value } ) }
+				>
+					{ operators.map( ( token ) => (
+						<option key={ token } value={ token }>
+							{ operatorLabel( token ) }
+						</option>
+					) ) }
+				</select>
+			</span>
+
+			{ /* Removed, not disabled. A greyed-out box beside "has no value"
+			     reads as something broken and invites the question of what the
+			     text in it would have done. */ }
+			{ operatorTakesValue( operator ) &&
+				( operatorTakesRange( operator ) ? (
+					<span className="catalogops-field__range">
+						<input
+							id={ id }
+							type={ inputType }
+							value={ value }
+							aria-label={ __( 'From', 'catalogops' ) }
+							placeholder={ __( 'From', 'catalogops' ) }
+							onChange={ ( e ) =>
+								set( { value: e.target.value } )
+							}
+						/>
+						<input
+							type={ inputType }
+							value={ row && row.to ? row.to : '' }
+							aria-label={ __( 'To', 'catalogops' ) }
+							placeholder={ __( 'To', 'catalogops' ) }
+							onChange={ ( e ) => set( { to: e.target.value } ) }
+						/>
+					</span>
+				) : (
+					<input
+						id={ id }
+						type={ inputType }
+						value={ value }
+						onChange={ ( e ) => set( { value: e.target.value } ) }
+					/>
+				) ) }
 		</div>
 	);
+}
+
+/**
+ * How to say an operator token in the filter's own voice.
+ *
+ * Here rather than in `filter.js`: deciding *which* operators a field offers is
+ * a rule and belongs with the other rules; saying them in the reader's language
+ * is this file's job, and keeping the two apart is what lets `filter.js` stay
+ * free of i18n and be tested as plain data.
+ *
+ * The wording is a sentence continuing the label — "Cost price · is more than",
+ * "Launch date · is between" — rather than the mathematical symbol, because the
+ * person reading it wrote the field in ACF and is not thinking in operators.
+ *
+ * @param {string} operator The operator token as the API persists it.
+ * @return {string} A translated phrase.
+ */
+function operatorLabel( operator ) {
+	switch ( operator ) {
+		case '=':
+			return __( 'is', 'catalogops' );
+		case '!=':
+			return __( 'is not', 'catalogops' );
+		case 'contains':
+			return __( 'contains', 'catalogops' );
+		case 'in':
+			return __( 'is any of', 'catalogops' );
+		case 'not_in':
+			return __( 'is none of', 'catalogops' );
+		case '>':
+			return __( 'is more than', 'catalogops' );
+		case '>=':
+			return __( 'is at least', 'catalogops' );
+		case '<':
+			return __( 'is less than', 'catalogops' );
+		case '<=':
+			return __( 'is at most', 'catalogops' );
+		case 'between':
+			return __( 'is between', 'catalogops' );
+		case 'exists':
+			return __( 'has any value', 'catalogops' );
+		case 'not_exists':
+			return __( 'has no value', 'catalogops' );
+		default:
+			return operator;
+	}
 }
 
 /**

@@ -40,7 +40,8 @@ export function emptyForm() {
 		attribute: '',
 		attributeValues: [],
 		attributeMode: 'in',
-		// Keyed by field key, each `{ value, mode }`. Empty rather than
+		// Keyed by field key, each `{ value, to, mode }` — `mode` holding the
+		// operator token and `to` the far end of a range. Empty rather than
 		// pre-populated from the descriptors: a form built before the field list
 		// arrives must still be a valid form, and a row nobody touched must not
 		// become a condition.
@@ -156,26 +157,97 @@ export function moduleValue( control, value ) {
 }
 
 /**
- * The operator a module row sends, chosen from what the field actually declares.
+ * Every operator, in the order a menu should offer them.
  *
- * The descriptor is the authority, not this file. A field that does not declare
- * the operator its control would naturally use gets no condition rather than one
- * the engine will refuse — and returning nothing here is safe only because the
- * caller drops the row entirely, which narrows nothing and widens nothing.
+ * Value comparisons first, then the ordered ones, then the two that ask about
+ * presence and carry no value at all. Ordering here rather than at each call site
+ * means a field's menu reads the same wherever it appears, and a module that
+ * declares its operators in some other order does not get a shuffled menu.
+ *
+ * Labels are deliberately NOT here. Deciding *which* operators a field offers is
+ * a rule; saying them in the user's language is a view's job, and keeping the two
+ * apart is what lets this file stay free of i18n and be tested as plain data.
+ */
+export const MODULE_OPERATOR_ORDER = [
+	'=',
+	'!=',
+	'contains',
+	'in',
+	'not_in',
+	'>',
+	'>=',
+	'<',
+	'<=',
+	'between',
+	'exists',
+	'not_exists',
+];
+
+/**
+ * The operators a field offers, in menu order.
+ *
+ * **The descriptor is the authority.** Only what the field declares is offered,
+ * because an operator it does not declare is one `Filter_Providers` refuses
+ * before the provider is even asked — and a refusal stops the whole filter, not
+ * just that row.
+ *
+ * This is what the old `moduleOperator()` could not do. That function mapped an
+ * include/exclude mode onto one of `=`, `!=`, `in`, `not_in`, `contains`, so
+ * `>`, `>=`, `<`, `<=` and `between` were **unreachable from the UI** even though
+ * ACF's number and date fields declare them, the compiler emits them and the
+ * engine answers them. "Cost price is more than 100" could not be asked.
  *
  * @param {Object} field The descriptor.
- * @param {string} mode  'in' for include, 'not_in' for exclude.
- * @return {string|undefined} The operator token, or undefined.
+ * @return {string[]} Operator tokens, in menu order.
  */
-export function moduleOperator( field, mode ) {
-	const declared = field.operators || [];
-	const exclude = 'not_in' === mode;
+export function moduleOperators( field ) {
+	const declared = ( field && field.operators ) || [];
 
-	const wanted = SET_CONTROLS.includes( field.control )
-		? [ exclude ? 'not_in' : 'in' ]
-		: [ exclude ? '!=' : '=', exclude ? 'not_in' : 'in', 'contains' ];
+	return MODULE_OPERATOR_ORDER.filter( ( operator ) =>
+		declared.includes( operator )
+	);
+}
 
-	return wanted.find( ( operator ) => declared.includes( operator ) );
+/**
+ * Whether an operator compares against something the user types.
+ *
+ * `exists` and `not_exists` do not: they ask whether the field is filled in at
+ * all. The value box is REMOVED for them rather than disabled — a disabled box
+ * beside a chip reading "has no value" looks like something is broken, and it
+ * invites the reader to wonder what the greyed-out text would have done.
+ *
+ * @param {string} operator Operator token.
+ * @return {boolean} Whether a value is needed.
+ */
+export function operatorTakesValue( operator ) {
+	return 'exists' !== operator && 'not_exists' !== operator;
+}
+
+/**
+ * Whether an operator needs two values rather than one.
+ *
+ * @param {string} operator Operator token.
+ * @return {boolean} Whether a second box is needed.
+ */
+export function operatorTakesRange( operator ) {
+	return 'between' === operator;
+}
+
+/**
+ * The operator a field starts on.
+ *
+ * The first one that takes a value, so a field opens ready to be typed into
+ * rather than on "has any value" — which would be a condition the user never
+ * asked for the moment they touched the row. A presence-only field has nothing
+ * else to offer and starts there honestly.
+ *
+ * @param {Object} field The descriptor.
+ * @return {string} An operator token, or '' when the field declares none.
+ */
+export function defaultModuleOperator( field ) {
+	const offered = moduleOperators( field );
+
+	return offered.find( operatorTakesValue ) || offered[ 0 ] || '';
 }
 
 /**
@@ -211,24 +283,43 @@ export function moduleConditions( modules, fields, scope ) {
 			return;
 		}
 
-		// Presence is asked FIRST, and the order is load-bearing. It is the one
-		// question carrying no value, and its operator IS the mode — so resolving
-		// an include/exclude operator before getting here would drop a field that
-		// declares only `exists` and `not_exists`, which is exactly what a
-		// presence-only field is.
-		if ( 'exists' === row.mode || 'not_exists' === row.mode ) {
-			if ( ! ( field.operators || [] ).includes( row.mode ) ) {
-				return;
-			}
+		// The row's mode IS the operator token now, not an include/exclude flag
+		// mapped onto one. It is still checked against the descriptor rather than
+		// trusted: the field list can change under a form that is already open —
+		// a licence lapses, an ACF field is deleted — and an operator the field
+		// does not declare is one the registry refuses, which stops the whole
+		// filter rather than just this row.
+		const operator = row.mode || defaultModuleOperator( field );
 
-			conditions.push( { field: field.key, operator: row.mode } );
+		if ( ! operator || ! ( field.operators || [] ).includes( operator ) ) {
+			return;
+		}
+
+		// Presence carries no value at all, so it is answered before anything
+		// asks the row what it holds.
+		if ( ! operatorTakesValue( operator ) ) {
+			conditions.push( { field: field.key, operator } );
 
 			return;
 		}
 
-		const operator = moduleOperator( field, row.mode );
+		if ( operatorTakesRange( operator ) ) {
+			const from = moduleValue( field.control, row.value );
+			const to = moduleValue( field.control, row.to );
 
-		if ( ! operator ) {
+			// Both ends or nothing. Half a range is not a narrower range, it is a
+			// different question — and BETWEEN with one bound missing is a
+			// condition the engine would refuse.
+			if ( undefined === from || undefined === to ) {
+				return;
+			}
+
+			conditions.push( {
+				field: field.key,
+				operator,
+				value: [ from, to ],
+			} );
+
 			return;
 		}
 

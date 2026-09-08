@@ -260,8 +260,12 @@
 .catalogops-field > label,
 .catalogops-field > .catalogops-field-label,
 /* Descendant, not child: in a multiselect the label shares a row with the
-   include/exclude switch, so it sits one level down. */
-.catalogops-ms .catalogops-field-label {
+   include/exclude switch, so it sits one level down. A module field's label does
+   the same, sharing its row with the operator — so it needs naming here too, or
+   it keeps wp-admin's own label type and reads a size larger than every label
+   beside it. */
+.catalogops-ms .catalogops-field-label,
+.catalogops-field__label-row .catalogops-field-label {
 	margin: 0;
 	font-size: 11px;
 	font-weight: 600;
@@ -1931,4 +1935,73 @@ vocabulary. Scoped and class+class deep for the same reason as
 	width: 100%;
 	max-width: none;
 	box-sizing: border-box;
+}
+
+/* The operator sits in the label row, beside the field's name.
+
+   It used to be a full-width select UNDER the value box, which made every module
+   field three rows tall and read as a second control of equal weight — when all
+   it does is finish the label's sentence: "Cost price · is more than · 100".
+   That is the same place, and the same reason, the multiselect puts its
+   include/exclude switch. */
+.catalogops-field__label-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	min-height: 16px;
+}
+
+.catalogops-field__label-row .catalogops-field-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Selected with its element: wp-admin styles bare selects at class+element
+   strength, so a lone class of ours loses to it — the same fight
+   `.catalogops button.catalogops-ms__mode` documents a few rules above. */
+.catalogops select.catalogops-field__op {
+	flex: none;
+	width: auto;
+	min-width: 0;
+	max-width: 60%;
+	height: auto;
+	min-height: 0;
+	margin: 0;
+	padding: 0 20px 0 6px;
+	border: 1px solid var(--co-border-strong);
+	border-radius: 9px;
+	background-position: right 4px top 55%;
+	background-size: 14px 14px;
+	color: var(--co-muted);
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 15px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	cursor: pointer;
+}
+
+.catalogops select.catalogops-field__op:hover {
+	border-color: var(--co-accent);
+	color: var(--co-accent);
+}
+
+.catalogops select.catalogops-field__op:focus {
+	border-color: var(--co-accent);
+	box-shadow: 0 0 0 1px var(--co-accent);
+}
+
+/* Two bounds share the width one box had, so a range does not make its column
+   taller than the columns beside it. */
+.catalogops-field__range {
+	display: flex;
+	gap: 6px;
+	min-width: 0;
+}
+
+.catalogops-field__range input {
+	flex: 1 1 0;
+	min-width: 0;
 }
