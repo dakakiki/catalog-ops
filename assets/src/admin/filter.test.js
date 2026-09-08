@@ -20,6 +20,7 @@ import {
 	moduleOperators,
 	moduleValue,
 	NO_TAG,
+	NO_VALUE,
 	operatorFor,
 	operatorTakesRange,
 	operatorTakesValue,
@@ -825,5 +826,71 @@ describe( 'dates against the format the column actually holds', () => {
 				'acf:launch': { value: '2024-01-01', mode: 'between' },
 			} )
 		).toEqual( [] );
+	} );
+} );
+
+describe( 'the "Without a value" entry on a set field', () => {
+	const badges = {
+		key: 'acf:badges',
+		control: 'value_set',
+		operators: [ 'in', 'not_in', 'exists', 'not_exists' ],
+		scopes: [ 'product' ],
+		available: true,
+	};
+
+	const conditions = ( row, field = badges ) =>
+		buildFilter(
+			{ ...emptyForm(), modules: { 'acf:badges': row } },
+			'product',
+			[ field ]
+		).conditions;
+
+	// The question no choice can ask. `is not sale` deliberately KEEPS a product
+	// carrying no badge at all — it is, definitively, not on sale — so without
+	// this entry the empty ones cannot be selected by any combination at all.
+	it( 'asks about the field rather than about which choices', () => {
+		expect( conditions( { value: [ NO_VALUE ], mode: 'in' } ) ).toEqual( [
+			{ field: 'acf:badges', operator: 'not_exists' },
+		] );
+	} );
+
+	// The mode reads the way the rest of the row does: the selection is what to
+	// keep, so excluding the empty ones leaves exactly those that carry a value.
+	it( 'inverts to exists when the row is set to exclude', () => {
+		expect(
+			conditions( { value: [ NO_VALUE ], mode: 'not_in' } )[ 0 ].operator
+		).toBe( 'exists' );
+	} );
+
+	// Same rule the tag row follows: asking about the field's absence and about
+	// its values at once is two questions, and the absence is the one meant.
+	it( 'wins the row when picked alongside real choices', () => {
+		expect(
+			conditions( { value: [ 'sale', NO_VALUE ], mode: 'in' } )
+		).toEqual( [ { field: 'acf:badges', operator: 'not_exists' } ] );
+	} );
+
+	it( 'leaves an ordinary selection alone', () => {
+		expect( conditions( { value: [ 'sale' ], mode: 'in' } ) ).toEqual( [
+			{ field: 'acf:badges', operator: 'in', value: [ 'sale' ] },
+		] );
+	} );
+
+	// A provider that does not declare presence must not have it smuggled in by a
+	// sentinel the control happened to add.
+	it( 'sends nothing when the field does not declare presence', () => {
+		const plain = { ...badges, operators: [ 'in', 'not_in' ] };
+
+		expect(
+			conditions( { value: [ NO_VALUE ], mode: 'in' }, plain )
+		).toEqual( [] );
+	} );
+
+	// The sentinel is a string and an ACF choice key is a string, so the two could
+	// in principle collide. This is the half of the guard that lives here; the
+	// control refuses to add the entry when a real option already answers to it.
+	it( 'is a value no ordinary choice would be', () => {
+		expect( NO_VALUE ).toMatch( /^__catalogops_/ );
+		expect( NO_VALUE ).not.toBe( NO_TAG );
 	} );
 } );

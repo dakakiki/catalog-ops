@@ -32,6 +32,7 @@ import {
 	groupModuleFields,
 	moduleOperators,
 	NO_TAG,
+	NO_VALUE,
 	operatorTakesRange,
 	operatorTakesValue,
 	reconcileTagSelection,
@@ -1076,11 +1077,32 @@ function ModuleField( { field, row, onChange } ) {
 	// own include/exclude toggle, which is why the mode select below is hidden
 	// for it rather than shown twice.
 	if ( 'term_set' === field.control || 'value_set' === field.control ) {
+		// "Without a value" is offered as an entry in the list rather than as an
+		// operator beside it, exactly as the tag row offers "Without tag". On a set
+		// field it is the one question no choice can express: `is not sale` keeps
+		// the products carrying no badge at all, because they are, definitively,
+		// not on sale. Only added when the field declares it, and never when a real
+		// option already answers to the sentinel — an ACF choice key is a string
+		// and could in principle collide.
+		const offersPresence =
+			( field.operators || [] ).includes( 'not_exists' ) &&
+			! options.some( ( one ) => String( one.id ) === NO_VALUE );
+
+		const withPresence = offersPresence
+			? [
+					{
+						id: NO_VALUE,
+						name: __( 'Without a value', 'catalogops' ),
+					},
+					...options,
+			  ]
+			: options;
+
 		return (
 			<div className="catalogops-field">
 				<MultiSelect
 					label={ field.label }
-					options={ options }
+					options={ withPresence }
 					value={ Array.isArray( value ) ? value : [] }
 					placeholder={ __( 'Any', 'catalogops' ) }
 					mode={ 'not_in' === mode ? 'not_in' : 'in' }

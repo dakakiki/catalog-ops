@@ -114,6 +114,22 @@ export function reconcileTagSelection( previous, next ) {
 const SET_CONTROLS = [ 'term_set', 'value_set' ];
 
 /**
+ * The entry a set control offers for "this field is empty".
+ *
+ * The same idea as {@see NO_TAG}, and it exists for the same reason: on a set
+ * field, "carries nothing at all" is a question no operator on the list can ask.
+ * `is not sale` deliberately KEEPS the products carrying nothing — they are,
+ * definitively, not on sale — so without this entry those products cannot be
+ * selected by any combination of choices.
+ *
+ * A distinctive string rather than something readable, because unlike a term id
+ * an ACF choice key is itself a string and could collide. The control only adds
+ * this entry when no real option already answers to it, so a shop that has
+ * somehow named a choice this still gets its own value rather than a sentinel.
+ */
+export const NO_VALUE = '__catalogops_no_value__';
+
+/**
  * Coerce a module field's value to the shape its control implies.
  *
  * Term sets send numeric ids and value sets send strings, and the difference is
@@ -311,6 +327,26 @@ export function moduleConditions( modules, fields, scope ) {
 		const operator = row.mode || defaultModuleOperator( field );
 
 		if ( ! operator || ! ( field.operators || [] ).includes( operator ) ) {
+			return;
+		}
+
+		// "Without a value" wins the row, the way "Without tag" does: it asks
+		// about the field rather than about which choices, so the choices beside
+		// it have nothing to add. The mode still governs and reads the way the
+		// rest of the row does — the selection is what to keep, so EXCLUDING the
+		// empty ones leaves exactly the products that do carry a value.
+		if (
+			SET_CONTROLS.includes( field.control ) &&
+			( row.value || [] ).map( String ).includes( NO_VALUE )
+		) {
+			const presence = 'not_in' === operator ? 'exists' : 'not_exists';
+
+			if ( ! ( field.operators || [] ).includes( presence ) ) {
+				return;
+			}
+
+			conditions.push( { field: field.key, operator: presence } );
+
 			return;
 		}
 

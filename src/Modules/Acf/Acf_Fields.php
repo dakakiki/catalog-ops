@@ -74,6 +74,14 @@ final class Acf_Fields {
 	 * Scalar types stored as one ordinary postmeta row, mapped to how the stored
 	 * text compares and to the control that collects it.
 	 *
+	 * `number` and `range` earn their place by being the only fields that can be
+	 * asked an ordered question — `>`, `<`, `between` — which is what a real
+	 * numeric field on a product is for: lead time in days, warranty months,
+	 * pieces per box. `true_false` earns its place by describing a lifecycle a
+	 * shop acts on in bulk: "discontinued" is exactly the set you set stock to
+	 * zero on. `textarea`, `email` and `url` ride along because they are the same
+	 * postmeta string as `text` and cost no code to allow.
+	 *
 	 * `true_false` is TEXT rather than INTEGER on purpose: ACF writes the strings
 	 * `'1'` and `'0'`, and INTEGER would bind `%d`, which is a different comparison
 	 * against a text column and defeats the meta_key index for no gain.
@@ -85,7 +93,6 @@ final class Acf_Fields {
 		'textarea'   => array( Value_Kind::TEXT, Filter_Control::TEXT ),
 		'email'      => array( Value_Kind::TEXT, Filter_Control::TEXT ),
 		'url'        => array( Value_Kind::TEXT, Filter_Control::TEXT ),
-		'wysiwyg'    => array( Value_Kind::TEXT, Filter_Control::TEXT ),
 		'number'     => array( Value_Kind::NUMERIC_TEXT, Filter_Control::NUMBER ),
 		'range'      => array( Value_Kind::NUMERIC_TEXT, Filter_Control::NUMBER ),
 		'true_false' => array( Value_Kind::TEXT, Filter_Control::TOGGLE ),
@@ -160,6 +167,11 @@ final class Acf_Fields {
 		'repeater'         => 'a repeater holds no value of its own — filter on one of its sub-fields instead',
 		'group'            => 'a group holds no value of its own — filter on one of its sub-fields instead',
 		'clone'            => 'a clone field has no storage of its own',
+
+		// The column holds HTML, not prose. `contains "price"` would match the
+		// word inside an attribute or an entity as readily as inside a sentence,
+		// and a shop owner reading the filter has no way to know which they got.
+		'wysiwyg'          => 'a rich text field stores HTML, so searching it matches the markup as well as the words',
 
 		'google_map'       => 'a map field stores a serialised address, with no single value to compare',
 		'color_picker'     => 'a colour is stored as free text and comparing it is rarely what anyone means',
