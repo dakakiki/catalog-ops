@@ -36,6 +36,7 @@ import {
 	NO_VALUE,
 	operatorTakesRange,
 	operatorTakesValue,
+	reconcileAbsence,
 	reconcileTagSelection,
 } from './filter';
 import './style.css';
@@ -1107,7 +1108,20 @@ function ModuleField( { field, row, onChange } ) {
 					value={ Array.isArray( value ) ? value : [] }
 					placeholder={ __( 'Any', 'catalogops' ) }
 					mode={ 'not_in' === mode ? 'not_in' : 'in' }
-					onChange={ ( next ) => set( { value: next } ) }
+					// "Without a value" and a real choice cannot both be
+					// meaningful: nothing carries a badge and carries none. The
+					// tag row has always reconciled the two rather than letting
+					// the pair be built and then quietly dropping one; this is the
+					// same rule, so the two set controls behave the same way.
+					onChange={ ( next ) =>
+						set( {
+							value: reconcileAbsence(
+								Array.isArray( value ) ? value : [],
+								next,
+								NO_VALUE
+							),
+						} )
+					}
 					onModeChange={ ( next ) => set( { mode: next } ) }
 				/>
 			</div>

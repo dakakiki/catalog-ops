@@ -81,31 +81,47 @@ export function operatorFor( value ) {
 export const NO_TAG = 'none';
 
 /**
- * Reconcile a tag selection with the "Without tag" entry, which cannot coexist
- * with a real one: no product both carries a tag and carries none, so a filter
- * saying both would always match nothing.
+ * Reconcile a set selection with the entry that means "has none at all", which
+ * cannot coexist with a real one: nothing both carries a value and carries none,
+ * so a filter saying both would always match nothing.
  *
  * Rather than refuse the combination and make the user undo it, whichever was
- * chosen last wins — picking "Without tag" clears the tags, and picking a tag
- * clears "Without tag".
+ * chosen last wins — picking the absence clears the values, and picking a value
+ * clears the absence.
+ *
+ * @param {Array}  previous The selection before this change.
+ * @param {Array}  next     The selection the control is proposing.
+ * @param {string} sentinel The entry standing for "has none at all".
+ * @return {Array} The selection to keep.
+ */
+export function reconcileAbsence( previous, next, sentinel ) {
+	const had = ( previous || [] ).map( String ).includes( sentinel );
+	const has = ( next || [] ).map( String ).includes( sentinel );
+
+	if ( has && ! had ) {
+		return [ sentinel ];
+	}
+
+	if ( has && next.length > 1 ) {
+		return next.filter( ( id ) => String( id ) !== sentinel );
+	}
+
+	return next;
+}
+
+/**
+ * The tag row's version of the same rule.
+ *
+ * Kept as its own name because the tag row is the one that had it first and
+ * reads better for it, and because a module field's absence entry is a different
+ * sentinel — see {@see NO_VALUE}.
  *
  * @param {Array} previous The selection before this change.
  * @param {Array} next     The selection the control is proposing.
  * @return {Array} The selection to keep.
  */
 export function reconcileTagSelection( previous, next ) {
-	const had = previous.map( String ).includes( NO_TAG );
-	const has = next.map( String ).includes( NO_TAG );
-
-	if ( has && ! had ) {
-		return [ NO_TAG ];
-	}
-
-	if ( has && next.length > 1 ) {
-		return next.filter( ( id ) => String( id ) !== NO_TAG );
-	}
-
-	return next;
+	return reconcileAbsence( previous, next, NO_TAG );
 }
 
 /**

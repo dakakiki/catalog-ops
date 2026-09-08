@@ -24,6 +24,7 @@ import {
 	operatorFor,
 	operatorTakesRange,
 	operatorTakesValue,
+	reconcileAbsence,
 	reconcileTagSelection,
 } from './filter';
 
@@ -892,5 +893,87 @@ describe( 'the "Without a value" entry on a set field', () => {
 	it( 'is a value no ordinary choice would be', () => {
 		expect( NO_VALUE ).toMatch( /^__catalogops_/ );
 		expect( NO_VALUE ).not.toBe( NO_TAG );
+	} );
+} );
+
+describe( 'reconcileAbsence', () => {
+	// The same rule the tag row has always had, now shared with a module's set
+	// fields. Nothing both carries a value and carries none, so a selection saying
+	// both would always match nothing — and the control let it be built.
+	it( 'clears the values when the absence is picked', () => {
+		expect(
+			reconcileAbsence(
+				[ 'sale', 'eco' ],
+				[ 'sale', 'eco', NO_VALUE ],
+				NO_VALUE
+			)
+		).toEqual( [ NO_VALUE ] );
+	} );
+
+	it( 'clears the absence when a value is picked', () => {
+		expect(
+			reconcileAbsence( [ NO_VALUE ], [ NO_VALUE, 'sale' ], NO_VALUE )
+		).toEqual( [ 'sale' ] );
+	} );
+
+	it( 'leaves an ordinary selection alone', () => {
+		expect(
+			reconcileAbsence( [ 'sale' ], [ 'sale', 'eco' ], NO_VALUE )
+		).toEqual( [ 'sale', 'eco' ] );
+	} );
+
+	it( 'leaves the absence alone when it was already the only choice', () => {
+		expect(
+			reconcileAbsence( [ NO_VALUE ], [ NO_VALUE ], NO_VALUE )
+		).toEqual( [ NO_VALUE ] );
+	} );
+
+	it( 'survives an empty or missing previous selection', () => {
+		expect( reconcileAbsence( [], [ NO_VALUE ], NO_VALUE ) ).toEqual( [
+			NO_VALUE,
+		] );
+		expect( reconcileAbsence( undefined, [ 'sale' ], NO_VALUE ) ).toEqual( [
+			'sale',
+		] );
+	} );
+
+	// The tag row keeps its own name and its own sentinel, and must keep behaving
+	// exactly as it did — its entry is `NO_TAG`, and term ids are numbers.
+	it( 'still drives the tag row through its own sentinel', () => {
+		expect( reconcileTagSelection( [ 3, 4 ], [ 3, 4, NO_TAG ] ) ).toEqual( [
+			NO_TAG,
+		] );
+		expect( reconcileTagSelection( [ NO_TAG ], [ NO_TAG, 3 ] ) ).toEqual( [
+			3,
+		] );
+	} );
+
+	// Belt and braces: the control can no longer produce the pair, but a filter
+	// restored from elsewhere could, and the builder must still answer sensibly
+	// rather than send two contradictory halves.
+	it( 'is backed up by the builder, which still lets the absence win', () => {
+		const badges = {
+			key: 'acf:badges',
+			control: 'value_set',
+			operators: [ 'in', 'not_in', 'exists', 'not_exists' ],
+			scopes: [ 'product' ],
+			available: true,
+		};
+
+		expect(
+			buildFilter(
+				{
+					...emptyForm(),
+					modules: {
+						'acf:badges': {
+							value: [ 'sale', NO_VALUE ],
+							mode: 'in',
+						},
+					},
+				},
+				'product',
+				[ badges ]
+			).conditions
+		).toEqual( [ { field: 'acf:badges', operator: 'not_exists' } ] );
 	} );
 } );
