@@ -32,6 +32,13 @@ if ( ! $catalogops_tests_dir ) {
 	// No WordPress test framework available. Provide a stand-in base class so the
 	// integration test files still parse and skip themselves; unit tests run
 	// normally.
+	// A `wpdb` symbol, `__()` and `maybe_unserialize()`, so pure logic sitting on a
+	// class that merely holds a database handle is unit-testable. Only on this
+	// branch: core guards neither `__()` nor `wpdb`, so defining them before the
+	// real WordPress loads would be a redeclare fatal across the whole integration
+	// suite.
+	require __DIR__ . '/stubs/wp.php';
+
 	if ( ! class_exists( 'WP_UnitTestCase' ) ) {
 		require __DIR__ . '/stubs/wp-unit-testcase.php';
 	}

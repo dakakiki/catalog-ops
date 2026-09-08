@@ -11,6 +11,9 @@ use CatalogOps\Admin\Admin_Page;
 use CatalogOps\Container\Container;
 use CatalogOps\Database\Schema;
 use CatalogOps\Licensing\License;
+use CatalogOps\Modules\Acf\Acf_Fields;
+use CatalogOps\Modules\Acf\Acf_Filter_Provider;
+use CatalogOps\Modules\Acf\Acf_Options_Controller;
 use CatalogOps\Operations\Changes;
 use CatalogOps\Operations\Chunk_Runner;
 use CatalogOps\Operations\Fields\Core_Fields;
@@ -136,6 +139,13 @@ final class Plugin {
 				$this->container->get( Settings_Controller::class )->register_routes();
 				$this->container->get( Fields_Controller::class )->register_routes();
 				$this->container->get( Schedules_Controller::class )->register_routes();
+
+				// Only when ACF is here. The route is named by the ACF module's own
+				// descriptors and by nothing else, so registering it on a site without
+				// ACF would publish a path that can only ever answer an empty list.
+				if ( class_exists( 'ACF' ) || function_exists( 'acf_get_field_groups' ) ) {
+					$this->container->get( Acf_Options_Controller::class )->register_routes();
+				}
 			}
 		);
 
@@ -286,20 +296,46 @@ final class Plugin {
 		);
 
 		$this->container->singleton(
-			Filter_Providers::class,
-			static fn( Container $container ): Filter_Providers => new Filter_Providers(
-				$container->get( License::class )
-				// Empty on purpose. The seam is live — Query_Engine offers it every
-				// key it has no builder for, and refuses when nobody claims one — but
-				// no module registers yet and there is no public hook to register
-				// through. Publishing the filter is the point of no return for the
-				// provider API (it freezes the interfaces, the enums and the named
-				// constructors), and it comes after the EXPLAIN harness has measured
-				// every shape the compiler emits and after the UI can render a field
-				// nobody hardcoded. An empty registry changes no statement this
-				// engine produces today, which is exactly what makes it safe to land
-				// on its own.
+			Acf_Fields::class,
+			static function (): Acf_Fields {
+				global $wpdb;
+
+				return new Acf_Fields( $wpdb );
+			}
+		);
+
+		$this->container->singleton(
+			Acf_Options_Controller::class,
+			static fn( Container $container ): Acf_Options_Controller => new Acf_Options_Controller(
+				$container->get( Acf_Fields::class )
 			)
+		);
+
+		$this->container->singleton(
+			Filter_Providers::class,
+			static function ( Container $container ): Filter_Providers {
+				global $wpdb;
+
+				$providers = array();
+
+				// Registered first-party, not through a hook. `catalogops_filter_providers`
+				// is still unpublished, and publishing it is the point of no return for
+				// the provider API — it freezes the interfaces, the enums and the named
+				// constructors. A first-party module needs none of that: it can prove
+				// the vocabulary carries a real plugin's storage while the surface is
+				// still free to change.
+				//
+				// Gated on the class rather than on a plugin path, so a site loading ACF
+				// from a theme or a must-use plugin is served too. `is_expressible()`
+				// keeps the field list to what the clause path can actually answer, so
+				// an ACF install with nothing but flexible content registers a provider
+				// that offers no fields — which is the honest answer, not a bug.
+				if ( class_exists( 'ACF' ) || function_exists( 'acf_get_field_groups' ) ) {
+					$providers[] = new Acf_Filter_Provider( $wpdb, $container->get( Acf_Fields::class ) );
+				}
+
+				return new Filter_Providers( $container->get( License::class ), ...$providers );
+			}
 		);
 
 		$this->container->singleton(
