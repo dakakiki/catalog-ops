@@ -289,10 +289,13 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 	public function test_excluding_a_taxonomy_is_a_correlated_not_exists(): void {
 		global $wpdb;
 
+		list( $term_a, $tt_a ) = $this->make_term( 'Acme' );
+		list( $term_b, $tt_b ) = $this->make_term( 'Globex' );
+
 		$clause = $this->compile(
-			Field_Storage::taxonomy( 'product_brand' ),
+			Field_Storage::taxonomy( 'product_cat' ),
 			Operator::NOT_IN,
-			array( 7, 9 ),
+			array( $term_a, $term_b ),
 			Query_Scope::PRODUCT,
 			2
 		);
@@ -302,7 +305,55 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 				. 'WHERE tr.object_id = l.product_id AND tr.term_taxonomy_id IN ( %d, %d ) )',
 			$this->sql( $clause->where )
 		);
-		$this->assertSame( array( 7, 9 ), $clause->where_args );
+
+		// The operands are term_taxonomy_ids by the time they bind, not term ids.
+		// Resolving them is what keeps the subquery to one table — and it is also
+		// what carries the taxonomy, since a tt_id belongs to exactly one.
+		$this->assertSame( array( $tt_a, $tt_b ), $clause->where_args );
+	}
+
+	/**
+	 * The defect an adversarial review found, pinned so it cannot return.
+	 *
+	 * `taxonomy_clause()` expressed "which taxonomy" only through the operand list,
+	 * and never read the taxonomy name at all. Under EXISTS the operand list is
+	 * empty by construction, so the subquery lost its last predicate and became
+	 * "has any term in any taxonomy" — measured on the live catalogue as 18,583
+	 * products where the honest answer was 5,500. A -10% Adjust behind "has a
+	 * brand" would have landed on the whole shop, with preview and run agreeing.
+	 */
+	public function test_taxonomy_presence_still_names_the_taxonomy(): void {
+		list( , $tt_id ) = $this->make_term( 'Acme' );
+
+		$clause = $this->compile(
+			Field_Storage::taxonomy( 'product_cat' ),
+			Operator::EXISTS,
+			'',
+			Query_Scope::PRODUCT,
+			0
+		);
+
+		$sql = $this->sql( $clause->join );
+
+		$this->assertStringContainsString( 'tr.term_taxonomy_id IN (', $sql, 'The taxonomy must reach the SQL.' );
+		$this->assertStringNotContainsString( 'WHERE 1 = 1', $sql, 'An unpredicated subquery matches everything.' );
+		$this->assertContains( $tt_id, $clause->join_args, 'Presence means every term of THIS taxonomy.' );
+	}
+
+	/**
+	 * And a taxonomy with no terms at all answers honestly rather than widening.
+	 */
+	public function test_a_taxonomy_with_no_terms_matches_nothing_and_its_negation_everything(): void {
+		register_taxonomy( 'qh_empty_tax', 'product' );
+
+		$this->assertSame(
+			'1 = 0',
+			$this->compile( Field_Storage::taxonomy( 'qh_empty_tax' ), Operator::EXISTS, '', Query_Scope::PRODUCT, 0 )->where
+		);
+		$this->assertSame(
+			'1 = 1',
+			$this->compile( Field_Storage::taxonomy( 'qh_empty_tax' ), Operator::NOT_EXISTS, '', Query_Scope::PRODUCT, 0 )->where
+		);
 	}
 
 	/**
@@ -313,10 +364,12 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 	 * test and returns a plausible wrong set the moment the toggle is flipped.
 	 */
 	public function test_a_parent_anchored_field_matches_the_parent_under_the_variation_scope(): void {
+		list( $term ) = $this->make_term( 'Acme' );
+
 		$clause = $this->compile(
-			Field_Storage::taxonomy( 'product_brand' ),
+			Field_Storage::taxonomy( 'product_cat' ),
 			Operator::IN,
-			array( 7 ),
+			array( $term ),
 			Query_Scope::VARIATION,
 			null
 		);
@@ -325,10 +378,12 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 	}
 
 	public function test_a_parent_anchored_field_matches_the_object_under_the_product_scope(): void {
+		list( $term ) = $this->make_term( 'Acme' );
+
 		$clause = $this->compile(
-			Field_Storage::taxonomy( 'product_brand' ),
+			Field_Storage::taxonomy( 'product_cat' ),
 			Operator::IN,
-			array( 7 ),
+			array( $term ),
 			Query_Scope::PRODUCT,
 			null
 		);
@@ -410,7 +465,7 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 		};
 
 		$clause = $this->compile(
-			Field_Storage::taxonomy( 'product_brand', $empty ),
+			Field_Storage::taxonomy( 'product_cat', $empty ),
 			Operator::NOT_IN,
 			array( 7 ),
 			Query_Scope::PRODUCT,
@@ -418,6 +473,95 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 		);
 
 		$this->assertSame( '1 = 1', $clause->where );
+	}
+
+	/**
+	 * The second defect the review found. The empty-set rule was gated on "is this
+	 * a list operator", so an emptied IN was caught and an emptied EQUALS was not —
+	 * and a Value_Map can return nothing for any operator. What fell through
+	 * reached a shape with no predicate left, matching the whole catalogue where
+	 * the honest answer was nothing.
+	 */
+	public function test_an_emptied_single_value_operator_is_answered_not_dropped(): void {
+		$empty = new class() implements Value_Map {
+
+			public function map( array $values ): array {
+				return array();
+			}
+		};
+
+		$storage = Field_Storage::taxonomy( 'product_cat', $empty );
+
+		$this->assertSame(
+			'1 = 0',
+			$this->compile( $storage, Operator::EQUALS, 42, Query_Scope::PRODUCT, 1 )->where,
+			'"brand is Acme", where Acme was deleted, matches nothing.'
+		);
+		$this->assertSame(
+			'1 = 1',
+			$this->compile( $storage, Operator::NOT_EQUALS, 42, Query_Scope::PRODUCT, 1 )->where,
+			'And excluding a brand that no longer exists keeps every product.'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// Presence on a lookup column, which is not one question.
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The third defect. Presence compiled to IS NOT NULL for every column, but
+	 * WooCommerce writes '' rather than NULL for an unset SKU — so "has a SKU"
+	 * was a tautology matching the whole catalogue, and "has no SKU" matched
+	 * nothing. Both silent, in opposite directions.
+	 */
+	public function test_presence_on_a_column_written_as_an_empty_string_tests_for_emptiness(): void {
+		$storage = Field_Storage::lookup_column( Lookup_Column::SKU );
+
+		$this->assertSame(
+			"( l.sku IS NOT NULL AND l.sku <> '' )",
+			$this->sql( $this->compile( $storage, Operator::EXISTS, '' )->where )
+		);
+		$this->assertSame(
+			"( l.sku IS NULL OR l.sku = '' )",
+			$this->sql( $this->compile( $storage, Operator::NOT_EXISTS, '' )->where )
+		);
+	}
+
+	public function test_presence_on_a_genuinely_nullable_column_is_a_null_test(): void {
+		$this->assertSame(
+			'l.stock_quantity IS NOT NULL',
+			$this->sql( $this->compile( Field_Storage::lookup_column( Lookup_Column::STOCK_QUANTITY ), Operator::EXISTS, '' )->where )
+		);
+	}
+
+	/**
+	 * And a column every row carries is refused rather than answered with a
+	 * tautology the user would read as a working filter.
+	 */
+	public function test_presence_on_an_always_populated_column_is_refused(): void {
+		$this->expectException( Filter_Field_Unavailable::class );
+		$this->expectExceptionMessageMatches( '/every product has a value for it/' );
+
+		$this->compile( Field_Storage::lookup_column( Lookup_Column::ON_SALE ), Operator::EXISTS, '' );
+	}
+
+	/**
+	 * The fourth defect. matching() is a method on the class rather than on a
+	 * per-kind builder, so it was callable on all five kinds — and honoured by two.
+	 * A narrowing that is silently dropped leaves a WIDER clause than the provider
+	 * asked for, so it has to refuse.
+	 */
+	public function test_a_constant_on_a_kind_that_cannot_carry_one_is_refused(): void {
+		$this->expectException( \InvalidArgumentException::class );
+		$this->expectExceptionMessageMatches( '/cannot carry a constant test/' );
+
+		Field_Storage::lookup_column( Lookup_Column::STOCK_STATUS )->matching( 'onsale', 1, Value_Kind::INTEGER );
+	}
+
+	public function test_a_constant_on_a_taxonomy_is_refused(): void {
+		$this->expectException( \InvalidArgumentException::class );
+
+		Field_Storage::taxonomy( 'product_cat' )->matching( 'term_order', 1, Value_Kind::INTEGER );
 	}
 
 	// -----------------------------------------------------------------------
@@ -501,6 +645,23 @@ final class StorageCompilerTest extends WP_UnitTestCase {
 		);
 
 		return $this->compiler->compile( $field, $storage, $operator, $value, $scope, $join_slot );
+	}
+
+	/**
+	 * Create a product_cat term and return its term id and term_taxonomy_id.
+	 *
+	 * The two are different numbers, and the difference is the point: the compiler
+	 * is handed term ids and must bind term_taxonomy_ids.
+	 *
+	 * @param string $name Term name.
+	 * @return array{0: int, 1: int}
+	 */
+	private function make_term( string $name ): array {
+		$term = wp_insert_term( $name . ' ' . wp_generate_password( 6, false ), 'product_cat' );
+
+		$this->assertIsArray( $term, 'The fixture term must exist.' );
+
+		return array( (int) $term['term_id'], (int) $term['term_taxonomy_id'] );
 	}
 
 	/**

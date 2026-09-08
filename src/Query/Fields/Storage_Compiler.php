@@ -111,7 +111,15 @@ final class Storage_Compiler {
 		// 4. An empty operand set is a real answer, not a failure: nothing in the
 		// catalogue can hold this value. "Exclude a brand that was deleted" must keep
 		// every product.
-		if ( ! $presence && array() === $operands && $this->takes_a_list( $positive ) ) {
+		//
+		// The rule is uniform across operators, and the version that was not cost a
+		// review finding: gated on "is this a list operator" it caught an empty IN
+		// and let an emptied EQUALS through, because a Value_Map can return nothing
+		// for any operator. What fell through then reached a shape with no predicate
+		// left, which is the widening this whole class exists to prevent. A presence
+		// test is the one thing that legitimately has no operands, so it is the only
+		// exemption.
+		if ( ! $presence && array() === $operands ) {
 			return Clause::where( $negative ? '1 = 1' : '1 = 0' );
 		}
 
@@ -242,7 +250,20 @@ final class Storage_Compiler {
 		$column = 'l.' . $storage->column->value;
 
 		if ( Operator::EXISTS === $positive ) {
-			return Clause::where( $negative ? "{$column} IS NULL" : "{$column} IS NOT NULL" );
+			return match ( $storage->column->presence() ) {
+				Column_Presence::NULLABLE     => Clause::where(
+					$negative ? "{$column} IS NULL" : "{$column} IS NOT NULL"
+				),
+				Column_Presence::EMPTY_STRING => Clause::where(
+					$negative
+						? "( {$column} IS NULL OR {$column} = '' )"
+						: "( {$column} IS NOT NULL AND {$column} <> '' )"
+				),
+				Column_Presence::ALWAYS_SET   => $this->refuse(
+					$field,
+					'every product has a value for it, so asking whether it is set has no answer.'
+				),
+			};
 		}
 
 		list( $test, $args ) = $this->comparison( $field, $column, $storage->value_kind, $positive, $operands );
@@ -287,9 +308,31 @@ final class Storage_Compiler {
 		string $object_column,
 		?int $join_slot
 	): Clause {
+		// The taxonomy has to reach the SQL, and the only place it can is here.
+		// term_relationships carries object_id and term_taxonomy_id and nothing
+		// else — no taxonomy column — so a subquery over it alone cannot say which
+		// taxonomy it means. Naming term_taxonomy inside the subquery would say it
+		// and is exactly the two-table membership that mis-planned from 1s to four
+		// minutes, which is why Field_Storage's no-dot rule makes it unbuildable.
+		//
+		// So the tt_ids are resolved first, in PHP, in one small indexed read — the
+		// mechanism {@see Value_Map} exists to describe. Resolving them is also what
+		// binds the taxonomy: a tt_id belongs to exactly one taxonomy, so the IN
+		// list carries the taxonomy with it.
+		$tt_ids = $this->term_taxonomy_ids( $storage->key_prefix, array_map( 'intval', $operands ) );
+
+		if ( array() === $tt_ids ) {
+			// Either the taxonomy has no terms at all, or none of the ones asked for
+			// still exist. Nothing in the catalogue can carry them: "has one of these"
+			// matches nothing, "has none of these" matches everything.
+			return Clause::where( $negative ? '1 = 1' : '1 = 0' );
+		}
+
 		$relationships = $this->wpdb->term_relationships;
-		$placeholders  = $this->placeholders( count( $operands ), '%d' );
-		$test          = array() === $operands ? '' : " AND tr.term_taxonomy_id IN ( {$placeholders} )";
+		$placeholders  = $this->placeholders( count( $tt_ids ), '%d' );
+		$predicate     = "tr.term_taxonomy_id IN ( {$placeholders} )";
+		$test          = ' AND ' . $predicate;
+		$operands      = $tt_ids;
 
 		if ( $negative ) {
 			return Clause::where(
@@ -305,7 +348,7 @@ final class Storage_Compiler {
 			return Clause::where(
 				"{$object_column} IN (
 				SELECT tr.object_id FROM {$relationships} tr
-				WHERE 1 = 1{$test}
+				WHERE {$predicate}
 			)",
 				$operands
 			);
@@ -316,7 +359,7 @@ final class Storage_Compiler {
 		return Clause::join(
 			"INNER JOIN (
 				SELECT DISTINCT tr.object_id FROM {$relationships} tr
-				WHERE 1 = 1{$test}
+				WHERE {$predicate}
 			) {$alias} ON {$alias}.object_id = {$object_column}",
 			$operands
 		);
@@ -605,6 +648,54 @@ final class Storage_Compiler {
 	 */
 	private function takes_a_list( Operator $operator ): bool {
 		return Operator::IN === $operator;
+	}
+
+	/**
+	 * Every term_taxonomy_id of a taxonomy, or of the term ids asked for.
+	 *
+	 * The same read {@see \CatalogOps\Query\Query_Engine::term_taxonomy_ids()}
+	 * makes, and for the same measured reason: term_relationships is keyed by
+	 * term_taxonomy_id, so asking it about term ids means joining term_taxonomy
+	 * inside the subquery, and that two-table membership is what took a
+	 * one-second query to four minutes on 18,583 products. One small indexed
+	 * lookup here keeps the subquery down to a single table.
+	 *
+	 * An empty term list means "every term of this taxonomy", which is how a
+	 * presence test is answered — and it is also what binds the taxonomy, since a
+	 * tt_id belongs to exactly one.
+	 *
+	 * Memoised for the life of the request: a preview renders its filter 2+N+W
+	 * times and must see the same set every time, or its incremental
+	 * `applicable - remaining` differencing stops adding up.
+	 *
+	 * @param string $taxonomy The taxonomy name.
+	 * @param int[]  $term_ids Term ids, or empty for all of them.
+	 * @return list<int>
+	 */
+	private function term_taxonomy_ids( string $taxonomy, array $term_ids ): array {
+		$memo = 'tt|' . $taxonomy . '|' . implode( ',', $term_ids );
+
+		if ( isset( $this->mapped[ $memo ] ) ) {
+			return $this->mapped[ $memo ];
+		}
+
+		$taxonomies = $this->wpdb->term_taxonomy;
+
+		$sql  = "SELECT term_taxonomy_id FROM {$taxonomies} WHERE taxonomy = %s";
+		$args = array( $taxonomy );
+
+		if ( array() !== $term_ids ) {
+			$sql .= ' AND term_id IN ( ' . $this->placeholders( count( $term_ids ), '%d' ) . ' )';
+			$args = array( ...$args, ...$term_ids );
+		}
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		$ids = $this->wpdb->get_col( $this->wpdb->prepare( $sql, ...$args ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		$this->mapped[ $memo ] = array_map( 'intval', $ids );
+
+		return $this->mapped[ $memo ];
 	}
 
 	/**

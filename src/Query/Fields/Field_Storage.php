@@ -265,6 +265,26 @@ final class Field_Storage {
 	 * @throws InvalidArgumentException When the column is not a bare identifier.
 	 */
 	public function matching( string $column, int|float|string $value, Value_Kind $kind = Value_Kind::TEXT ): self {
+		// Refused rather than ignored, and the difference is the whole rule: a
+		// narrowing that is silently dropped leaves a WIDER clause than the provider
+		// asked for, which is the one direction nothing downstream can notice.
+		//
+		// A lookup column cannot carry one because the constant's column would be a
+		// provider-supplied name interpolated beside `l.` — reopening the very set
+		// {@see Lookup_Column} is a closed enum in order to close. A taxonomy cannot
+		// because term_relationships has no column to constrain: object_id and
+		// term_taxonomy_id are the whole row, and the taxonomy is already carried by
+		// the resolved tt_ids.
+		if ( Storage_Kind::LOOKUP_COLUMN === $this->kind || Storage_Kind::TAXONOMY === $this->kind ) {
+			$refusal = sprintf(
+				'A %s storage cannot carry a constant test; there is no column on it to constrain.',
+				$this->kind->value
+			);
+
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Developer-facing message for a provider author; never reaches a page.
+			throw new InvalidArgumentException( $refusal );
+		}
+
 		self::assert_column( $column );
 
 		$copy              = clone $this;
