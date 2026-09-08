@@ -102,6 +102,49 @@ final class Query_Engine {
 	}
 
 	/**
+	 * The exact statement {@see resolve()} would run, without running it.
+	 *
+	 * Built for the EXPLAIN harness, which until now reached the private
+	 * `select()` through `ReflectionMethod::setAccessible()`. That worked and was
+	 * quietly corrosive: a reflective caller cannot be found by a rename, it does
+	 * not appear in any call graph, and — the part that actually cost something —
+	 * it made passing requirements awkward enough that the harness never did, so
+	 * the one-to-three positive semi-joins {@see Write_Rules} contributes at
+	 * preview and at freeze have never been EXPLAINed on a real catalogue. Those
+	 * joins are the headroom every provider clause competes for.
+	 *
+	 * No projection parameter: the two shapes the engine actually runs are the two
+	 * methods below, so nothing here widens what a caller can put into a statement.
+	 *
+	 * @param Filter        $filter       The filter.
+	 * @param Requirement[] $requirements Applicability constraints.
+	 * @param int           $limit        Stop after this many ids; 0 for all.
+	 */
+	public function resolve_sql( Filter $filter, array $requirements = array(), int $limit = 0 ): string {
+		$sql = $this->select( 'l.product_id', $filter, $requirements ) . ' ORDER BY l.product_id ASC';
+
+		if ( $limit > 0 ) {
+			$sql .= $this->wpdb->prepare( ' LIMIT %d', $limit );
+		}
+
+		// wpdb::prepare() hands back a LIKE's '%' as an internal placeholder hash
+		// and only restores it inside get_col()/get_var() at execution time. A
+		// statement meant to be read or EXPLAINed has to be restored here, or its
+		// LIKE carries the hash instead of a wildcard.
+		return $this->wpdb->remove_placeholder_escape( $sql );
+	}
+
+	/**
+	 * The exact statement {@see count()} would run, without running it.
+	 *
+	 * @param Filter        $filter       The filter.
+	 * @param Requirement[] $requirements Applicability constraints.
+	 */
+	public function count_sql( Filter $filter, array $requirements = array() ): string {
+		return $this->wpdb->remove_placeholder_escape( $this->select( 'COUNT(*)', $filter, $requirements ) );
+	}
+
+	/**
 	 * Build the full, prepared SELECT for a projection and filter. The scope
 	 * decides the post type (parent products or their variations); a variation
 	 * carries its own price, stock, sku, and meta, but inherits its category from
@@ -394,7 +437,7 @@ final class Query_Engine {
 			// On a variation the chosen attribute value is stored on the variation
 			// itself, not as a parent taxonomy term.
 			return $scope->is_variation()
-				? $this->variation_attribute_clause( $taxonomy, $condition )
+				? $this->variation_attribute_clause( $taxonomy, $condition, $join_slot )
 				: $this->taxonomy_clause( $taxonomy, $condition, $scope, $join_slot );
 		}
 
@@ -778,9 +821,11 @@ final class Query_Engine {
 	 *
 	 * @param string    $taxonomy  Attribute taxonomy, e.g. `pa_size`.
 	 * @param Condition $condition Term id(s) for IN/NOT_IN, or none for (NOT_)EXISTS.
-	 * @return array{0: string, 1: list<mixed>}
+	 * @param int|null  $join_slot Alias number for a join, or null if the clause must
+	 *                             stay in the WHERE (an OR filter).
+	 * @return array{0: string, 1: list<mixed>, 2?: string, 3?: list<mixed>}
 	 */
-	private function variation_attribute_clause( string $taxonomy, Condition $condition ): array {
+	private function variation_attribute_clause( string $taxonomy, Condition $condition, ?int $join_slot = null ): array {
 		if ( '' === $taxonomy ) {
 			// Unreachable: `attribute:` with nothing after the colon names no
 			// taxonomy, and Filter_Fields refuses the key before dispatch.
@@ -791,11 +836,22 @@ final class Query_Engine {
 		$meta_key = 'attribute_' . $taxonomy;
 		$operator = $condition->operator;
 
-		// Positive matches drive from the postmeta set of matching variations —
-		// `l.product_id IN (SELECT post_id …)`, a semi-join the optimiser can start
-		// from — for the same reason as {@see taxonomy_clause()}: a correlated
-		// EXISTS over 50k+ variations mis-plans into a full scan. Negatives stay as
-		// NOT EXISTS (anti-join, NULL-safe).
+		// Positive membership is a join over a DISTINCT derived table when the
+		// filter's shape allows one, and the semi-join only under OR — the same
+		// rewrite {@see taxonomy_clause()} and {@see meta_clause()} both had, and
+		// the last builder to get it.
+		//
+		// It was left as a bare semi-join because a correlated EXISTS over 50k
+		// variations was worse, which was true and was not the end of the story. The
+		// EXPLAIN harness measured what the semi-join actually costs on this
+		// catalogue: a single `attribute:pa_size` filter under the variation scope
+		// took **forty-six minutes** to resolve, and could not COUNT inside thirty
+		// seconds. That is the same optimiser tip-over the product-scope clause was
+		// rewritten away from — reached here by the same route, and unnoticed for
+		// longer because nothing had ever EXPLAINed the variation scope.
+		//
+		// Negatives stay NOT EXISTS: an anti-join, NULL-safe, and not the shape with
+		// the plan problem.
 
 		// "Has any value for this attribute" (chosen with no specific value), or none.
 		if ( Operator::EXISTS === $operator || Operator::NOT_EXISTS === $operator ) {
@@ -808,12 +864,22 @@ final class Query_Engine {
 				return array( $fragment, array( $meta_key ) );
 			}
 
-			$fragment = "l.product_id IN (
-				SELECT pm.post_id FROM {$postmeta} pm
-				WHERE pm.meta_key = %s AND pm.meta_value <> ''
-			)";
+			if ( null === $join_slot ) {
+				$fragment = "l.product_id IN (
+					SELECT pm.post_id FROM {$postmeta} pm
+					WHERE pm.meta_key = %s AND pm.meta_value <> ''
+				)";
 
-			return array( $fragment, array( $meta_key ) );
+				return array( $fragment, array( $meta_key ) );
+			}
+
+			$alias = 'co_var' . $join_slot;
+			$join  = "INNER JOIN (
+				SELECT DISTINCT pm.post_id FROM {$postmeta} pm
+				WHERE pm.meta_key = %s AND pm.meta_value <> ''
+			) {$alias} ON {$alias}.post_id = l.product_id";
+
+			return array( '', array(), $join, array( $meta_key ) );
 		}
 
 		$term_ids = array_values( array_filter( array_map( 'intval', (array) $condition->value ) ) );
@@ -843,12 +909,22 @@ final class Query_Engine {
 			return array( $fragment, array( $meta_key, ...$slugs ) );
 		}
 
-		$fragment = "l.product_id IN (
-			SELECT pm.post_id FROM {$postmeta} pm
-			WHERE pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
-		)";
+		if ( null === $join_slot ) {
+			$fragment = "l.product_id IN (
+				SELECT pm.post_id FROM {$postmeta} pm
+				WHERE pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
+			)";
 
-		return array( $fragment, array( $meta_key, ...$slugs ) );
+			return array( $fragment, array( $meta_key, ...$slugs ) );
+		}
+
+		$alias = 'co_var' . $join_slot;
+		$join  = "INNER JOIN (
+			SELECT DISTINCT pm.post_id FROM {$postmeta} pm
+			WHERE pm.meta_key = %s AND pm.meta_value IN ( {$placeholders} )
+		) {$alias} ON {$alias}.post_id = l.product_id";
+
+		return array( '', array(), $join, array( $meta_key, ...$slugs ) );
 	}
 
 	/**
