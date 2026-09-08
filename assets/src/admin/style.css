@@ -1043,6 +1043,12 @@ are told apart at a glance rather than by reading.
 /*
 One colour per meaning, so a row is read rather than deciphered: green shows or
 starts, orange reverses, amber holds, indigo runs once, red destroys.
+
+Grey is the odd one, and deliberately so: every colour above names a kind of
+CHANGE, and a note changes nothing at all — it only reveals something a person
+wrote. Spending one of the five on it would blunt the vocabulary and put a
+document icon in the same green as the one that opens the audit trail beside it,
+which is where the two were being mistaken for each other.
 */
 .catalogops-icon-button--view,
 .catalogops-icon-button--run {
@@ -1063,6 +1069,10 @@ starts, orange reverses, amber holds, indigo runs once, red destroys.
 
 .catalogops-icon-button--danger {
 	color: var(--co-red);
+}
+
+.catalogops-icon-button--note {
+	color: var(--co-muted);
 }
 
 .catalogops-icon-button:hover:not( :disabled ) {
@@ -2175,4 +2185,81 @@ vocabulary. Scoped and class+class deep for the same reason as
 	.catalogops-field.is-loading .catalogops-ms__control {
 		animation: none;
 	}
+}
+
+/* Which schedule made a run, beside the word "schedule" in the Source cell. The
+   name is stored on the operation rather than joined, so this is what the
+   schedule was CALLED at the time — see the note on Add_Operation_Note_And_Schedule_Name_Columns. */
+.catalogops-source-schedule {
+	display: block;
+	margin-top: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--co-muted);
+	font-size: 11px;
+}
+
+/* The reason somebody gave for a run, shown in the panel the row opens rather
+   than printed down the table: a history that repeats every explanation buries
+   itself under them. The icon in the actions column is what says a note exists;
+   this is what it opens.
+
+   Quoted and set apart, because it is the one line here written by a person
+   rather than derived from the row, and it shares this panel with the plugin's
+   own explanations — which wear `catalogops-muted` in the same place. */
+.catalogops-op-note {
+	margin: 0;
+	padding-left: 10px;
+	border-left: 3px solid var(--co-accent-border);
+	color: var(--co-ink);
+	font-style: italic;
+}
+
+/* The note box in the apply confirmation.
+
+   Full width, because a reason is a sentence and a sentence in a 220px box
+   invites three words.
+
+   The margins are the point of this rule, not the width. The dialog is three
+   things in order — what is about to happen, when the backup was taken, and the
+   pair of buttons that commits — and the note is a fourth that belongs to none of
+   them. At the spacing the rest of the panel uses it read as an appendix to the
+   backup line above and as a label for the button below, which is the one thing
+   it must not look like: a field touching "Apply now" reads as required. */
+.catalogops-confirm__note {
+	margin: 18px 0 20px;
+}
+
+.catalogops-confirm__note input[type='text'] {
+	width: 100%;
+	max-width: 460px;
+}
+
+/*
+A tooltip carrying content rather than a label. The ordinary one is a couple of
+words and stays on one line; a note is a sentence somebody wrote, up to the
+column's 191 characters, and `nowrap` would run it off the side of the screen.
+
+`width: max-content` with a cap keeps a short note tight and wraps a long one,
+so the bubble is the size of what is in it rather than always the maximum.
+*/
+.catalogops-icon-button.has-wide-tooltip::after {
+	width: max-content;
+	max-width: 280px;
+	white-space: normal;
+	text-align: left;
+}
+
+/*
+This one is never the last button in the row — undo, pause and delete all sit
+after it — so it keeps the centred anchoring. But 280px centred on a 24px icon
+reaches further left than a label ever did, and the actions column is at the
+right edge of the table: anchoring to the button's right keeps the whole bubble
+on screen whichever buttons happen to follow it on a given row.
+*/
+.catalogops-cell--actions .has-wide-tooltip::after {
+	left: auto;
+	right: 0;
+	transform: none;
 }

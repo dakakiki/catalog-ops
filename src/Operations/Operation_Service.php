@@ -242,6 +242,9 @@ final class Operation_Service {
 	 * @param Operation_Source                        $source  Origin.
 	 * @param int                                     $user_id Owner user id.
 	 * @param int|null                                $schedule_id Schedule that spawned this run, or null.
+	 * @param string|null                             $note        The user's reason for the run, kept
+	 *                                                             on the row so the history can answer
+	 *                                                             a question nothing else records.
 	 * @return int The new operation id.
 	 *
 	 * @throws InvalidArgumentException  When an action targets a field no provider handles.
@@ -253,7 +256,8 @@ final class Operation_Service {
 		Operation_Mode $mode,
 		Operation_Source $source,
 		int $user_id,
-		?int $schedule_id = null
+		?int $schedule_id = null,
+		?string $note = null
 	): int {
 		// The filter first: it decides *what* is written, so a filter that cannot be
 		// answered exactly must not get as far as a draft row. The engine refuses the
@@ -265,7 +269,43 @@ final class Operation_Service {
 		$this->assert_formulas_allowed( $actions );
 		$this->assert_values_writable( $actions );
 
-		return $this->operations->create( $filter, $actions, $mode, $source, $user_id, $schedule_id );
+		return $this->operations->create(
+			$filter,
+			$actions,
+			$mode,
+			$source,
+			$user_id,
+			$schedule_id,
+			null,
+			null,
+			$this->schedule_name( $schedule_id ),
+			$note
+		);
+	}
+
+	/**
+	 * What a schedule is called right now, to be stored on the run it is spawning.
+	 *
+	 * Read here and written once, rather than joined when the history is drawn.
+	 * The history is a record of what happened, and a join makes it a description
+	 * of what is true today: deleting a schedule would take the name of every run
+	 * it ever made with it — this plugin deletes schedules routinely — and
+	 * renaming one would silently relabel its own past.
+	 *
+	 * A lookup that fails costs the name and nothing else. `schedule_id` is still
+	 * on the row for anything that needs the live schedule, and the history falls
+	 * back to it.
+	 *
+	 * @param int|null $schedule_id The schedule spawning this run, if any.
+	 */
+	private function schedule_name( ?int $schedule_id ): ?string {
+		if ( null === $schedule_id || null === $this->schedules ) {
+			return null;
+		}
+
+		$schedule = $this->schedules->find( $schedule_id );
+
+		return null === $schedule ? null : $schedule->name;
 	}
 
 	/**
