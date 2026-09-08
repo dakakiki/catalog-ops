@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Rest;
 
+use CatalogOps\Query\Fields\Filter_Providers;
 use WP_REST_Response;
 use WP_REST_Server;
 use wpdb;
@@ -76,18 +77,90 @@ final class Fields_Controller {
 	private wpdb $wpdb;
 
 	/**
+	 * Module filter-field registry, or null when no modules can register.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $providers;
+
+	/**
 	 * Build the controller.
 	 *
-	 * @param wpdb $wpdb WordPress database handle.
+	 * @param wpdb                  $wpdb      WordPress database handle.
+	 * @param Filter_Providers|null $providers Module field registry. Null answers
+	 *                                         an empty list, which is what an
+	 *                                         installation with no modules is.
 	 */
-	public function __construct( wpdb $wpdb ) {
-		$this->wpdb = $wpdb;
+	public function __construct( wpdb $wpdb, ?Filter_Providers $providers = null ) {
+		$this->wpdb      = $wpdb;
+		$this->providers = $providers;
+	}
+
+	/**
+	 * The filterable fields every registered module offers.
+	 *
+	 * The first production caller {@see Filter_Providers::all_fields()} has ever
+	 * had, and the reason M7's clause seam is not invisible: a module could ship a
+	 * perfectly compiled field and no user could reach it, because the filter's
+	 * control list is written by hand in the React bundle.
+	 *
+	 * **Unavailable fields are listed, not omitted.** A field whose module the
+	 * licence does not cover comes back with `available: false` so the UI can show
+	 * it locked. Dropping it would be worse than it looks: a saved filter or a
+	 * schedule that already names the field would then open against a control list
+	 * that does not contain it, and a filter the user cannot see is a filter they
+	 * cannot correct — while the engine goes on refusing it. Locked-and-explained
+	 * is the only honest shape.
+	 *
+	 * The core fields are deliberately absent. They are hardcoded in the client and
+	 * stay that way for now; serving them too would mean rewriting eight tested
+	 * controls in the same change as introducing the mechanism, and the spec's
+	 * de-risking advice is to append a module section below them instead.
+	 */
+	public function filterable(): WP_REST_Response {
+		if ( null === $this->providers ) {
+			return new WP_REST_Response( array( 'fields' => array() ) );
+		}
+
+		$fields = array();
+
+		foreach ( $this->providers->all_fields() as $entry ) {
+			$field = $entry['field'];
+
+			$fields[] = array(
+				'key'           => $field->key,
+				'label'         => $field->label,
+				'control'       => $field->control->value,
+				// Sent as the persisted tokens, not as objects: the client posts
+				// these straight back in filter_json, and a shape that has to be
+				// translated in both directions is a shape that can be translated
+				// wrongly in one of them.
+				'operators'     => array_map( static fn( $operator ): string => $operator->value, $field->operators ),
+				'scopes'        => array_map( static fn( $scope ): string => $scope->value, $field->scopes ),
+				'options_route' => $field->options_route,
+				'column_label'  => $field->column_label,
+				'module'        => $entry['module'],
+				'available'     => $entry['available'],
+			);
+		}
+
+		return new WP_REST_Response( array( 'fields' => $fields ) );
 	}
 
 	/**
 	 * Register the routes. Hook to rest_api_init.
 	 */
 	public function register_routes(): void {
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/fields/filterable',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'filterable' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
+
 		register_rest_route(
 			self::REST_NAMESPACE,
 			'/fields/meta-keys',
