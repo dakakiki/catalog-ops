@@ -3963,6 +3963,122 @@ function IconButton( {
 }
 
 /**
+ * What one run actually did: which objects it targeted, and what it changed.
+ *
+ * Both halves have been in the database since the first release and read by
+ * nothing — the history could say a run touched 1,204 products and never what
+ * made them the 1,204, or what happened to them. A record of a bulk edit that
+ * cannot say what the edit was is a receipt, not an audit trail.
+ *
+ * Fetched when the panel opens rather than carried by the list, because the list
+ * polls every few seconds and this is two long JSON columns plus the term lookups
+ * that turn ids into names.
+ *
+ * The wording is the server's. Naming a condition needs term names from the
+ * database and field labels from the module registry, neither of which this
+ * bundle has or should have — the same reason a module serves its own options
+ * rather than teaching the client about itself.
+ *
+ * @param {Object} props    Component props.
+ * @param {number} props.id The operation to describe.
+ */
+function OperationSummary( { id } ) {
+	const [ data, setData ] = useState( null );
+	const [ error, setError ] = useState( '' );
+
+	useEffect( () => {
+		let live = true;
+
+		apiFetch( { path: `/catalogops/v1/operations/${ id }/summary` } )
+			.then( ( res ) => {
+				if ( live ) {
+					setData( res );
+				}
+			} )
+			.catch( ( err ) => {
+				if ( live ) {
+					setError( err.message );
+				}
+			} );
+
+		return () => {
+			live = false;
+		};
+	}, [ id ] );
+
+	if ( error ) {
+		return <p className="catalogops-field-error">{ error }</p>;
+	}
+
+	if ( ! data ) {
+		return (
+			<p className="catalogops-loading">
+				{ __( 'Loading…', 'catalogops' ) }
+			</p>
+		);
+	}
+
+	return (
+		<div className="catalogops-summary">
+			<div className="catalogops-summary__part">
+				<h4>{ __( 'It targeted', 'catalogops' ) }</h4>
+				<p className="catalogops-muted">
+					{ sprintf(
+						/* translators: 1: "Products" or "Variations". 2: "all of these" or "any of these". */
+						__( '%1$s matching %2$s:', 'catalogops' ),
+						data.scope,
+						data.relation
+					) }
+				</p>
+				{ /* An empty filter is not an empty list — it is every object in
+				     the scope, and saying nothing here would read as a summary
+				     that failed to load rather than as a run that targeted the
+				     whole catalogue. */ }
+				{ data.conditions.length === 0 ? (
+					<p className="catalogops-muted">
+						{ __(
+							'No conditions — the whole catalogue.',
+							'catalogops'
+						) }
+					</p>
+				) : (
+					<ul>
+						{ data.conditions.map( ( c, i ) => (
+							<li key={ i }>
+								<strong>{ c.label }</strong> { c.operator }
+								{ c.value && <> { c.value }</> }
+							</li>
+						) ) }
+					</ul>
+				) }
+			</div>
+
+			<div className="catalogops-summary__part">
+				<h4>{ __( 'It changed', 'catalogops' ) }</h4>
+				<ul>
+					{ data.actions.map( ( a, i ) => (
+						<li key={ i }>
+							<strong>{ a.label }</strong> { a.change }
+						</li>
+					) ) }
+				</ul>
+			</div>
+
+			{ /* The filter was frozen when the run was queued, so this is what
+			     ran — not what the same conditions would match today. Saying so
+			     is the difference between a record and a guess, and the whole
+			     preview-equals-run promise rests on that freeze. */ }
+			<p className="catalogops-muted catalogops-summary__note">
+				{ __(
+					'This is the filter as it was frozen when the run started, not what it would match now.',
+					'catalogops'
+				) }
+			</p>
+		</div>
+	);
+}
+
+/**
  * One row of the operation history, expandable to its audit detail or undo flow.
  *
  * @param {Object}   props           Component props.
@@ -4170,6 +4286,17 @@ function OperationRow( { op, onChanged, offline = false } ) {
 								isActive={ open === 'note' }
 							/>
 						) }
+						{ /* Always there, so it sits in the fixed run rather
+						     than ahead of it. Grey for the same reason the note
+						     is: it says something and changes nothing, and the
+						     five colours all name a kind of change. */ }
+						<IconButton
+							icon="info-outline"
+							variant="note"
+							label={ __( 'What this run did', 'catalogops' ) }
+							onClick={ () => toggle( 'summary' ) }
+							isActive={ open === 'summary' }
+						/>
 						<IconButton
 							icon="list-view"
 							variant="view"
@@ -4271,6 +4398,9 @@ function OperationRow( { op, onChanged, offline = false } ) {
 					<td colSpan="6">
 						{ open === 'note' && (
 							<p className="catalogops-op-note">{ op.note }</p>
+						) }
+						{ open === 'summary' && (
+							<OperationSummary id={ op.id } />
 						) }
 						{ open === 'changes' && <ChangesTable id={ op.id } /> }
 						{ open === 'resume' && (

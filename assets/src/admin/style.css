@@ -2263,3 +2263,55 @@ on screen whichever buttons happen to follow it on a given row.
 	right: 0;
 	transform: none;
 }
+
+/* --- What a run did ----------------------------------------------------- */
+
+/*
+The panel that answers "what was this run". Two halves, because a bulk edit is
+two decisions — which objects, and what to do to them — and the history had
+neither. Side by side on a wide screen and stacked on a narrow one: they are read
+together, and a filter with six conditions beside an action with one should not
+leave half the panel empty.
+*/
+.catalogops-summary {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 16px 32px;
+	padding: 4px 0;
+}
+
+@media ( min-width: 900px ) {
+	.catalogops-summary {
+		grid-template-columns: 2fr 1fr;
+	}
+}
+
+.catalogops-summary__part h4 {
+	margin: 0 0 6px;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1.4;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--co-ink);
+}
+
+.catalogops-summary__part ul {
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.catalogops-summary__part li {
+	margin: 0 0 3px;
+	padding-left: 10px;
+	border-left: 2px solid var(--co-border);
+	line-height: 1.5;
+}
+
+/* Spans both columns: it qualifies the whole panel, not the filter half. */
+.catalogops-summary__note {
+	grid-column: 1 / -1;
+	margin: 0;
+	font-style: italic;
+}
