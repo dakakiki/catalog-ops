@@ -30,6 +30,7 @@ import {
 	defaultModuleOperator,
 	emptyForm,
 	groupModuleFields,
+	moduleConditions,
 	moduleOperators,
 	NO_TAG,
 	NO_VALUE,
@@ -1212,6 +1213,122 @@ function ModuleField( { field, row, onChange } ) {
 						onChange={ ( e ) => set( { value: e.target.value } ) }
 					/>
 				) ) }
+		</div>
+	);
+}
+
+/**
+ * One module's fields, under a heading that folds them away.
+ *
+ * A shop with a dozen ACF fields pushes the built-in controls — price, stock,
+ * category, the ones used on most days — off the top of the filter. Folding the
+ * section is what gives that space back, and the heading is the natural place to
+ * click because it is already the thing that says where these fields come from.
+ *
+ * **A closed section still says how many of its fields are filled in.** The rest
+ * of this filter is built on the rule that a condition the user cannot see is one
+ * they cannot remove — it is why an unlicensed field renders disabled rather than
+ * hidden. Folding hides conditions, so the count is what keeps that promise: the
+ * filter never silently narrows behind a closed panel. It is counted with
+ * `moduleConditions`, the same function that builds the payload, so the number is
+ * what would actually be sent rather than a second opinion about it.
+ *
+ * The open state is per session, not stored. Nothing else in this app persists UI
+ * state, and a filter that remembered a fold from last week would hide conditions
+ * on a screen the user had not touched yet.
+ *
+ * @param {Object}   props         Component props.
+ * @param {Object}   props.group   A group from `groupModuleFields`.
+ * @param {string}   props.scope   'product' or 'variation'.
+ * @param {Object}   props.form    The filter form.
+ * @param {Function} props.setForm Setter for the form.
+ */
+function ModuleGroup( { group, scope, form, setForm } ) {
+	// Closed to begin with: the point of the fold is the space it gives back to
+	// price, stock and category, and a section that opens expanded gives none of
+	// it until someone clicks. Nothing is hidden by this — a fresh form has no
+	// module conditions, and the moment one exists the heading counts it.
+	const [ open, setOpen ] = useState( false );
+
+	// Whether the fields have ever been on screen. Once they have, they stay
+	// mounted and CSS hides them, because `ModuleField` fetches its own options
+	// when it mounts: unmounting on every fold threw those away, so reopening the
+	// section put every set control back to "loading" and the values already
+	// chosen had nothing to render themselves against. The choices were never
+	// lost — they live in the form, not in the control — but a picker that goes
+	// blank and fills in a moment later is indistinguishable from one that
+	// forgot, and the user has no way to tell which happened.
+	//
+	// Not simply always-mounted: the section starts closed, and mounting it then
+	// would fire an options request for every set field on a panel nobody has
+	// opened. First open pays for the fetch, every fold after it is free.
+	const [ everOpened, setEverOpened ] = useState( false );
+
+	const toggle = () => {
+		if ( ! open ) {
+			setEverOpened( true );
+		}
+
+		setOpen( ! open );
+	};
+
+	const active = moduleConditions( form.modules, group.fields, scope ).length;
+
+	return (
+		<div
+			className={ `catalogops-module-group${ open ? '' : ' is-closed' }` }
+		>
+			<button
+				type="button"
+				className="catalogops-module-heading"
+				aria-expanded={ open }
+				onClick={ toggle }
+			>
+				<span className="catalogops-module-heading__text">
+					{ group.label || __( 'More fields', 'catalogops' ) }
+				</span>
+
+				{ ! open && active > 0 && (
+					<span className="catalogops-module-count">
+						{ sprintf(
+							/* translators: %d: how many of this section's fields are filtering. */
+							_n(
+								'%d filter selected',
+								'%d filters selected',
+								active,
+								'catalogops'
+							),
+							active
+						) }
+					</span>
+				) }
+
+				<span
+					className="catalogops-module-chevron"
+					aria-hidden="true"
+				/>
+			</button>
+
+			{ everOpened && (
+				<div className="catalogops-filter-row">
+					{ group.fields.map( ( f ) => (
+						<ModuleField
+							key={ f.key }
+							field={ f }
+							row={ form.modules[ f.key ] }
+							onChange={ ( next ) =>
+								setForm( {
+									...form,
+									modules: {
+										...form.modules,
+										[ f.key ]: next,
+									},
+								} )
+							}
+						/>
+					) ) }
+				</div>
+			) }
 		</div>
 	);
 }
@@ -5830,39 +5947,13 @@ function App() {
 								     condition is a control that lies. */ }
 								{ groupModuleFields( moduleFields, scope ).map(
 									( group ) => (
-										<div
-											className="catalogops-module-group"
+										<ModuleGroup
 											key={ group.module }
-										>
-											{ group.label && (
-												<div className="catalogops-module-heading">
-													{ group.label }
-												</div>
-											) }
-											<div className="catalogops-filter-row">
-												{ group.fields.map( ( f ) => (
-													<ModuleField
-														key={ f.key }
-														field={ f }
-														row={
-															form.modules[
-																f.key
-															]
-														}
-														onChange={ ( next ) =>
-															setForm( {
-																...form,
-																modules: {
-																	...form.modules,
-																	[ f.key ]:
-																		next,
-																},
-															} )
-														}
-													/>
-												) ) }
-											</div>
-										</div>
+											group={ group }
+											scope={ scope }
+											form={ form }
+											setForm={ setForm }
+										/>
 									)
 								) }
 
