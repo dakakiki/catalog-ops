@@ -251,6 +251,25 @@ export function defaultModuleOperator( field ) {
 }
 
 /**
+ * A row's raw value, converted to what the field's column holds.
+ *
+ * Only a date control has anything to convert; everything else is already in the
+ * shape the column stores.
+ *
+ * @param {Object}  field    The descriptor.
+ * @param {*}       value    Whatever the control is holding.
+ * @param {boolean} endOfDay Whether this is a range's upper bound.
+ * @return {*} The value to send on.
+ */
+function asStored( field, value, endOfDay ) {
+	if ( 'date' !== field.control || ! field.value_format ) {
+		return value;
+	}
+
+	return dateForStorage( value, field.value_format, endOfDay );
+}
+
+/**
  * The conditions a module's fields contribute.
  *
  * Kept out of buildFilter's body so the rule that governs them is readable on
@@ -304,8 +323,14 @@ export function moduleConditions( modules, fields, scope ) {
 		}
 
 		if ( operatorTakesRange( operator ) ) {
-			const from = moduleValue( field.control, row.value );
-			const to = moduleValue( field.control, row.to );
+			const from = moduleValue(
+				field.control,
+				asStored( field, row.value, false )
+			);
+			const to = moduleValue(
+				field.control,
+				asStored( field, row.to, true )
+			);
 
 			// Both ends or nothing. Half a range is not a narrower range, it is a
 			// different question — and BETWEEN with one bound missing is a
@@ -323,7 +348,10 @@ export function moduleConditions( modules, fields, scope ) {
 			return;
 		}
 
-		const value = moduleValue( field.control, row.value );
+		const value = moduleValue(
+			field.control,
+			asStored( field, row.value, false )
+		);
 
 		if ( undefined === value ) {
 			return;
@@ -495,4 +523,49 @@ export function groupModuleFields( fields, scope ) {
 	} );
 
 	return groups;
+}
+
+/**
+ * Turn what a date input gives us into what the column actually holds.
+ *
+ * A browser's `<input type="date">` produces `YYYY-MM-DD` and will produce
+ * nothing else — that is the whole point of using it, because a free text box
+ * lets someone type `8.7.2024.` and get a filter that reads correctly and matches
+ * nothing. ACF stores `20240708` for a date picker and `2024-07-08 00:00:00` for
+ * a date-and-time picker, so the two never meet without this.
+ *
+ * The upper bound of a range is pushed to the end of the day when the stored
+ * format carries a time. `between 2024-01-01 and 2024-12-31` on a
+ * `Y-m-d H:i:s` column would otherwise stop at midnight and silently drop
+ * everything recorded during the last day — which reads as an off-by-one nobody
+ * can see, because the answer is plausible.
+ *
+ * An unknown format is returned untouched rather than guessed at: a provider
+ * that declares a format this does not know is better served sending the raw
+ * text, which its own column may well match, than a value invented here.
+ *
+ * @param {string}  value    `YYYY-MM-DD` from the date input.
+ * @param {string}  format   The PHP date format the descriptor declares.
+ * @param {boolean} endOfDay Whether this is the upper bound of a range.
+ * @return {string} The value to send.
+ */
+export function dateForStorage( value, format, endOfDay = false ) {
+	const iso = 'string' === typeof value ? value.trim() : '';
+
+	if ( '' === iso || ! /^\d{4}-\d{2}-\d{2}$/.test( iso ) ) {
+		// Not a date the input produced — an empty box, or a value typed before
+		// this field became a date control. Hand it back and let the ordinary
+		// empty-value rule drop it.
+		return value;
+	}
+
+	if ( 'Ymd' === format ) {
+		return iso.replace( /-/g, '' );
+	}
+
+	if ( 'Y-m-d H:i:s' === format ) {
+		return iso + ( endOfDay ? ' 23:59:59' : ' 00:00:00' );
+	}
+
+	return iso;
 }

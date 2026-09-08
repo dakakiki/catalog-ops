@@ -1120,8 +1120,13 @@ function ModuleField( { field, row, onChange } ) {
 
 	const operators = moduleOperators( field );
 	const operator = mode || defaultModuleOperator( field );
-	const numeric = 'number' === field.control || 'money' === field.control;
-	const inputType = numeric ? 'number' : 'text';
+
+	// A date field gets a date input, not a text box. The descriptor says the
+	// value is a date; a text box invites `8.7.2024.` against a column holding
+	// `20240708`, which is a filter that reads correctly and matches nothing —
+	// and nothing is exactly what an over-narrow filter looks like. `filter.js`
+	// converts what this produces into the format the column actually holds.
+	const inputType = INPUT_TYPES[ field.control ] || 'text';
 
 	return (
 		<div className="catalogops-field">
@@ -1188,6 +1193,21 @@ function ModuleField( { field, row, onChange } ) {
 		</div>
 	);
 }
+
+/**
+ * The HTML input a control needs. Anything unlisted is a text box.
+ *
+ * `date` is the one that matters. The descriptor says the value is a date, and a
+ * text box would invite `8.7.2024.` against a column holding `20240708` — a
+ * filter that reads correctly and matches nothing, which is indistinguishable
+ * from an over-narrow filter. A date input can only produce `YYYY-MM-DD`, and
+ * `filter.js` turns that into whatever the column actually keeps.
+ */
+const INPUT_TYPES = {
+	number: 'number',
+	money: 'number',
+	date: 'date',
+};
 
 /**
  * How to say an operator token in the filter's own voice.

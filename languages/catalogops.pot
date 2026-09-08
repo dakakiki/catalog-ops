@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-08T12:53:38+00:00\n"
+"POT-Creation-Date: 2026-09-08T13:11:35+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: catalogops\n"
@@ -185,7 +185,7 @@ msgid "Skipped:"
 msgstr ""
 
 #: src/Operations/Notifier.php:787
-#: assets/src/admin/index.js:1348
+#: assets/src/admin/index.js:1368
 msgid "no reason recorded"
 msgstr ""
 
@@ -217,7 +217,7 @@ msgid "the new value would be a negative price"
 msgstr ""
 
 #: src/Operations/Skip_Reason.php:106
-#: assets/src/admin/index.js:1332
+#: assets/src/admin/index.js:1352
 msgid "the value was already set"
 msgstr ""
 
@@ -230,7 +230,7 @@ msgid "the object changed after the operation ran"
 msgstr ""
 
 #: src/Operations/Skip_Reason.php:109
-#: assets/src/admin/index.js:1338
+#: assets/src/admin/index.js:1358
 msgid "there is no recorded value to restore"
 msgstr ""
 
@@ -261,7 +261,7 @@ msgstr ""
 
 #: assets/src/admin/index.js:276
 #: assets/src/admin/index.js:317
-#: assets/src/admin/index.js:5951
+#: assets/src/admin/index.js:5971
 msgid "Sale price"
 msgstr ""
 
@@ -436,20 +436,20 @@ msgid "is — %s: click to exclude instead of include"
 msgstr ""
 
 #: assets/src/admin/index.js:856
-#: assets/src/admin/index.js:1212
+#: assets/src/admin/index.js:1232
 msgid "is not"
 msgstr ""
 
 #: assets/src/admin/index.js:857
-#: assets/src/admin/index.js:1210
+#: assets/src/admin/index.js:1230
 msgid "is"
 msgstr ""
 
 #: assets/src/admin/index.js:881
 #: assets/src/admin/index.js:1085
 #: assets/src/admin/index.js:1113
-#: assets/src/admin/index.js:5649
-#: assets/src/admin/index.js:5717
+#: assets/src/admin/index.js:5669
+#: assets/src/admin/index.js:5737
 msgid "Any"
 msgstr ""
 
@@ -501,104 +501,104 @@ msgid "No"
 msgstr ""
 
 #. translators: %s: the filter field's name, e.g. "Cost price".
-#: assets/src/admin/index.js:1143
+#: assets/src/admin/index.js:1148
 #, js-format
 msgid "How to match %s"
 msgstr ""
 
-#: assets/src/admin/index.js:1166
-#: assets/src/admin/index.js:1167
+#: assets/src/admin/index.js:1171
+#: assets/src/admin/index.js:1172
 msgid "From"
 msgstr ""
 
-#: assets/src/admin/index.js:1175
-#: assets/src/admin/index.js:1176
-#: assets/src/admin/index.js:2293
+#: assets/src/admin/index.js:1180
+#: assets/src/admin/index.js:1181
+#: assets/src/admin/index.js:2313
 msgid "To"
 msgstr ""
 
-#: assets/src/admin/index.js:1214
+#: assets/src/admin/index.js:1234
 msgid "contains"
 msgstr ""
 
-#: assets/src/admin/index.js:1216
+#: assets/src/admin/index.js:1236
 msgid "is any of"
 msgstr ""
 
-#: assets/src/admin/index.js:1218
+#: assets/src/admin/index.js:1238
 msgid "is none of"
 msgstr ""
 
-#: assets/src/admin/index.js:1220
+#: assets/src/admin/index.js:1240
 msgid "is more than"
 msgstr ""
 
-#: assets/src/admin/index.js:1222
+#: assets/src/admin/index.js:1242
 msgid "is at least"
 msgstr ""
 
-#: assets/src/admin/index.js:1224
+#: assets/src/admin/index.js:1244
 msgid "is less than"
 msgstr ""
 
-#: assets/src/admin/index.js:1226
+#: assets/src/admin/index.js:1246
 msgid "is at most"
 msgstr ""
 
-#: assets/src/admin/index.js:1228
+#: assets/src/admin/index.js:1248
 msgid "is between"
 msgstr ""
 
-#: assets/src/admin/index.js:1230
+#: assets/src/admin/index.js:1250
 msgid "has any value"
 msgstr ""
 
-#: assets/src/admin/index.js:1232
+#: assets/src/admin/index.js:1252
 msgid "has no value"
 msgstr ""
 
-#: assets/src/admin/index.js:1316
+#: assets/src/admin/index.js:1336
 msgid "a field the change reads is empty or non-numeric, so no value could be worked out (never set to 0)"
 msgstr ""
 
-#: assets/src/admin/index.js:1320
+#: assets/src/admin/index.js:1340
 msgid "the sale price you are setting is not below their regular price — WooCommerce only keeps a sale price lower than the regular price, so it would refuse this one and clear whatever sale price is already there"
 msgstr ""
 
-#: assets/src/admin/index.js:1324
+#: assets/src/admin/index.js:1344
 msgid "stock is managed here, so WooCommerce sets the status from the quantity and backorder setting instead"
 msgstr ""
 
-#: assets/src/admin/index.js:1328
+#: assets/src/admin/index.js:1348
 msgid "the new price would come out negative, so their price is left as it is — subtracting a fixed amount does this to items cheaper than that amount"
 msgstr ""
 
-#: assets/src/admin/index.js:1333
+#: assets/src/admin/index.js:1353
 msgid "WooCommerce did not keep the value — another plugin may be overriding it"
 msgstr ""
 
-#: assets/src/admin/index.js:1337
+#: assets/src/admin/index.js:1357
 msgid "the item changed after the operation ran"
 msgstr ""
 
-#: assets/src/admin/index.js:1359
+#: assets/src/admin/index.js:1379
 msgid "no value to read"
 msgstr ""
 
-#: assets/src/admin/index.js:1360
+#: assets/src/admin/index.js:1380
 msgid "would be negative"
 msgstr ""
 
-#: assets/src/admin/index.js:1361
+#: assets/src/admin/index.js:1381
 msgid "not below regular"
 msgstr ""
 
-#: assets/src/admin/index.js:1362
+#: assets/src/admin/index.js:1382
 msgid "stock is managed"
 msgstr ""
 
 #. translators: %d: number of omitted products that already have a sale price.
-#: assets/src/admin/index.js:1408
+#: assets/src/admin/index.js:1428
 #, js-format
 msgid "%d of the products left out already has a sale price. WooCommerce would have deleted it — a sale price is only kept while it is below the regular price — so it was left out instead."
 msgid_plural "%d of the products left out already have a sale price. WooCommerce would have deleted them — a sale price is only kept while it is below the regular price — so they were left out instead."
@@ -606,7 +606,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %d: number of products whose sale price would be deleted.
-#: assets/src/admin/index.js:1421
+#: assets/src/admin/index.js:1441
 #, js-format
 msgid "%d matching product has a sale price at or above the new regular price. WooCommerce only keeps a sale price below the regular price, so applying this will delete that sale price — and the deletion is not recorded, so Undo cannot bring it back."
 msgid_plural "%d matching products have a sale price at or above the new regular price. WooCommerce only keeps a sale price below the regular price, so applying this will delete those sale prices — and the deletion is not recorded, so Undo cannot bring them back."
@@ -614,1035 +614,1035 @@ msgstr[0] ""
 msgstr[1] ""
 
 #. translators: %d: number of items that could not be changed.
-#: assets/src/admin/index.js:1511
+#: assets/src/admin/index.js:1531
 #, js-format
 msgid "%d item could not be changed."
 msgid_plural "%d items could not be changed."
 msgstr[0] ""
 msgstr[1] ""
 
-#: assets/src/admin/index.js:1523
+#: assets/src/admin/index.js:1543
 msgid "Not changed:"
 msgstr ""
 
 #. translators: %d: number of items queued.
-#: assets/src/admin/index.js:1545
+#: assets/src/admin/index.js:1565
 #, js-format
 msgid "Queued — waiting for the background runner to start on %d items…"
 msgstr ""
 
 #. translators: %d: number of items in the operation.
-#: assets/src/admin/index.js:1557
+#: assets/src/admin/index.js:1577
 #, js-format
 msgid "Started — working through %d items…"
 msgstr ""
 
 #. translators: 1: status, 2: processed, 3: target.
-#: assets/src/admin/index.js:1568
+#: assets/src/admin/index.js:1588
 #, js-format
 msgid "Operation %1$s — %2$d / %3$d"
 msgstr ""
 
 #. translators: %d: number of failed objects.
-#: assets/src/admin/index.js:1577
-#: assets/src/admin/index.js:3782
+#: assets/src/admin/index.js:1597
+#: assets/src/admin/index.js:3802
 #, js-format
 msgid "(%d failed)"
 msgstr ""
 
-#: assets/src/admin/index.js:1591
+#: assets/src/admin/index.js:1611
 msgid "Still waiting. The background queue was asked to start; if it has not picked this up yet, it will on the next request to the site — leaving this page open is enough. Nothing is lost either way: the operation is saved and will run."
 msgstr ""
 
-#: assets/src/admin/index.js:1785
-#: assets/src/admin/index.js:5360
+#: assets/src/admin/index.js:1805
+#: assets/src/admin/index.js:5380
 msgid "Request failed."
 msgstr ""
 
-#: assets/src/admin/index.js:1890
+#: assets/src/admin/index.js:1910
 msgid "Schedule created."
 msgstr ""
 
 #. translators: %s: the sale price the user typed.
-#: assets/src/admin/index.js:1946
+#: assets/src/admin/index.js:1966
 #, js-format
 msgid "You are setting the sale price to %s. WooCommerce keeps it only on products whose regular price is higher than that — so a lower value will reach more of them."
 msgstr ""
 
 #. translators: %s: the SKU searched for.
-#: assets/src/admin/index.js:1980
+#: assets/src/admin/index.js:2000
 #, js-format
 msgid "Matching “%s”."
 msgstr ""
 
 #. translators: 1: rows shown, 2: total that will change.
-#: assets/src/admin/index.js:1985
+#: assets/src/admin/index.js:2005
 #, js-format
 msgid "A sample: %1$d of the %2$d that will change. Search by SKU to check a particular one."
 msgstr ""
 
-#: assets/src/admin/index.js:2000
+#: assets/src/admin/index.js:2020
 msgid "No products match this filter."
 msgstr ""
 
 #. translators: %d: number of matched products.
-#: assets/src/admin/index.js:2009
+#: assets/src/admin/index.js:2029
 #, js-format
 msgid "Preview: none of the %d matching products will change. Nothing will be written when you Apply."
 msgstr ""
 
-#: assets/src/admin/index.js:2021
+#: assets/src/admin/index.js:2041
 msgid "Tip: variable products keep their price, sale price, and cost on their variations, not on the parent — so a change to the parent is omitted. Use the Products / Variations toggle above the results to switch to Variations and edit those."
 msgstr ""
 
 #. translators: 1: matched products, 2: products that will change, 3: products that will not.
-#: assets/src/admin/index.js:2034
+#: assets/src/admin/index.js:2054
 #, js-format
 msgid "Preview: %1$d matched · %2$d will change · %3$d will not."
 msgstr ""
 
 #. translators: %d: number of products that will be updated.
-#: assets/src/admin/index.js:2050
+#: assets/src/admin/index.js:2070
 #, js-format
 msgid "Only the %d that will change go into the operation, so its progress, history, and undo all match this number."
 msgstr ""
 
-#: assets/src/admin/index.js:2080
-#: assets/src/admin/index.js:3054
-#: assets/src/admin/index.js:3399
-#: assets/src/admin/index.js:5875
+#: assets/src/admin/index.js:2100
+#: assets/src/admin/index.js:3074
+#: assets/src/admin/index.js:3419
+#: assets/src/admin/index.js:5895
 msgid "SKU, e.g. COPS-1234"
 msgstr ""
 
-#: assets/src/admin/index.js:2084
+#: assets/src/admin/index.js:2104
 msgid "Show one SKU in the preview"
 msgstr ""
 
-#: assets/src/admin/index.js:2104
-#: assets/src/admin/index.js:3070
-#: assets/src/admin/index.js:3415
-#: assets/src/admin/index.js:5891
+#: assets/src/admin/index.js:2124
+#: assets/src/admin/index.js:3090
+#: assets/src/admin/index.js:3435
+#: assets/src/admin/index.js:5911
 msgid "Search"
 msgstr ""
 
-#: assets/src/admin/index.js:2121
-#: assets/src/admin/index.js:3105
-#: assets/src/admin/index.js:3423
-#: assets/src/admin/index.js:5939
+#: assets/src/admin/index.js:2141
+#: assets/src/admin/index.js:3125
+#: assets/src/admin/index.js:3443
+#: assets/src/admin/index.js:5959
 msgid "SKU"
 msgstr ""
 
-#: assets/src/admin/index.js:2122
-#: assets/src/admin/index.js:2782
-#: assets/src/admin/index.js:5115
-#: assets/src/admin/index.js:5940
+#: assets/src/admin/index.js:2142
+#: assets/src/admin/index.js:2802
+#: assets/src/admin/index.js:5135
+#: assets/src/admin/index.js:5960
 msgid "Name"
 msgstr ""
 
-#: assets/src/admin/index.js:2123
-#: assets/src/admin/index.js:2271
-#: assets/src/admin/index.js:3107
-#: assets/src/admin/index.js:3424
+#: assets/src/admin/index.js:2143
+#: assets/src/admin/index.js:2291
+#: assets/src/admin/index.js:3127
+#: assets/src/admin/index.js:3444
 msgid "Field"
 msgstr ""
 
-#: assets/src/admin/index.js:2125
-#: assets/src/admin/index.js:2696
-#: assets/src/admin/index.js:3425
+#: assets/src/admin/index.js:2145
+#: assets/src/admin/index.js:2716
+#: assets/src/admin/index.js:3445
 msgid "Now"
 msgstr ""
 
-#: assets/src/admin/index.js:2128
+#: assets/src/admin/index.js:2148
 msgid "After"
 msgstr ""
 
 #. translators: %s: the SKU searched for.
-#: assets/src/admin/index.js:2171
+#: assets/src/admin/index.js:2191
 #, js-format
 msgid "Nothing matching “%s” is in this change."
 msgstr ""
 
-#: assets/src/admin/index.js:2184
+#: assets/src/admin/index.js:2204
 msgid "Bulk edit"
 msgstr ""
 
-#: assets/src/admin/index.js:2186
+#: assets/src/admin/index.js:2206
 msgid "Change a field for every item in the filter above. Preview shows what it would do; nothing is written until you commit. Then choose when it runs — now, or on a schedule."
 msgstr ""
 
-#: assets/src/admin/index.js:2195
+#: assets/src/admin/index.js:2215
 msgid "Change"
 msgstr ""
 
-#: assets/src/admin/index.js:2207
+#: assets/src/admin/index.js:2227
 msgid "Set to"
 msgstr ""
 
-#: assets/src/admin/index.js:2219
+#: assets/src/admin/index.js:2239
 msgid "Amount"
 msgstr ""
 
-#: assets/src/admin/index.js:2231
-#: assets/src/admin/index.js:2249
-#: assets/src/admin/index.js:2708
+#: assets/src/admin/index.js:2251
+#: assets/src/admin/index.js:2269
+#: assets/src/admin/index.js:2728
 msgid "Available on a paid plan"
 msgstr ""
 
-#: assets/src/admin/index.js:2237
+#: assets/src/admin/index.js:2257
 msgid "Percent"
 msgstr ""
 
-#: assets/src/admin/index.js:2255
-#: assets/src/admin/index.js:2476
+#: assets/src/admin/index.js:2275
+#: assets/src/admin/index.js:2496
 msgid "Formula"
 msgstr ""
 
-#: assets/src/admin/index.js:2260
+#: assets/src/admin/index.js:2280
 msgid "Percent and formula edits are available on a paid plan. Free plans can set a fixed value."
 msgstr ""
 
-#: assets/src/admin/index.js:2305
+#: assets/src/admin/index.js:2325
 msgid "Choose…"
 msgstr ""
 
-#: assets/src/admin/index.js:2311
-#: assets/src/admin/index.js:5720
+#: assets/src/admin/index.js:2331
+#: assets/src/admin/index.js:5740
 msgid "In stock"
 msgstr ""
 
-#: assets/src/admin/index.js:2317
-#: assets/src/admin/index.js:5726
+#: assets/src/admin/index.js:2337
+#: assets/src/admin/index.js:5746
 msgid "Out of stock"
 msgstr ""
 
-#: assets/src/admin/index.js:2323
+#: assets/src/admin/index.js:2343
 msgid "On backorder"
 msgstr ""
 
-#: assets/src/admin/index.js:2363
+#: assets/src/admin/index.js:2383
 msgid "Direction"
 msgstr ""
 
-#: assets/src/admin/index.js:2387
+#: assets/src/admin/index.js:2407
 msgid "Increase"
 msgstr ""
 
-#: assets/src/admin/index.js:2401
+#: assets/src/admin/index.js:2421
 msgid "Decrease"
 msgstr ""
 
 #. translators: %s: the shop's currency symbol.
-#: assets/src/admin/index.js:2413
+#: assets/src/admin/index.js:2433
 #, js-format
 msgid "By (%s)"
 msgstr ""
 
-#: assets/src/admin/index.js:2419
+#: assets/src/admin/index.js:2439
 msgid "By (amount)"
 msgstr ""
 
-#: assets/src/admin/index.js:2446
+#: assets/src/admin/index.js:2466
 msgid "By (%)"
 msgstr ""
 
-#: assets/src/admin/index.js:2491
+#: assets/src/admin/index.js:2511
 msgid "Write a math expression. It is calculated for each product and becomes the new value of the field above."
 msgstr ""
 
-#: assets/src/admin/index.js:2499
+#: assets/src/admin/index.js:2519
 msgid "Values"
 msgstr ""
 
-#: assets/src/admin/index.js:2511
+#: assets/src/admin/index.js:2531
 msgid "Math"
 msgstr ""
 
-#: assets/src/admin/index.js:2521
+#: assets/src/admin/index.js:2541
 msgid "Functions"
 msgstr ""
 
-#: assets/src/admin/index.js:2539
+#: assets/src/admin/index.js:2559
 msgid "“cost” is your product cost (cost of goods). It needs a cost field — the _catalogops_cost meta, or a cost plugin mapped to it. Products with no cost are skipped."
 msgstr ""
 
-#: assets/src/admin/index.js:2546
+#: assets/src/admin/index.js:2566
 msgid "Examples"
 msgstr ""
 
-#: assets/src/admin/index.js:2557
+#: assets/src/admin/index.js:2577
 msgid "raise the price by 20%"
 msgstr ""
 
-#: assets/src/admin/index.js:2567
+#: assets/src/admin/index.js:2587
 msgid "35% markup on cost, rounded to end in .99"
 msgstr ""
 
-#: assets/src/admin/index.js:2578
+#: assets/src/admin/index.js:2598
 msgid "20% off, but never below cost + 10%"
 msgstr ""
 
-#: assets/src/admin/index.js:2585
+#: assets/src/admin/index.js:2605
 msgid "Empty or non-numeric fields are skipped — never set to 0."
 msgstr ""
 
 #. translators: %d: the largest decrease allowed, 100.
-#: assets/src/admin/index.js:2606
+#: assets/src/admin/index.js:2626
 #, js-format
 msgid "A decrease cannot go past %d%% — beyond that the price would come out negative."
 msgstr ""
 
 #. translators: %s: the generated formula.
-#: assets/src/admin/index.js:2630
+#: assets/src/admin/index.js:2650
 #, js-format
 msgid "Applies: %s"
 msgstr ""
 
-#: assets/src/admin/index.js:2646
+#: assets/src/admin/index.js:2666
 msgid "Preview"
 msgstr ""
 
-#: assets/src/admin/index.js:2657
-#: assets/src/admin/index.js:2764
-#: assets/src/admin/index.js:2926
+#: assets/src/admin/index.js:2677
+#: assets/src/admin/index.js:2784
+#: assets/src/admin/index.js:2946
 msgid "Working…"
 msgstr ""
 
-#: assets/src/admin/index.js:2680
+#: assets/src/admin/index.js:2700
 msgid "When"
 msgstr ""
 
-#: assets/src/admin/index.js:2714
+#: assets/src/admin/index.js:2734
 msgid "On a schedule"
 msgstr ""
 
-#: assets/src/admin/index.js:2719
+#: assets/src/admin/index.js:2739
 msgid "Schedule changes to run later or on a recurring basis with a paid plan."
 msgstr ""
 
 #. translators: %d: the number of days a change stays reversible.
-#: assets/src/admin/index.js:2733
+#: assets/src/admin/index.js:2753
 #, js-format
 msgid "The change is written as soon as you confirm. It works through the catalog in the background, so you can leave this page — and the whole run can be undone from History for %d days."
 msgstr ""
 
-#: assets/src/admin/index.js:2753
+#: assets/src/admin/index.js:2773
 msgid "Apply"
 msgstr ""
 
-#: assets/src/admin/index.js:2798
-#: assets/src/admin/index.js:5116
+#: assets/src/admin/index.js:2818
+#: assets/src/admin/index.js:5136
 msgid "Repeat"
 msgstr ""
 
-#: assets/src/admin/index.js:2817
+#: assets/src/admin/index.js:2837
 msgid "The filter is re-checked each run, so a repeating schedule keeps applying to new or changed products that match — not just today’s. Use “Once” for a one-time change."
 msgstr ""
 
-#: assets/src/admin/index.js:2825
+#: assets/src/admin/index.js:2845
 msgid "Start"
 msgstr ""
 
-#: assets/src/admin/index.js:2836
+#: assets/src/admin/index.js:2856
 msgid "Leave empty to start at the next run."
 msgstr ""
 
-#: assets/src/admin/index.js:2847
+#: assets/src/admin/index.js:2867
 msgid "Send notification to"
 msgstr ""
 
-#: assets/src/admin/index.js:2855
+#: assets/src/admin/index.js:2875
 msgid "site admin"
 msgstr ""
 
 #. translators: 1: matched products, 2: products that will change, 3: products that will not.
-#: assets/src/admin/index.js:2875
+#: assets/src/admin/index.js:2895
 #, js-format
 msgid "As of now: %1$d matched · %2$d would change · %3$d would not."
 msgstr ""
 
-#: assets/src/admin/index.js:2892
+#: assets/src/admin/index.js:2912
 msgid "Run Preview first to see how many items this would change, and why the rest would not."
 msgstr ""
 
-#: assets/src/admin/index.js:2899
+#: assets/src/admin/index.js:2919
 msgid "A schedule re-checks the catalog every time it runs, so these numbers can differ when it fires — the same rules decide, against the catalog as it is then."
 msgstr ""
 
-#: assets/src/admin/index.js:2912
+#: assets/src/admin/index.js:2932
 msgid "Create schedule"
 msgstr ""
 
-#: assets/src/admin/index.js:2946
+#: assets/src/admin/index.js:2966
 msgid "Apply this change to every matching item?"
 msgstr ""
 
-#: assets/src/admin/index.js:2967
+#: assets/src/admin/index.js:2987
 msgid "Apply now"
 msgstr ""
 
-#: assets/src/admin/index.js:2974
-#: assets/src/admin/index.js:3589
-#: assets/src/admin/index.js:4121
-#: assets/src/admin/index.js:4914
+#: assets/src/admin/index.js:2994
+#: assets/src/admin/index.js:3609
+#: assets/src/admin/index.js:4141
+#: assets/src/admin/index.js:4934
 msgid "Cancel"
 msgstr ""
 
-#: assets/src/admin/index.js:3030
-#: assets/src/admin/index.js:3077
-#: assets/src/admin/index.js:3350
-#: assets/src/admin/index.js:5852
+#: assets/src/admin/index.js:3050
+#: assets/src/admin/index.js:3097
+#: assets/src/admin/index.js:3370
+#: assets/src/admin/index.js:5872
 msgid "Loading…"
 msgstr ""
 
-#: assets/src/admin/index.js:3058
-#: assets/src/admin/index.js:3403
-#: assets/src/admin/index.js:5879
+#: assets/src/admin/index.js:3078
+#: assets/src/admin/index.js:3423
+#: assets/src/admin/index.js:5899
 msgid "Find by SKU"
 msgstr ""
 
 #. translators: %d: number of items left unchanged.
-#: assets/src/admin/index.js:3086
+#: assets/src/admin/index.js:3106
 #, js-format
 msgid "%d of this run’s items were not changed:"
 msgstr ""
 
-#: assets/src/admin/index.js:3106
+#: assets/src/admin/index.js:3126
 msgid "Item"
 msgstr ""
 
-#: assets/src/admin/index.js:3108
+#: assets/src/admin/index.js:3128
 msgid "Old"
 msgstr ""
 
-#: assets/src/admin/index.js:3109
+#: assets/src/admin/index.js:3129
 msgid "New"
 msgstr ""
 
-#: assets/src/admin/index.js:3110
-#: assets/src/admin/index.js:4270
-#: assets/src/admin/index.js:5117
+#: assets/src/admin/index.js:3130
+#: assets/src/admin/index.js:4290
+#: assets/src/admin/index.js:5137
 msgid "Status"
 msgstr ""
 
-#: assets/src/admin/index.js:3111
+#: assets/src/admin/index.js:3131
 msgid "Why"
 msgstr ""
 
-#: assets/src/admin/index.js:3118
+#: assets/src/admin/index.js:3138
 msgid "No matching changes."
 msgstr ""
 
-#: assets/src/admin/index.js:3138
+#: assets/src/admin/index.js:3158
 msgid "variation"
 msgstr ""
 
-#: assets/src/admin/index.js:3297
+#: assets/src/admin/index.js:3317
 msgid "On conflict (drift):"
 msgstr ""
 
-#: assets/src/admin/index.js:3311
+#: assets/src/admin/index.js:3331
 msgid "Skip changed objects (safe)"
 msgstr ""
 
-#: assets/src/admin/index.js:3321
+#: assets/src/admin/index.js:3341
 msgid "Force — overwrite anyway"
 msgstr ""
 
-#: assets/src/admin/index.js:3329
+#: assets/src/admin/index.js:3349
 msgid "“Drift” means the item changed after this operation ran — by hand, an import, or another plugin: Skip leaves those items exactly as they are now, while Force restores the value from before the operation and discards the later change."
 msgstr ""
 
 #. translators: %d: number of recorded changes.
-#: assets/src/admin/index.js:3366
+#: assets/src/admin/index.js:3386
 #, js-format
 msgid "%d changes will be reverted."
 msgstr ""
 
 #. translators: 1: rows matching the search, 2: the SKU searched for.
-#: assets/src/admin/index.js:3376
+#: assets/src/admin/index.js:3396
 #, js-format
 msgid "Showing the %1$d matching “%2$s” — the undo still covers all of them."
 msgstr ""
 
 #. translators: %d: number of drifted objects on this page.
-#: assets/src/admin/index.js:3387
+#: assets/src/admin/index.js:3407
 #, js-format
 msgid "%d on this page changed since the operation."
 msgstr ""
 
-#: assets/src/admin/index.js:3426
+#: assets/src/admin/index.js:3446
 msgid "Restore to"
 msgstr ""
 
-#: assets/src/admin/index.js:3427
+#: assets/src/admin/index.js:3447
 msgid "Outcome"
 msgstr ""
 
-#: assets/src/admin/index.js:3435
+#: assets/src/admin/index.js:3455
 msgid "Nothing to revert."
 msgstr ""
 
-#: assets/src/admin/index.js:3439
+#: assets/src/admin/index.js:3459
 msgid "No item with that SKU was changed by this run."
 msgstr ""
 
-#: assets/src/admin/index.js:3470
+#: assets/src/admin/index.js:3490
 msgid "skip (drift)"
 msgstr ""
 
-#: assets/src/admin/index.js:3477
+#: assets/src/admin/index.js:3497
 msgid "revert"
 msgstr ""
 
-#: assets/src/admin/index.js:3510
-#: assets/src/admin/index.js:3582
+#: assets/src/admin/index.js:3530
+#: assets/src/admin/index.js:3602
 msgid "Run undo"
 msgstr ""
 
 #. translators: 1: operation id, 2: number of recorded changes.
-#: assets/src/admin/index.js:3519
+#: assets/src/admin/index.js:3539
 #, js-format
 msgid "Undo operation #%1$d — %2$d recorded changes?"
 msgstr ""
 
-#: assets/src/admin/index.js:3529
+#: assets/src/admin/index.js:3549
 msgid "Every item still holding the value this run gave it goes back to what it was before. Anything changed since is left exactly as it is now and reported as skipped."
 msgstr ""
 
-#: assets/src/admin/index.js:3533
+#: assets/src/admin/index.js:3553
 msgid "Every item goes back to what it was before this run — including those changed since, whose later value is discarded. This is the forcing option."
 msgstr ""
 
-#: assets/src/admin/index.js:3539
+#: assets/src/admin/index.js:3559
 msgid "It runs in the background and can be paused from the history while it works. Undoing cannot itself be undone."
 msgstr ""
 
 #. translators: %s: the schedule's name, or #id when it has none.
-#: assets/src/admin/index.js:3556
+#: assets/src/admin/index.js:3576
 #, js-format
 msgid "This run came from the schedule “%s”, which is still active. Undoing pauses it, so it cannot put the change back — resume it from Schedules whenever you want it running again."
 msgstr ""
 
-#: assets/src/admin/index.js:3600
-#: assets/src/admin/index.js:3955
+#: assets/src/admin/index.js:3620
+#: assets/src/admin/index.js:3975
 msgid "Starting…"
 msgstr ""
 
-#: assets/src/admin/index.js:3772
+#: assets/src/admin/index.js:3792
 msgid "Not responding"
 msgstr ""
 
-#: assets/src/admin/index.js:3794
+#: assets/src/admin/index.js:3814
 msgid "waiting to start"
 msgstr ""
 
-#: assets/src/admin/index.js:3810
+#: assets/src/admin/index.js:3830
 msgid "View changes"
 msgstr ""
 
-#: assets/src/admin/index.js:3818
+#: assets/src/admin/index.js:3838
 msgid "Undo this run"
 msgstr ""
 
-#: assets/src/admin/index.js:3829
+#: assets/src/admin/index.js:3849
 msgid "Stop this run"
 msgstr ""
 
-#: assets/src/admin/index.js:3830
+#: assets/src/admin/index.js:3850
 msgid "Pause this run"
 msgstr ""
 
-#: assets/src/admin/index.js:3845
+#: assets/src/admin/index.js:3865
 msgid "Resume this run"
 msgstr ""
 
-#: assets/src/admin/index.js:3858
+#: assets/src/admin/index.js:3878
 msgid "Pause the run before deleting it"
 msgstr ""
 
-#: assets/src/admin/index.js:3862
+#: assets/src/admin/index.js:3882
 msgid "Delete from history"
 msgstr ""
 
 #. translators: 1: how long it has been quiet, e.g. "12m 4s". 2: number of items still frozen and unwritten.
-#: assets/src/admin/index.js:3884
+#: assets/src/admin/index.js:3904
 #, js-format
 msgid "Nothing has written this for %1$s. It is picked up again automatically, and its schedule keeps running — or Stop it to take over, which keeps the %2$d frozen items for Resume to finish."
 msgstr ""
 
 #. translators: %s: how long it has been quiet, e.g. "1m 20s".
-#: assets/src/admin/index.js:3893
+#: assets/src/admin/index.js:3913
 #, js-format
 msgid "No progress for %s. A pause between chunks is normal; if the run has stopped, it is restarted automatically."
 msgstr ""
 
 #. translators: 1: operation id, 2: items still waiting.
-#: assets/src/admin/index.js:3912
+#: assets/src/admin/index.js:3932
 #, js-format
 msgid "Resume operation #%1$d — %2$d items still waiting?"
 msgstr ""
 
-#: assets/src/admin/index.js:3921
+#: assets/src/admin/index.js:3941
 msgid "It carries on down the list this run froze when it started, so it changes exactly what was approved then. Running the filter again instead would resolve it against the catalog as it is now, which may no longer be the same set of products."
 msgstr ""
 
-#: assets/src/admin/index.js:3937
-#: assets/src/admin/index.js:4778
+#: assets/src/admin/index.js:3957
+#: assets/src/admin/index.js:4798
 msgid "Resume"
 msgstr ""
 
-#: assets/src/admin/index.js:3944
+#: assets/src/admin/index.js:3964
 msgid "Leave it"
 msgstr ""
 
 #. translators: %d: operation id.
-#: assets/src/admin/index.js:3971
+#: assets/src/admin/index.js:3991
 #, js-format
 msgid "Stop operation #%d?"
 msgstr ""
 
 #. translators: %d: operation id.
-#: assets/src/admin/index.js:3979
+#: assets/src/admin/index.js:3999
 #, js-format
 msgid "Pause operation #%d?"
 msgstr ""
 
 #. translators: 1: objects already written, 2: objects targeted.
-#: assets/src/admin/index.js:3989
+#: assets/src/admin/index.js:4009
 #, js-format
 msgid "It stops at the end of the chunk it is writing now. The %1$d of %2$d items already changed stay changed — this is not the same as undoing — but once it has stopped you can undo it from this row."
 msgstr ""
 
-#: assets/src/admin/index.js:4006
+#: assets/src/admin/index.js:4026
 msgid "This run came from a schedule. That schedule is paused too, so it does not begin the same work again on its next tick — resume it from Schedules when you want it running."
 msgstr ""
 
-#: assets/src/admin/index.js:4014
+#: assets/src/admin/index.js:4034
 msgid "This run came from a schedule. The schedule keeps running on its usual hours — a run that stopped responding is a machine failure, not a change of mind, so nothing about the schedule is altered."
 msgstr ""
 
-#: assets/src/admin/index.js:4032
+#: assets/src/admin/index.js:4052
 msgid "Stop the run"
 msgstr ""
 
-#: assets/src/admin/index.js:4033
+#: assets/src/admin/index.js:4053
 msgid "Pause the run"
 msgstr ""
 
-#: assets/src/admin/index.js:4043
+#: assets/src/admin/index.js:4063
 msgid "Keep running"
 msgstr ""
 
-#: assets/src/admin/index.js:4055
+#: assets/src/admin/index.js:4075
 msgid "Stopping…"
 msgstr ""
 
-#: assets/src/admin/index.js:4059
+#: assets/src/admin/index.js:4079
 msgid "Pausing…"
 msgstr ""
 
 #. translators: %d: operation id.
-#: assets/src/admin/index.js:4082
+#: assets/src/admin/index.js:4102
 #, js-format
 msgid "Delete operation #%d from the history?"
 msgstr ""
 
-#: assets/src/admin/index.js:4091
+#: assets/src/admin/index.js:4111
 msgid "This removes the record of what it changed, so it can no longer be undone. The products themselves are left exactly as they are now. This cannot be reversed."
 msgstr ""
 
-#: assets/src/admin/index.js:4095
+#: assets/src/admin/index.js:4115
 msgid "This removes the record of what it changed. The products themselves are left exactly as they are now. This cannot be reversed."
 msgstr ""
 
-#: assets/src/admin/index.js:4111
-#: assets/src/admin/index.js:4907
+#: assets/src/admin/index.js:4131
+#: assets/src/admin/index.js:4927
 msgid "Delete permanently"
 msgstr ""
 
-#: assets/src/admin/index.js:4132
+#: assets/src/admin/index.js:4152
 msgid "Deleting…"
 msgstr ""
 
-#: assets/src/admin/index.js:4252
+#: assets/src/admin/index.js:4272
 msgid "Operation history"
 msgstr ""
 
-#: assets/src/admin/index.js:4254
+#: assets/src/admin/index.js:4274
 msgid "Every run is recorded here. Undo reverts a run; changed-since objects are skipped unless you force."
 msgstr ""
 
-#: assets/src/admin/index.js:4269
+#: assets/src/admin/index.js:4289
 msgid "Source"
 msgstr ""
 
-#: assets/src/admin/index.js:4271
+#: assets/src/admin/index.js:4291
 msgid "Progress"
 msgstr ""
 
-#: assets/src/admin/index.js:4272
+#: assets/src/admin/index.js:4292
 msgid "By"
 msgstr ""
 
-#: assets/src/admin/index.js:4273
+#: assets/src/admin/index.js:4293
 msgid "Created"
 msgstr ""
 
-#: assets/src/admin/index.js:4275
-#: assets/src/admin/index.js:5121
+#: assets/src/admin/index.js:4295
+#: assets/src/admin/index.js:5141
 msgid "Actions"
 msgstr ""
 
-#: assets/src/admin/index.js:4283
+#: assets/src/admin/index.js:4303
 msgid "No operations yet."
 msgstr ""
 
-#: assets/src/admin/index.js:4352
+#: assets/src/admin/index.js:4372
 msgid "Retention"
 msgstr ""
 
 #. translators: 1: minimum days, 2: maximum days.
-#: assets/src/admin/index.js:4356
+#: assets/src/admin/index.js:4376
 #, js-format
 msgid "How long recorded changes are kept — the window in which an operation can still be undone (%1$d–%2$d days)."
 msgstr ""
 
-#: assets/src/admin/index.js:4373
+#: assets/src/admin/index.js:4393
 msgid "Save"
 msgstr ""
 
-#: assets/src/admin/index.js:4377
+#: assets/src/admin/index.js:4397
 msgid "Saved."
 msgstr ""
 
-#: assets/src/admin/index.js:4496
+#: assets/src/admin/index.js:4516
 msgid "Copied"
 msgstr ""
 
-#: assets/src/admin/index.js:4498
+#: assets/src/admin/index.js:4518
 msgid "Selected — press Ctrl+C"
 msgstr ""
 
-#: assets/src/admin/index.js:4499
+#: assets/src/admin/index.js:4519
 msgid "Copy"
 msgstr ""
 
-#: assets/src/admin/index.js:4552
+#: assets/src/admin/index.js:4572
 msgid "A schedule runs only if the server is set up to run it. Do this once, before you create one."
 msgstr ""
 
-#: assets/src/admin/index.js:4564
+#: assets/src/admin/index.js:4584
 msgid "Server setup"
 msgstr ""
 
 #. translators: %d: minutes between runs.
-#: assets/src/admin/index.js:4593
+#: assets/src/admin/index.js:4613
 #, js-format
 msgid "Set the server to run the queue every %d minutes. Once only."
 msgstr ""
 
-#: assets/src/admin/index.js:4609
+#: assets/src/admin/index.js:4629
 msgid "Windows"
 msgstr ""
 
-#: assets/src/admin/index.js:4618
+#: assets/src/admin/index.js:4638
 msgid "Server (cPanel / cron)"
 msgstr ""
 
-#: assets/src/admin/index.js:4625
+#: assets/src/admin/index.js:4645
 msgid "Task Scheduler (Win+R → taskschd.msc):"
 msgstr ""
 
-#: assets/src/admin/index.js:4632
+#: assets/src/admin/index.js:4652
 msgid "Create Task… — not “Basic Task”."
 msgstr ""
 
-#: assets/src/admin/index.js:4638
+#: assets/src/admin/index.js:4658
 msgid "General: tick “Run whether user is logged on or not”."
 msgstr ""
 
 #. translators: %d: minutes between runs.
-#: assets/src/admin/index.js:4646
+#: assets/src/admin/index.js:4666
 #, js-format
 msgid "Triggers → New: Daily, start 00:00, “Repeat task every” %d minutes, duration Indefinitely."
 msgstr ""
 
-#: assets/src/admin/index.js:4654
+#: assets/src/admin/index.js:4674
 msgid "Actions → New: Start a program, then paste the two boxes below."
 msgstr ""
 
-#: assets/src/admin/index.js:4660
+#: assets/src/admin/index.js:4680
 msgid "Settings: keep “Do not start a new instance”."
 msgstr ""
 
-#: assets/src/admin/index.js:4667
+#: assets/src/admin/index.js:4687
 msgid "Program/script"
 msgstr ""
 
-#: assets/src/admin/index.js:4671
+#: assets/src/admin/index.js:4691
 msgid "Add arguments"
 msgstr ""
 
-#: assets/src/admin/index.js:4675
+#: assets/src/admin/index.js:4695
 msgid "Or skip the dialog — run this in PowerShell as Administrator. It also runs when nobody is signed in, which the dialog asks for a password to allow:"
 msgstr ""
 
-#: assets/src/admin/index.js:4681
+#: assets/src/admin/index.js:4701
 msgid "PowerShell (Administrator)"
 msgstr ""
 
-#: assets/src/admin/index.js:4693
+#: assets/src/admin/index.js:4713
 msgid "cPanel → Cron Jobs (or crontab -e over SSH):"
 msgstr ""
 
-#: assets/src/admin/index.js:4699
+#: assets/src/admin/index.js:4719
 msgid "Command"
 msgstr ""
 
-#: assets/src/admin/index.js:4761
+#: assets/src/admin/index.js:4781
 msgid "Run now"
 msgstr ""
 
-#: assets/src/admin/index.js:4769
+#: assets/src/admin/index.js:4789
 msgid "Pause"
 msgstr ""
 
-#: assets/src/admin/index.js:4795
+#: assets/src/admin/index.js:4815
 msgid "Delete schedule"
 msgstr ""
 
 #. translators: %s: schedule name.
-#: assets/src/admin/index.js:4830
+#: assets/src/admin/index.js:4850
 #, js-format
 msgid "Resume “%s” — it will run shortly."
 msgstr ""
 
 #. translators: 1: the schedule's due time, 2: minutes between supervisor runs.
-#: assets/src/admin/index.js:4840
+#: assets/src/admin/index.js:4860
 #, js-format
 msgid "Its next run was due at %1$s, which has passed — pausing hid it, but did not move it. Resuming makes it due again, so it will run within about %2$d minutes."
 msgstr ""
 
-#: assets/src/admin/index.js:4850
+#: assets/src/admin/index.js:4870
 msgid "It runs once, not once for every run it missed, and then goes back to its normal times."
 msgstr ""
 
-#: assets/src/admin/index.js:4864
+#: assets/src/admin/index.js:4884
 msgid "Resume it"
 msgstr ""
 
-#: assets/src/admin/index.js:4871
+#: assets/src/admin/index.js:4891
 msgid "Leave it paused"
 msgstr ""
 
 #. translators: %s: schedule name.
-#: assets/src/admin/index.js:4885
+#: assets/src/admin/index.js:4905
 #, js-format
 msgid "Delete the schedule “%s”?"
 msgstr ""
 
-#: assets/src/admin/index.js:4893
+#: assets/src/admin/index.js:4913
 msgid "It will stop running from now on. Operations it has already run stay in the history, and the products they changed are untouched. This cannot be reversed."
 msgstr ""
 
-#: assets/src/admin/index.js:5037
+#: assets/src/admin/index.js:5057
 msgid "Queued — the operation runs in the background. Watch its progress in Operation history below (it may take a moment to start)."
 msgstr ""
 
-#: assets/src/admin/index.js:5076
+#: assets/src/admin/index.js:5096
 msgid "Schedules"
 msgstr ""
 
-#: assets/src/admin/index.js:5079
+#: assets/src/admin/index.js:5099
 msgid "Operations set to run later or on a recurring basis. Create one in Bulk edit above: set the change, then pick “On a schedule” under When. A completion report is emailed for each run."
 msgstr ""
 
-#: assets/src/admin/index.js:5083
+#: assets/src/admin/index.js:5103
 msgid "Run a change later, or over and over — nightly repricing, a sale that starts on Friday — with a completion report emailed for each run."
 msgstr ""
 
-#: assets/src/admin/index.js:5091
+#: assets/src/admin/index.js:5111
 msgid "Scheduling is available on a paid plan."
 msgstr ""
 
-#: assets/src/admin/index.js:5118
+#: assets/src/admin/index.js:5138
 msgid "Next run"
 msgstr ""
 
-#: assets/src/admin/index.js:5119
+#: assets/src/admin/index.js:5139
 msgid "Last run"
 msgstr ""
 
-#: assets/src/admin/index.js:5129
+#: assets/src/admin/index.js:5149
 msgid "No schedules yet."
 msgstr ""
 
-#: assets/src/admin/index.js:5201
+#: assets/src/admin/index.js:5221
 msgid "Dismiss"
 msgstr ""
 
-#: assets/src/admin/index.js:5207
+#: assets/src/admin/index.js:5227
 msgid "Welcome to CatalogOps"
 msgstr ""
 
 #. translators: %d: the number of days changes remain reversible.
-#: assets/src/admin/index.js:5212
+#: assets/src/admin/index.js:5232
 #, js-format
 msgid "Change thousands of products at once — safely. Every change is previewed before it is written, and any operation can be undone for %d days."
 msgstr ""
 
-#: assets/src/admin/index.js:5221
+#: assets/src/admin/index.js:5241
 msgid "1. Filter"
 msgstr ""
 
-#: assets/src/admin/index.js:5223
+#: assets/src/admin/index.js:5243
 msgid "Choose exactly which products or variations to change — by category, brand, price, stock, attribute, or SKU."
 msgstr ""
 
-#: assets/src/admin/index.js:5230
+#: assets/src/admin/index.js:5250
 msgid "2. Preview"
 msgstr ""
 
-#: assets/src/admin/index.js:5232
+#: assets/src/admin/index.js:5252
 msgid "See every old → new value before anything happens. Nothing is written until you choose Apply."
 msgstr ""
 
-#: assets/src/admin/index.js:5239
+#: assets/src/admin/index.js:5259
 msgid "3. Apply & undo"
 msgstr ""
 
-#: assets/src/admin/index.js:5241
+#: assets/src/admin/index.js:5261
 msgid "Run it as a background operation. Changed your mind? Undo the whole thing from History below."
 msgstr ""
 
-#: assets/src/admin/index.js:5249
+#: assets/src/admin/index.js:5269
 msgid "Got it — start with a filter"
 msgstr ""
 
-#: assets/src/admin/index.js:5491
+#: assets/src/admin/index.js:5511
 msgid "Bulk catalog operations"
 msgstr ""
 
-#: assets/src/admin/index.js:5504
+#: assets/src/admin/index.js:5524
 msgid "Filter products"
 msgstr ""
 
-#: assets/src/admin/index.js:5508
+#: assets/src/admin/index.js:5528
 msgid "Target"
 msgstr ""
 
-#: assets/src/admin/index.js:5518
+#: assets/src/admin/index.js:5538
 msgid "Products"
 msgstr ""
 
-#: assets/src/admin/index.js:5529
+#: assets/src/admin/index.js:5549
 msgid "Variations"
 msgstr ""
 
-#: assets/src/admin/index.js:5536
+#: assets/src/admin/index.js:5556
 msgid "Filter"
 msgstr ""
 
-#: assets/src/admin/index.js:5542
+#: assets/src/admin/index.js:5562
 msgid "Category"
 msgstr ""
 
-#: assets/src/admin/index.js:5566
-#: assets/src/admin/index.js:5942
+#: assets/src/admin/index.js:5586
+#: assets/src/admin/index.js:5962
 msgid "Brand"
 msgstr ""
 
-#: assets/src/admin/index.js:5590
+#: assets/src/admin/index.js:5610
 msgid "Tag"
 msgstr ""
 
-#: assets/src/admin/index.js:5594
+#: assets/src/admin/index.js:5614
 msgid "Without tag"
 msgstr ""
 
-#: assets/src/admin/index.js:5631
+#: assets/src/admin/index.js:5651
 msgid "Attribute"
 msgstr ""
 
-#: assets/src/admin/index.js:5674
+#: assets/src/admin/index.js:5694
 msgid "Values (none if empty)"
 msgstr ""
 
-#: assets/src/admin/index.js:5678
+#: assets/src/admin/index.js:5698
 msgid "Values (any if empty)"
 msgstr ""
 
-#: assets/src/admin/index.js:5709
-#: assets/src/admin/index.js:5953
+#: assets/src/admin/index.js:5729
+#: assets/src/admin/index.js:5973
 msgid "Stock"
 msgstr ""
 
-#: assets/src/admin/index.js:5736
+#: assets/src/admin/index.js:5756
 msgid "Price range"
 msgstr ""
 
-#: assets/src/admin/index.js:5745
+#: assets/src/admin/index.js:5765
 msgid "Min"
 msgstr ""
 
-#: assets/src/admin/index.js:5749
+#: assets/src/admin/index.js:5769
 msgid "Minimum price"
 msgstr ""
 
-#: assets/src/admin/index.js:5761
+#: assets/src/admin/index.js:5781
 msgid "Max"
 msgstr ""
 
-#: assets/src/admin/index.js:5765
+#: assets/src/admin/index.js:5785
 msgid "Maximum price"
 msgstr ""
 
-#: assets/src/admin/index.js:5834
+#: assets/src/admin/index.js:5854
 msgid "Show variations"
 msgstr ""
 
-#: assets/src/admin/index.js:5838
+#: assets/src/admin/index.js:5858
 msgid "Show products"
 msgstr ""
 
 #. translators: %d: number of matching variations.
-#: assets/src/admin/index.js:5857
+#: assets/src/admin/index.js:5877
 #, js-format
 msgid "%d matching variations"
 msgstr ""
 
 #. translators: %d: number of matching products.
-#: assets/src/admin/index.js:5867
+#: assets/src/admin/index.js:5887
 #, js-format
 msgid "%d matching products"
 msgstr ""
 
 #. translators: 1: first row shown, 2: last row shown, 3: total matches.
-#: assets/src/admin/index.js:5914
+#: assets/src/admin/index.js:5934
 #, js-format
 msgid "Showing %1$d–%2$d of %3$d. Search by SKU to check a particular one."
 msgstr ""
 
-#: assets/src/admin/index.js:5941
+#: assets/src/admin/index.js:5961
 msgid "Categories"
 msgstr ""
 
-#: assets/src/admin/index.js:5943
+#: assets/src/admin/index.js:5963
 msgid "Tags"
 msgstr ""
 
-#: assets/src/admin/index.js:5945
+#: assets/src/admin/index.js:5965
 msgid "Cost"
 msgstr ""
 
-#: assets/src/admin/index.js:5948
+#: assets/src/admin/index.js:5968
 msgid "Price"
 msgstr ""
 
-#: assets/src/admin/index.js:5955
+#: assets/src/admin/index.js:5975
 msgid "Qty"
 msgstr ""
 
-#: assets/src/admin/index.js:5963
+#: assets/src/admin/index.js:5983
 msgid "No items match this filter."
 msgstr ""

@@ -13,6 +13,7 @@
 
 import {
 	buildFilter,
+	dateForStorage,
 	defaultModuleOperator,
 	emptyForm,
 	groupModuleFields,
@@ -726,5 +727,103 @@ describe( 'module conditions across the operator range', () => {
 		expect(
 			conditions( { 'acf:cost': { value: '100', mode: 'exists' } } )
 		).toEqual( [ { field: 'acf:cost', operator: 'exists' } ] );
+	} );
+} );
+
+describe( 'dates against the format the column actually holds', () => {
+	const launch = {
+		key: 'acf:launch',
+		control: 'date',
+		operators: [ '=', '>=', '<=', 'between', 'exists', 'not_exists' ],
+		scopes: [ 'product' ],
+		available: true,
+		value_format: 'Ymd',
+	};
+
+	const conditions = ( modules, field = launch ) =>
+		buildFilter( { ...emptyForm(), modules }, 'product', [ field ] )
+			.conditions;
+
+	// The whole reason this exists. A date input gives `2024-07-08`; ACF's date
+	// picker stores `20240708`. Sent as typed, the filter reads perfectly and
+	// matches nothing — and nothing is what an over-narrow filter looks like, so
+	// the failure never announces itself.
+	it( 'sends a date picker the compact form it stores', () => {
+		expect(
+			conditions( { 'acf:launch': { value: '2024-07-08', mode: '=' } } )
+		).toEqual( [
+			{ field: 'acf:launch', operator: '=', value: '20240708' },
+		] );
+	} );
+
+	it( 'sends a date-and-time picker a time as well', () => {
+		const stamped = { ...launch, value_format: 'Y-m-d H:i:s' };
+
+		expect(
+			conditions(
+				{ 'acf:launch': { value: '2024-07-08', mode: '>=' } },
+				stamped
+			)[ 0 ].value
+		).toBe( '2024-07-08 00:00:00' );
+	} );
+
+	// A range's far end has to reach the end of its day. Stopping at midnight
+	// drops everything recorded during the last day of the range, which is an
+	// off-by-one nobody can see: the answer is smaller, and still plausible.
+	it( 'takes a range to the end of its last day when the column keeps a time', () => {
+		const stamped = { ...launch, value_format: 'Y-m-d H:i:s' };
+
+		expect(
+			conditions(
+				{
+					'acf:launch': {
+						value: '2024-01-01',
+						to: '2024-12-31',
+						mode: 'between',
+					},
+				},
+				stamped
+			)[ 0 ].value
+		).toEqual( [ '2024-01-01 00:00:00', '2024-12-31 23:59:59' ] );
+	} );
+
+	it( 'has no end-of-day to add when the column keeps only a date', () => {
+		expect(
+			conditions( {
+				'acf:launch': {
+					value: '2024-01-01',
+					to: '2024-12-31',
+					mode: 'between',
+				},
+			} )[ 0 ].value
+		).toEqual( [ '20240101', '20241231' ] );
+	} );
+
+	it( 'leaves a field that declares no format alone', () => {
+		const plain = { ...launch, value_format: '' };
+
+		expect(
+			conditions(
+				{ 'acf:launch': { value: '2024-07-08', mode: '=' } },
+				plain
+			)[ 0 ].value
+		).toBe( '2024-07-08' );
+	} );
+
+	// A value left over from before the field was a date control, or from a saved
+	// filter written by hand. Converting it would be inventing data; passing it
+	// through lets the ordinary rules deal with it.
+	it( 'passes anything that is not an ISO date straight through', () => {
+		expect( dateForStorage( 'yesterday', 'Ymd' ) ).toBe( 'yesterday' );
+		expect( dateForStorage( '', 'Ymd' ) ).toBe( '' );
+		expect( dateForStorage( '20240708', 'Ymd' ) ).toBe( '20240708' );
+	} );
+
+	it( 'still drops a half-filled range', () => {
+		expect(
+			conditions( {
+				'acf:launch': { value: '2024-01-01', mode: 'between' },
+			} )
+		).toEqual( [] );
 	} );
 } );

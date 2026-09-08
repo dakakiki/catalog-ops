@@ -446,6 +446,34 @@ final class Acf_Fields {
 	}
 
 	/**
+	 * The PHP date format a definition's value is stored in, or '' when the field
+	 * is not a date.
+	 *
+	 * Verified against ACF Pro 6.8.9: `date_picker` writes `Ymd` and
+	 * `date_time_picker` writes `Y-m-d H:i:s`, whatever `return_format` and
+	 * `display_format` say — those two govern what ACF hands to a template and what
+	 * the editor shows, never what lands in the column. A filter that trusted
+	 * `display_format` would build `08.07.2024` and match nothing.
+	 *
+	 * A legacy `save_format` overrides both, and {@see value_kind()} has already
+	 * refused the field by then unless that format is big-endian — so anything
+	 * reaching here can be ordered and compared as text.
+	 *
+	 * @param array<string, mixed> $definition A definition from {@see definition()}.
+	 */
+	public function storage_format( array $definition ): string {
+		$type = (string) ( $definition['type'] ?? '' );
+
+		if ( ! isset( self::DATE_TYPES[ $type ] ) ) {
+			return '';
+		}
+
+		$legacy = (string) ( $definition['save_format'] ?? '' );
+
+		return '' !== $legacy ? $legacy : self::DATE_TYPES[ $type ];
+	}
+
+	/**
 	 * The choices a value-set control offers, as value => label.
 	 *
 	 * @param array<string, mixed> $definition A definition from {@see definition()}.

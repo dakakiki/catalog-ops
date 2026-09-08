@@ -290,7 +290,8 @@ final class Acf_Filter_Provider implements Filter_Provider {
 				? Acf_Options_Controller::ROUTE . '?field=' . rawurlencode( (string) $definition['key'] )
 				: '',
 			$this->field_label( $definition, $by_id ),
-			false
+			false,
+			$this->fields->storage_format( $definition )
 		);
 	}
 
