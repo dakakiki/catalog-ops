@@ -474,10 +474,10 @@ final class Plugin {
 
 		$this->container->singleton(
 			Fields_Controller::class,
-			static function (): Fields_Controller {
+			static function ( Container $container ): Fields_Controller {
 				global $wpdb;
 
-				return new Fields_Controller( $wpdb );
+				return new Fields_Controller( $wpdb, $container->get( Filter_Providers::class ) );
 			}
 		);
 

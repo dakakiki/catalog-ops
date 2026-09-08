@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Rest;
 
+use CatalogOps\Query\Fields\Filter_Providers;
 use WP_REST_Response;
 use WP_REST_Server;
 use wpdb;
@@ -76,18 +77,90 @@ final class Fields_Controller {
 	private wpdb $wpdb;
 
 	/**
+	 * Module filter-field registry, or null when no modules can register.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $providers;
+
+	/**
 	 * Build the controller.
 	 *
-	 * @param wpdb $wpdb WordPress database handle.
+	 * @param wpdb                  $wpdb      WordPress database handle.
+	 * @param Filter_Providers|null $providers Module field registry. Null answers
+	 *                                         an empty list, which is what an
+	 *                                         installation with no modules is.
 	 */
-	public function __construct( wpdb $wpdb ) {
-		$this->wpdb = $wpdb;
+	public function __construct( wpdb $wpdb, ?Filter_Providers $providers = null ) {
+		$this->wpdb      = $wpdb;
+		$this->providers = $providers;
+	}
+
+	/**
+	 * The filterable fields every registered module offers.
+	 *
+	 * The first production caller {@see Filter_Providers::all_fields()} has ever
+	 * had, and the reason M7's clause seam is not invisible: a module could ship a
+	 * perfectly compiled field and no user could reach it, because the filter's
+	 * control list is written by hand in the React bundle.
+	 *
+	 * **Unavailable fields are listed, not omitted.** A field whose module the
+	 * licence does not cover comes back with `available: false` so the UI can show
+	 * it locked. Dropping it would be worse than it looks: a saved filter or a
+	 * schedule that already names the field would then open against a control list
+	 * that does not contain it, and a filter the user cannot see is a filter they
+	 * cannot correct — while the engine goes on refusing it. Locked-and-explained
+	 * is the only honest shape.
+	 *
+	 * The core fields are deliberately absent. They are hardcoded in the client and
+	 * stay that way for now; serving them too would mean rewriting eight tested
+	 * controls in the same change as introducing the mechanism, and the spec's
+	 * de-risking advice is to append a module section below them instead.
+	 */
+	public function filterable(): WP_REST_Response {
+		if ( null === $this->providers ) {
+			return new WP_REST_Response( array( 'fields' => array() ) );
+		}
+
+		$fields = array();
+
+		foreach ( $this->providers->all_fields() as $entry ) {
+			$field = $entry['field'];
+
+			$fields[] = array(
+				'key'           => $field->key,
+				'label'         => $field->label,
+				'control'       => $field->control->value,
+				// Sent as the persisted tokens, not as objects: the client posts
+				// these straight back in filter_json, and a shape that has to be
+				// translated in both directions is a shape that can be translated
+				// wrongly in one of them.
+				'operators'     => array_map( static fn( $operator ): string => $operator->value, $field->operators ),
+				'scopes'        => array_map( static fn( $scope ): string => $scope->value, $field->scopes ),
+				'options_route' => $field->options_route,
+				'column_label'  => $field->column_label,
+				'module'        => $entry['module'],
+				'available'     => $entry['available'],
+			);
+		}
+
+		return new WP_REST_Response( array( 'fields' => $fields ) );
 	}
 
 	/**
 	 * Register the routes. Hook to rest_api_init.
 	 */
 	public function register_routes(): void {
+		register_rest_route(
+			self::REST_NAMESPACE,
+			'/fields/filterable',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'filterable' ),
+				'permission_callback' => array( $this, 'can_manage' ),
+			)
+		);
+
 		register_rest_route(
 			self::REST_NAMESPACE,
 			'/fields/meta-keys',
@@ -167,39 +240,55 @@ final class Fields_Controller {
 	}
 
 	/**
-	 * The brands present in the catalog, for the filter's brand dropdown, plus the
-	 * filter field they map to. Which meta key holds the brand is catalog-specific
-	 * (the seed uses `_catalogops_brand`); it is overridable so a real store's
-	 * brand source can be pointed at without touching the UI. Returning the field
-	 * with the values keeps the client from having to know the key.
+	 * WooCommerce's brands, for the filter's brand picker.
+	 *
+	 * `product_brand` is WooCommerce core, registered by `WC_Brands` since 9.6.
+	 * This endpoint used to serve the distinct values of a meta key instead —
+	 * `_catalogops_brand`, invented by the seed command for its fake catalogue and
+	 * then adopted by the UI because it was the brand data the UI could see. The
+	 * consequence was that on a shop using WooCommerce's own brands, which is
+	 * nearly all of them, the brand filter listed nothing at all unless the site
+	 * owner wrote a PHP filter. Asking a shop owner to write code for the most
+	 * ordinary case is not a configuration option, it is a defect.
+	 *
+	 * Terms are returned with `hide_empty` false: a brand with no products is
+	 * still one a user may want to filter by, and the honest answer to that filter
+	 * is nothing rather than a missing entry they cannot choose.
 	 *
 	 * @return WP_REST_Response
 	 */
 	public function brands(): WP_REST_Response {
-		/**
-		 * Filters the meta key that holds a product's brand.
-		 *
-		 * @param string $key Brand meta key.
-		 */
-		$key      = (string) apply_filters( 'catalogops_brand_meta_key', '_catalogops_brand' );
-		$postmeta = $this->wpdb->postmeta;
+		if ( ! taxonomy_exists( 'product_brand' ) ) {
+			// WooCommerce older than 9.6, or a shop whose brands come from a plugin
+			// registering something else. An empty list leaves the control empty
+			// rather than filled with things that cannot be matched.
+			return new WP_REST_Response( array( 'brands' => array() ) );
+		}
 
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		$values = $this->wpdb->get_col(
-			$this->wpdb->prepare(
-				"SELECT DISTINCT meta_value FROM {$postmeta} WHERE meta_key = %s AND meta_value <> '' ORDER BY meta_value ASC LIMIT %d",
-				$key,
-				self::SCAN_LIMIT
-			)
-		);
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-
-		return new WP_REST_Response(
+		$terms = get_terms(
 			array(
-				'field'  => 'meta:' . $key,
-				'brands' => array_map( 'strval', $values ),
+				'taxonomy'   => 'product_brand',
+				'hide_empty' => false,
+				'orderby'    => 'name',
 			)
 		);
+
+		$brands = array();
+
+		if ( is_array( $terms ) ) {
+			foreach ( $terms as $term ) {
+				$brands[] = array(
+					'id'   => (int) $term->term_id,
+					// Decoded, because a term name is stored HTML-encoded and a
+					// brand called "Marks & Spencer" would otherwise read as
+					// "Marks &amp;amp; Spencer" — the defect the category list was
+					// fixed for in 0.7.2.
+					'name' => html_entity_decode( $term->name, ENT_QUOTES, 'UTF-8' ),
+				);
+			}
+		}
+
+		return new WP_REST_Response( array( 'brands' => $brands ) );
 	}
 
 	/**

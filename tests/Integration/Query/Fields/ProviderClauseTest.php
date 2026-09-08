@@ -256,12 +256,127 @@ final class ProviderClauseTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * The taxonomy path, end to end.
+	 *
+	 * This is the case the spec had brands doing: the derived-table join under
+	 * AND, the anti-join under exclusion, the PARENT anchor, and the term-id to
+	 * tt_id resolution that keeps the subquery reading one table. It is exercised
+	 * with a test-only provider rather than a shipped brands module, because
+	 * CatalogOps already ships a brand filter over a meta key — a second control
+	 * for the same word would be a product decision, and this contract needs
+	 * exercising either way.
+	 */
+	public function test_a_taxonomy_provider_answers_and_partitions_the_scope(): void {
+		// Our own taxonomy, not product_cat: WooCommerce puts every uncategorised
+		// product in "Uncategorized", so a product_cat fixture cannot express "has
+		// no term of this taxonomy" at all.
+		register_taxonomy( 'qh_group', 'product' );
+
+		$term = wp_insert_term( 'Acme ' . wp_generate_password( 6, false ), 'qh_group' );
+		$this->assertIsArray( $term );
+
+		$in = $this->make_product( null );
+		wp_set_object_terms( $in, array( (int) $term['term_id'] ), 'qh_group' );
+
+		$out = $this->make_product( null );
+
+		$engine = $this->engine( $this->taxonomy_provider( (int) $term['term_id'] ) );
+
+		$this->assertSame(
+			array( $in ),
+			$engine->resolve(
+				new Filter( array( new Condition( 'demo:group', Operator::IN, array( (int) $term['term_id'] ) ) ) )
+			)
+		);
+
+		// The exclusion keeps the product carrying no term at all, which is the
+		// case a negation pushed inside a subquery silently loses.
+		$excluded = $engine->resolve(
+			new Filter( array( new Condition( 'demo:group', Operator::NOT_IN, array( (int) $term['term_id'] ) ) ) )
+		);
+
+		$this->assertContains( $out, $excluded );
+		$this->assertNotContains( $in, $excluded );
+	}
+
+	/**
+	 * And presence, which is the shape that lost its taxonomy entirely until an
+	 * adversarial review caught it: "has any term of THIS taxonomy" compiled to
+	 * "has any term in any taxonomy" and matched the whole catalogue.
+	 */
+	public function test_taxonomy_presence_asks_about_that_taxonomy_only(): void {
+		register_taxonomy( 'qh_group', 'product' );
+
+		$term = wp_insert_term( 'Acme ' . wp_generate_password( 6, false ), 'qh_group' );
+		$this->assertIsArray( $term );
+
+		$tagged = $this->make_product( null );
+		wp_set_object_terms( $tagged, array( (int) $term['term_id'] ), 'qh_group' );
+
+		$this->make_product( null );
+
+		$engine = $this->engine( $this->taxonomy_provider( (int) $term['term_id'] ) );
+
+		$this->assertSame(
+			array( $tagged ),
+			$engine->resolve(
+				new Filter( array( new Condition( 'demo:group', Operator::EXISTS, '' ) ) )
+			),
+			'Presence must not match products carrying only some other taxonomy.'
+		);
+	}
+
+	/**
+	 * A provider whose one field is a taxonomy membership.
+	 *
+	 * @param int $term_id A term that exists, so the field has something to match.
+	 */
+	private function taxonomy_provider( int $term_id ): Filter_Provider {
+		unset( $term_id );
+
+		return new class() implements Filter_Provider {
+
+			public function module(): string {
+				return '';
+			}
+
+			public function filter_fields(): array {
+				return array(
+					new Filter_Field(
+						'demo:group',
+						'Group',
+						Filter_Control::TERM_SET,
+						array(
+							Operator::IN,
+							Operator::NOT_IN,
+							Operator::EXISTS,
+							Operator::NOT_EXISTS,
+						),
+						array( Query_Scope::PRODUCT, Query_Scope::VARIATION )
+					),
+				);
+			}
+
+			public function handles_filter( string $key ): bool {
+				return 'demo:group' === $key;
+			}
+
+			public function storage_for( string $key, Query_Scope $scope ): Field_Storage {
+				return Field_Storage::taxonomy( 'qh_group' );
+			}
+		};
+	}
+
+	/**
 	 * An engine over a registry holding one text field on products.
 	 */
-	private function engine(): Query_Engine {
+	private function engine( ?Filter_Provider $provider = null ): Query_Engine {
 		global $wpdb;
 
-		return new Query_Engine( $wpdb, new Filter_Providers( License::unlimited(), $this->provider() ) );
+		return new Query_Engine(
+			$wpdb,
+			new Filter_Providers( License::unlimited(), $provider ?? $this->provider() )
+		);
 	}
 
 	/**

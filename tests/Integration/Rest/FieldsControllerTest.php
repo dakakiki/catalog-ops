@@ -63,20 +63,33 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 		$this->assertNotContains( 'attribute_pa_color', $keys );
 	}
 
-	public function test_brands_lists_distinct_values_with_the_filter_field(): void {
-		foreach ( array( 'Acme', 'Globex', 'Acme' ) as $i => $brand ) {
-			$p = new WC_Product_Simple();
-			$p->set_regular_price( (string) ( 10 + $i ) );
-			$p->update_meta_data( '_catalogops_brand', $brand );
-			$p->save();
-		}
+	/**
+	 * Brands are WooCommerce's own taxonomy terms, and the endpoint serves them as
+	 * id/name pairs like every other term picker.
+	 *
+	 * It used to serve the distinct values of a `_catalogops_brand` meta key — a
+	 * key the seed command had invented for its fake catalogue and the UI had then
+	 * been built over. On a shop using WooCommerce's brands, which is nearly all of
+	 * them, the picker listed nothing at all.
+	 */
+	public function test_brands_lists_the_woocommerce_brand_terms(): void {
+		$acme   = wp_insert_term( 'FC Acme', 'product_brand' );
+		$globex = wp_insert_term( 'FC Globex', 'product_brand' );
+
+		$this->assertIsArray( $acme );
+		$this->assertIsArray( $globex );
 
 		$data = rest_do_request( new WP_REST_Request( 'GET', '/catalogops/v1/fields/brands' ) )->get_data();
 
-		$this->assertSame( 'meta:_catalogops_brand', $data['field'] );
-		$this->assertContains( 'Acme', $data['brands'] );
-		$this->assertContains( 'Globex', $data['brands'] );
-		$this->assertSame( array_values( array_unique( $data['brands'] ) ), $data['brands'] );
+		$ids   = array_map( static fn( array $b ): int => $b['id'], $data['brands'] );
+		$names = array_map( static fn( array $b ): string => $b['name'], $data['brands'] );
+
+		$this->assertContains( (int) $acme['term_id'], $ids );
+		$this->assertContains( 'FC Globex', $names );
+
+		// A brand nothing carries yet is still a brand somebody may filter by; the
+		// honest answer to that filter is nothing, not a missing entry.
+		$this->assertNotEmpty( $data['brands'] );
 	}
 
 	public function test_categories_lists_product_categories(): void {

@@ -59,15 +59,16 @@ final class QueryControllerTest extends WP_UnitTestCase {
 	public function test_rows_carry_the_brand_and_tags_the_filter_matches_on(): void {
 		// Both are filterable, so a table without them asks the user to filter on
 		// something the results will not show.
-		$id  = $this->make_product( 40 );
-		$tag = wp_insert_term( 'QC Clearance', 'product_tag' );
+		$id    = $this->make_product( 40 );
+		$tag   = wp_insert_term( 'QC Clearance', 'product_tag' );
+		$brand = wp_insert_term( 'QC Acme', 'product_brand' );
 
 		wp_set_object_terms( $id, array( (int) $tag['term_id'] ), 'product_tag' );
-		update_post_meta( $id, '_catalogops_brand', 'Acme' );
+		wp_set_object_terms( $id, array( (int) $brand['term_id'] ), 'product_brand' );
 
 		$data = $this->dispatch( array() );
 
-		$this->assertSame( 'Acme', $data['items'][0]['brand'] );
+		$this->assertSame( 'QC Acme', $data['items'][0]['brand'] );
 		$this->assertSame( array( 'QC Clearance' ), $data['items'][0]['tags'] );
 	}
 

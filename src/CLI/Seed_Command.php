@@ -57,7 +57,14 @@ final class Seed_Command {
 	private const SIZES = array( 'S', 'M', 'L', 'XL' );
 
 	/**
-	 * Brand values written to the `_catalogops_brand` meta field.
+	 * Terms created in WooCommerce's own `product_brand` taxonomy.
+	 *
+	 * These used to be written to a `_catalogops_brand` meta field this command
+	 * invented — and the admin app was then built over that key, because it was
+	 * the brand data there was. The result was a plugin whose brand filter found
+	 * nothing on any shop using WooCommerce's brands. A seeder producing a
+	 * catalogue that does not look like a real one is not a harmless shortcut: it
+	 * is what the rest of the product gets designed against.
 	 */
 	private const BRANDS = array( 'Acme', 'Globex', 'Initech', 'Umbrella', 'Soylent', 'Hooli', 'Stark', 'Wayne' );
 
@@ -205,7 +212,8 @@ final class Seed_Command {
 		$product->set_attributes( array( $this->build_attribute( $color_tax, array( $this->pick( $colors ) ), false ) ) );
 
 		$this->tag_seeded( $product, $price );
-		$product->save();
+		$id = $product->save();
+		$this->assign_brand( (int) $id );
 	}
 
 	/**
@@ -226,6 +234,7 @@ final class Seed_Command {
 
 		$this->tag_seeded( $product, 0.0 );
 		$parent_id = $product->save();
+		$this->assign_brand( (int) $parent_id );
 
 		$made = 0;
 		foreach ( $sizes as $name => $term_id ) {
@@ -263,6 +272,24 @@ final class Seed_Command {
 	}
 
 	/**
+	 * Put an object in one of the seeded brands.
+	 *
+	 * A taxonomy term rather than a meta value, so the seeded catalogue looks the
+	 * way a real shop does. Variations are skipped: `product_brand` is registered
+	 * on `product` only, and a variation inherits its parent's brand — the same
+	 * reading `category` and `tag` already have.
+	 *
+	 * @param int $id Product id.
+	 */
+	private function assign_brand( int $id ): void {
+		if ( ! taxonomy_exists( 'product_brand' ) ) {
+			return;
+		}
+
+		wp_set_object_terms( $id, array( self::BRANDS[ array_rand( self::BRANDS ) ] ), 'product_brand' );
+	}
+
+	/**
 	 * Attach the seed marker and test meta fields shared by all objects.
 	 *
 	 * @param WC_Product_Simple|WC_Product_Variable|WC_Product_Variation $product Product or variation.
@@ -270,7 +297,6 @@ final class Seed_Command {
 	 */
 	private function tag_seeded( $product, float $price ): void {
 		$product->update_meta_data( '_catalogops_seeded', CATALOGOPS_VERSION );
-		$product->update_meta_data( '_catalogops_brand', self::BRANDS[ array_rand( self::BRANDS ) ] );
 
 		if ( $price > 0 ) {
 			$cost = $price / ( 1 + wp_rand( 20, 60 ) / 100 );

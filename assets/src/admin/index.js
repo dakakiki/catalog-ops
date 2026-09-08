@@ -25,6 +25,12 @@ import {
 } from '@wordpress/element';
 import apiFetch from '@wordpress/api-fetch';
 import { __, _n, sprintf } from '@wordpress/i18n';
+import {
+	buildFilter,
+	emptyForm,
+	NO_TAG,
+	reconcileTagSelection,
+} from './filter';
 import './style.css';
 
 const PER_PAGE = 10;
@@ -1008,188 +1014,134 @@ function MultiSelect( {
 }
 
 /**
- * A blank filter form.
+ * One module field's row.
  *
- * Returned fresh each time rather than shared: the form holds arrays, and one
- * shared constant would hand every reset the same ones.
+ * Appended below the eight built-in controls rather than replacing them. The
+ * built-ins are 296 lines of tested JSX with bespoke behaviour each — a "Without
+ * tag" sentinel that must not go through Number(), an attribute pair that only
+ * exists under one scope — and rewriting them in the same change that introduces
+ * the mechanism would have risked the whole filter to save a section boundary.
  *
- * The `…Mode` keys carry each set-valued field's include/exclude choice, so the
- * form can express "category YY but not brand XX" without growing a second
- * control per field.
- *
- * @return {Object} An empty form.
+ * @param {Object}   props          Props.
+ * @param {Object}   props.field    The descriptor from /fields/filterable.
+ * @param {Object}   props.row      This field's `{ value, mode }`, or undefined.
+ * @param {Function} props.onChange Called with the next row.
  */
-function emptyForm() {
-	return {
-		priceMin: '',
-		priceMax: '',
-		stockStatus: '',
-		sku: '',
-		category: [],
-		categoryMode: 'in',
-		tag: [],
-		tagMode: 'in',
-		brand: [],
-		brandMode: 'in',
-		attribute: '',
-		attributeValues: [],
-		attributeMode: 'in',
-	};
-}
+function ModuleField( { field, row, onChange } ) {
+	const [ options, setOptions ] = useState( [] );
 
-/**
- * The API operator for a set-valued field's include/exclude mode.
- *
- * Anything that is not an explicit exclusion reads as an inclusion, so a form
- * (or a filter saved before modes existed) without the key keeps its original
- * meaning.
- *
- * @param {string} value The field's mode.
- * @return {string} 'in' or 'not_in'.
- */
-function operatorFor( value ) {
-	return 'not_in' === value ? 'not_in' : 'in';
-}
-
-/**
- * Build the filter payload from the form state and target scope.
- *
- * @param {Object} form       Form values.
- * @param {string} scope      'product' or 'variation'.
- * @param {string} brandField The filter field a brand maps to (from the API).
- * @return {Object} Filter in the API's shape (scope included, so the same filter
- * drives the query, the preview, and the operation).
- */
-/**
- * The tag list's one entry that is not a tag: "has none at all".
- *
- * A string, so it cannot collide with a term id — those are numbers, and the
- * real ones go through `Number()` on the way into a condition while this never
- * does.
- */
-const NO_TAG = 'none';
-
-/**
- * Reconcile a tag selection with the "Without tag" entry, which cannot coexist
- * with a real one: no product both carries a tag and carries none, so a filter
- * saying both would always match nothing.
- *
- * Rather than refuse the combination and make the user undo it, whichever was
- * chosen last wins — picking "Without tag" clears the tags, and picking a tag
- * clears "Without tag".
- *
- * @param {Array} previous The selection before this change.
- * @param {Array} next     The selection the control is proposing.
- * @return {Array} The selection to keep.
- */
-function reconcileTagSelection( previous, next ) {
-	const had = previous.map( String ).includes( NO_TAG );
-	const has = next.map( String ).includes( NO_TAG );
-
-	if ( has && ! had ) {
-		return [ NO_TAG ];
-	}
-
-	if ( has && next.length > 1 ) {
-		return next.filter( ( id ) => String( id ) !== NO_TAG );
-	}
-
-	return next;
-}
-
-function buildFilter( form, scope, brandField ) {
-	const conditions = [];
-
-	if ( form.priceMin !== '' ) {
-		conditions.push( {
-			field: 'price',
-			operator: '>=',
-			value: Number( form.priceMin ),
-		} );
-	}
-	if ( form.priceMax !== '' ) {
-		conditions.push( {
-			field: 'price',
-			operator: '<=',
-			value: Number( form.priceMax ),
-		} );
-	}
-	if ( form.stockStatus !== '' ) {
-		conditions.push( {
-			field: 'stock_status',
-			operator: '=',
-			value: form.stockStatus,
-		} );
-	}
-	if ( form.sku && form.sku.trim() !== '' ) {
-		conditions.push( {
-			field: 'sku',
-			operator: 'contains',
-			value: form.sku.trim(),
-		} );
-	}
-	// A set-valued field carries its own include/exclude mode, so one filter can
-	// say "in category YY, but not brand XX". Every condition is still ANDed
-	// (see the return): an exclusion narrows the match, it does not widen it.
-	// An empty selection is no condition at all in either mode — excluding
-	// nothing excludes nobody.
-	if ( form.category.length ) {
-		conditions.push( {
-			field: 'category',
-			operator: operatorFor( form.categoryMode ),
-			value: form.category.map( Number ),
-		} );
-	}
-	if ( form.tag && form.tag.length ) {
-		if ( form.tag.map( String ).includes( NO_TAG ) ) {
-			// "Without tag" asks about the taxonomy rather than about which terms,
-			// so it carries no value — the same shape the attribute pair below uses
-			// when no value is picked. The mode still governs, and reads the way the
-			// rest of the row does: the selection is what to keep, so excluding the
-			// untagged leaves exactly the products that do carry a tag.
-			conditions.push( {
-				field: 'tag',
-				operator: 'not_in' === form.tagMode ? 'exists' : 'not_exists',
-			} );
-		} else {
-			conditions.push( {
-				field: 'tag',
-				operator: operatorFor( form.tagMode ),
-				value: form.tag.map( Number ),
-			} );
+	// Fetched from the route the DESCRIPTOR names, not from a path this file
+	// knows. That is the whole point of `options_route`: a module can serve its
+	// own options without the client learning anything about it.
+	useEffect( () => {
+		if ( ! field.options_route || ! field.available ) {
+			return;
 		}
-	}
-	if ( form.brand.length && brandField ) {
-		conditions.push( {
-			field: brandField,
-			operator: operatorFor( form.brandMode ),
-			value: form.brand,
-		} );
-	}
-	if ( 'variation' === scope && form.attribute ) {
-		// Attribute filtering targets variations (a parent's price lives on its
-		// variations), so it only applies in the variation scope — the UI hides it
-		// otherwise, and this guards a stale value from a prior scope.
-		// A value picked → match those attribute terms; none picked → match any
-		// object that has this attribute at all. Values are term ids.
-		// With no value chosen the question is about the attribute itself rather
-		// than its values: has one at all, or has none.
-		if ( form.attributeValues.length ) {
-			conditions.push( {
-				field: form.attribute,
-				operator: operatorFor( form.attributeMode ),
-				value: form.attributeValues.map( Number ),
-			} );
-		} else {
-			conditions.push( {
-				field: form.attribute,
-				operator:
-					'not_in' === form.attributeMode ? 'not_exists' : 'exists',
-			} );
-		}
+
+		apiFetch( { path: field.options_route } )
+			.then( ( res ) => setOptions( res.terms || res.options || [] ) )
+			.catch( () => {} );
+	}, [ field.options_route, field.available ] );
+
+	const value = row ? row.value : '';
+	const mode = row ? row.mode : 'in';
+	const id = `catalogops-module-${ field.key.replace( /[^a-z0-9]/gi, '-' ) }`;
+
+	const set = ( next ) => onChange( { value, mode, ...next } );
+
+	// A field the licence does not cover is shown rather than hidden, and shown
+	// disabled rather than absent. A saved filter can already name it, and a
+	// condition the user cannot see is one they cannot remove — while the engine
+	// goes on refusing to run the filter that carries it.
+	if ( ! field.available ) {
+		return (
+			<div className="catalogops-field">
+				<label htmlFor={ id }>{ field.label }</label>
+				<input id={ id } type="text" value="" disabled readOnly />
+				<span className="catalogops-muted">
+					{ __( 'Needs a paid plan', 'catalogops' ) }
+				</span>
+			</div>
+		);
 	}
 
-	return { relation: 'AND', scope, conditions };
+	const presence = ( field.operators || [] ).includes( 'exists' );
+
+	// A set control gets the same picker the built-in category and tag rows use,
+	// so a module field looks and behaves like a first-party one. It carries its
+	// own include/exclude toggle, which is why the mode select below is hidden
+	// for it rather than shown twice.
+	if ( 'term_set' === field.control || 'value_set' === field.control ) {
+		return (
+			<div className="catalogops-field">
+				<MultiSelect
+					label={ field.label }
+					options={ options }
+					value={ Array.isArray( value ) ? value : [] }
+					placeholder={ __( 'Any', 'catalogops' ) }
+					mode={ 'not_in' === mode ? 'not_in' : 'in' }
+					onChange={ ( next ) => set( { value: next } ) }
+					onModeChange={ ( next ) => set( { mode: next } ) }
+				/>
+			</div>
+		);
+	}
+
+	return (
+		<div className="catalogops-field">
+			<label htmlFor={ id }>{ field.label }</label>
+
+			{ 'toggle' === field.control ? (
+				<select
+					id={ id }
+					value={ '' === value ? '' : String( value ) }
+					onChange={ ( e ) =>
+						set( {
+							value:
+								'' === e.target.value
+									? ''
+									: 'true' === e.target.value,
+						} )
+					}
+				>
+					<option value="">{ __( 'Any', 'catalogops' ) }</option>
+					<option value="true">{ __( 'Yes', 'catalogops' ) }</option>
+					<option value="false">{ __( 'No', 'catalogops' ) }</option>
+				</select>
+			) : (
+				<input
+					id={ id }
+					type={
+						'number' === field.control || 'money' === field.control
+							? 'number'
+							: 'text'
+					}
+					value={ value }
+					disabled={ 'exists' === mode || 'not_exists' === mode }
+					onChange={ ( e ) => set( { value: e.target.value } ) }
+				/>
+			) }
+
+			<select
+				value={ mode }
+				aria-label={ __( 'How to match', 'catalogops' ) }
+				onChange={ ( e ) => set( { mode: e.target.value } ) }
+			>
+				<option value="in">{ __( 'is', 'catalogops' ) }</option>
+				<option value="not_in">{ __( 'is not', 'catalogops' ) }</option>
+				{ presence && (
+					<option value="exists">
+						{ __( 'has any value', 'catalogops' ) }
+					</option>
+				) }
+				{ presence && (
+					<option value="not_exists">
+						{ __( 'has no value', 'catalogops' ) }
+					</option>
+				) }
+			</select>
+		</div>
+	);
 }
 
 /**
@@ -5223,12 +5175,11 @@ function App() {
 	// Bumped after an operation settles or a schedule is created, to clear the
 	// filter, bulk-edit, and schedule inputs for a fresh start.
 	const [ resetKey, setResetKey ] = useState( 0 );
-	// Discovery data for the category and brand dropdowns. brandField is the
-	// filter field a brand maps to (catalog-specific; supplied by the API).
+	// Discovery data for the category and brand dropdowns.
 	const [ categories, setCategories ] = useState( [] );
 	const [ tags, setTags ] = useState( [] );
 	const [ brands, setBrands ] = useState( [] );
-	const [ brandField, setBrandField ] = useState( '' );
+	const [ moduleFields, setModuleFields ] = useState( [] );
 	const [ attributes, setAttributes ] = useState( [] );
 	// Bumped whenever a schedule is created or acted on, to reload the list.
 	const [ schedulesKey, setSchedulesKey ] = useState( 0 );
@@ -5243,7 +5194,7 @@ function App() {
 	// The filter that was actually applied to the table (frozen on Apply), so
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
-		buildFilter( emptyForm(), 'product', '' )
+		buildFilter( emptyForm(), 'product' )
 	);
 
 	// First-run onboarding + the mandatory backup acknowledgement (CONTEXT §9).
@@ -5271,13 +5222,16 @@ function App() {
 			.then( ( res ) => setTags( res.tags || [] ) )
 			.catch( () => {} );
 		apiFetch( { path: '/catalogops/v1/fields/brands' } )
-			.then( ( res ) => {
-				setBrands( res.brands || [] );
-				setBrandField( res.field || '' );
-			} )
+			.then( ( res ) => setBrands( res.brands || [] ) )
 			.catch( () => {} );
 		apiFetch( { path: '/catalogops/v1/fields/attributes' } )
 			.then( ( res ) => setAttributes( res.attributes || [] ) )
+			.catch( () => {} );
+		// The fields modules register. An installation with none answers an empty
+		// list, and the section below then renders nothing at all — which is what
+		// every site looks like until a module ships.
+		apiFetch( { path: '/catalogops/v1/fields/filterable' } )
+			.then( ( res ) => setModuleFields( res.fields || [] ) )
 			.catch( () => {} );
 	}, [] );
 
@@ -5288,7 +5242,7 @@ function App() {
 
 	const run = useCallback(
 		( toPage ) => {
-			const filter = buildFilter( form, scope, brandField );
+			const filter = buildFilter( form, scope, moduleFields );
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
@@ -5317,7 +5271,7 @@ function App() {
 				)
 				.finally( () => setLoading( false ) );
 		},
-		[ form, scope, brandField ]
+		[ form, scope, moduleFields ]
 	);
 
 	useEffect( () => {
@@ -5344,13 +5298,13 @@ function App() {
 	const resetAll = useCallback( () => {
 		const empty = emptyForm();
 		setForm( empty );
-		setAppliedFilter( buildFilter( empty, scope, brandField ) );
+		setAppliedFilter( buildFilter( empty, scope, moduleFields ) );
 		setItems( [] );
 		setTotal( 0 );
 		setOtherScope( null );
 		setPage( 1 );
 		setResetKey( ( k ) => k + 1 );
-	}, [ scope, brandField ] );
+	}, [ scope, moduleFields ] );
 
 	// Apply: reset only once the operation has settled (its ProgressBar stays).
 	const onApplyDone = useCallback( () => {
@@ -5522,10 +5476,7 @@ function App() {
 												'Brand',
 												'catalogops'
 											) }
-											options={ brands.map( ( b ) => ( {
-												id: b,
-												name: b,
-											} ) ) }
+											options={ brands }
 											value={ form.brand }
 											onChange={ ( ids ) =>
 												setForm( {
@@ -5732,6 +5683,44 @@ function App() {
 										</div>
 									</div>
 								</div>
+
+								{ /* The fields modules add, below the built-in
+								     controls rather than mixed into them. A field
+								     that means nothing in this scope is not
+								     rendered, for the same reason the attribute
+								     row is hidden under the product scope: a
+								     control that cannot produce a condition is a
+								     control that lies. */ }
+								{ moduleFields.filter( ( f ) =>
+									( f.scopes || [] ).includes( scope )
+								).length > 0 && (
+									<div className="catalogops-filter-fields">
+										{ moduleFields
+											.filter( ( f ) =>
+												( f.scopes || [] ).includes(
+													scope
+												)
+											)
+											.map( ( f ) => (
+												<ModuleField
+													key={ f.key }
+													field={ f }
+													row={
+														form.modules[ f.key ]
+													}
+													onChange={ ( next ) =>
+														setForm( {
+															...form,
+															modules: {
+																...form.modules,
+																[ f.key ]: next,
+															},
+														} )
+													}
+												/>
+											) ) }
+									</div>
+								) }
 
 								<div className="catalogops-filter-row">
 									<button

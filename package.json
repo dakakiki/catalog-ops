@@ -9,7 +9,9 @@
         "start": "wp-scripts start",
         "format": "wp-scripts format assets/src",
         "lint:js": "wp-scripts lint-js assets/src",
-        "package": "wp-scripts build && php bin/build.php"
+        "package": "wp-scripts build && php bin/build.php",
+        "test:js": "wp-scripts test-unit-js",
+        "test:js:watch": "wp-scripts test-unit-js --watch"
     },
     "devDependencies": {
         "@wordpress/api-fetch": "^7.52.0",
