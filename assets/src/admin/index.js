@@ -2699,7 +2699,7 @@ function BulkEdit( {
 										id="catalogops-expression"
 										className="catalogops-formula-input"
 										rows={ 3 }
-										placeholder="roundto( cost * 1.35, 0.99 )"
+										placeholder="roundto( cost * 1.35, 1 ) - 0.01"
 										value={ expression }
 										onChange={ ( e ) => {
 											invalidate();
@@ -2749,7 +2749,11 @@ function BulkEdit( {
 												<code>floor</code>,{ ' ' }
 												<code>
 													roundto(value, step)
-												</code>
+												</code>{ ' ' }
+												{ __(
+													'— rounds to the nearest multiple of step',
+													'catalogops'
+												) }
 												, <code>min</code>,{ ' ' }
 												<code>max</code>,{ ' ' }
 												<code>abs</code>
@@ -2780,12 +2784,27 @@ function BulkEdit( {
 												) }
 											</li>
 											<li>
+												<code>sale_price</code> —{ ' ' }
+												{ __(
+													'make the discount permanent: the price becomes what the product is already selling for, and the sale stops showing. Products with no sale price are skipped.',
+													'catalogops'
+												) }
+											</li>
+											<li>
 												<code>
-													roundto( cost * 1.35, 0.99 )
+													roundto( cost * 1.35, 1 ) -
+													0.01
 												</code>{ ' ' }
 												—{ ' ' }
 												{ __(
-													'35% markup on cost, rounded to end in .99',
+													'35% markup on cost, ending in .99',
+													'catalogops'
+												) }
+											</li>
+											<li>
+												<code>cost / 0.7</code> —{ ' ' }
+												{ __(
+													'price for a 30% margin — a markup of 30% would be cost × 1.3, which leaves you 23%',
 													'catalogops'
 												) }
 											</li>
@@ -2797,6 +2816,16 @@ function BulkEdit( {
 												—{ ' ' }
 												{ __(
 													'20% off, but never below cost + 10%',
+													'catalogops'
+												) }
+											</li>
+											<li>
+												<code>
+													regular_price / 1.2 * 1.25
+												</code>{ ' ' }
+												—{ ' ' }
+												{ __(
+													'carry a VAT change from 20% to 25% through, leaving the net price alone',
 													'catalogops'
 												) }
 											</li>
