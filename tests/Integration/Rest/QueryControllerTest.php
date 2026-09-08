@@ -9,10 +9,22 @@
 
 namespace CatalogOps\Tests\Integration\Rest;
 
+use CatalogOps\Licensing\License;
+use CatalogOps\Query\Fields\Field_Storage;
+use CatalogOps\Query\Fields\Filter_Control;
+use CatalogOps\Query\Fields\Filter_Field;
+use CatalogOps\Query\Fields\Filter_Provider;
+use CatalogOps\Query\Fields\Filter_Providers;
+use CatalogOps\Query\Fields\Value_Kind;
+use CatalogOps\Query\Operator;
+use CatalogOps\Query\Query_Engine;
+use CatalogOps\Query\Query_Scope;
+use CatalogOps\Rest\Query_Controller;
 use WC_Product_Attribute;
 use WC_Product_Simple;
 use WC_Product_Variable;
 use WC_Product_Variation;
+use WP_Error;
 use WP_REST_Request;
 use WP_UnitTestCase;
 
@@ -451,6 +463,134 @@ final class QueryControllerTest extends WP_UnitTestCase {
 	 * @param int                  $per_page Page size.
 	 * @return array<string, mixed>
 	 */
+	/**
+	 * The empty-result hint asks the same filter in the OTHER scope, and a module
+	 * field that applies to one scope only turns that question into a refusal.
+	 * Reported live: Products was selected, an ACF condition narrowed the result to
+	 * nothing, and the table answered "The field acf:field_cops_supplier does not
+	 * apply to variations." — a sentence about variations, to somebody who had
+	 * asked about products and never mentioned variations. The empty result they
+	 * had actually asked for was nowhere on screen, and the count from the previous
+	 * run was still above the message contradicting it.
+	 *
+	 * Every ACF group has this shape: ACF registers a group per post type, so
+	 * nearly every field a shop adds is products-only. The hint has to stay silent
+	 * rather than escalate.
+	 */
+	public function test_a_field_that_means_nothing_in_the_other_scope_is_not_an_error(): void {
+		// Present, so a filter that wrongly matched everything would be visible.
+		$this->make_product( 10 );
+
+		$controller = $this->controller_with_a_products_only_field();
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'filter' => array(
+					'scope'      => 'product',
+					'conditions' => array(
+						array(
+							'field'    => 'demo:supplier',
+							'operator' => '=',
+							'value'    => 'nobody supplies this',
+						),
+					),
+				),
+			)
+		);
+
+		$response = $controller->query( $request );
+
+		$this->assertSame( 200, $response->get_status(), 'An empty result is an answer, not a bad request.' );
+
+		$data = $response->get_data();
+
+		$this->assertSame( 0, $data['total'] );
+		$this->assertSame( array(), $data['items'] );
+		$this->assertNull(
+			$data['other_scope'],
+			'There is nothing to suggest: the field does not exist in the other scope.'
+		);
+	}
+
+	/**
+	 * And the refusal must still reach the user when it is about the scope they
+	 * ARE looking at — that one is a real problem with a real fix, and swallowing
+	 * it would leave a condition nobody could see was broken.
+	 */
+	public function test_the_same_field_still_refuses_in_the_scope_it_does_not_apply_to(): void {
+		$this->make_product( 10 );
+
+		$controller = $this->controller_with_a_products_only_field();
+
+		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
+		$request->set_body_params(
+			array(
+				'filter' => array(
+					'scope'      => 'variation',
+					'conditions' => array(
+						array(
+							'field'    => 'demo:supplier',
+							'operator' => '=',
+							'value'    => 'anyone',
+						),
+					),
+				),
+			)
+		);
+
+		$response = $controller->query( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 400, $response->get_error_data()['status'] );
+		$this->assertStringContainsString( 'demo:supplier', $response->get_error_message() );
+	}
+
+	/**
+	 * A controller whose registry holds one field on products only — the shape of
+	 * every ACF field group, since ACF registers a group against a post type.
+	 */
+	private function controller_with_a_products_only_field(): Query_Controller {
+		global $wpdb;
+
+		$provider = new class() implements Filter_Provider {
+
+			public function module(): string {
+				return '';
+			}
+
+			public function label(): string {
+				return 'Demo';
+			}
+
+			public function filter_fields(): array {
+				return array(
+					new Filter_Field(
+						'demo:supplier',
+						'Supplier',
+						Filter_Control::TEXT,
+						array( Operator::EQUALS ),
+						array( Query_Scope::PRODUCT )
+					),
+				);
+			}
+
+			public function handles_filter( string $key ): bool {
+				return str_starts_with( $key, 'demo:' );
+			}
+
+			public function storage_for( string $key, Query_Scope $scope ): Field_Storage {
+				unset( $key, $scope );
+
+				return Field_Storage::post_meta( 'demo_supplier', Value_Kind::TEXT );
+			}
+		};
+
+		$registry = new Filter_Providers( new License( true, true ), $provider );
+
+		return new Query_Controller( new Query_Engine( $wpdb, $registry ), $wpdb );
+	}
+
 	private function dispatch( array $filter, int $page = 1, int $per_page = 25 ): array {
 		$request = new WP_REST_Request( 'POST', '/catalogops/v1/products/query' );
 		$request->set_body_params(

@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Rest;
 
+use CatalogOps\Licensing\License_Limited;
 use CatalogOps\Operations\Formula\Variables;
 use CatalogOps\Query\Filter;
 use CatalogOps\Query\Query_Engine;
@@ -115,11 +116,13 @@ final class Query_Controller {
 		$per_page = min( 200, max( 1, (int) $request->get_param( 'per_page' ) ) );
 
 		// This is the table someone is looking at while they build a filter, so it is
-		// where a refusal lands first and hardest. Both engine calls share the try on
-		// purpose: other_scope() re-asks the same filter, and it only asks when the
-		// first call found nothing — exactly the state a filter naming a field that
-		// has gone away ends up in. Guarding only the first would turn the 400 into a
-		// 500 on the one path that reaches the second.
+		// where a refusal lands first and hardest: a filter naming a field that has
+		// gone away has to come back as a 400 the table can print, not a fatal.
+		//
+		// `other_scope()` is inside the try but no longer relies on it — it catches
+		// its own refusals and answers null, because a field that means nothing in
+		// the OTHER scope is not a problem with the query that was asked. Letting
+		// that one through turned "no products match" into an error about variations.
 		try {
 			$filter   = Filter::from_array( $filter_data );
 			$ids      = $this->engine->resolve( $filter );
@@ -172,7 +175,28 @@ final class Query_Controller {
 		}
 
 		$other = $filter->scope()->other();
-		$count = $this->engine->count( $filter->for_scope( $other ) );
+
+		try {
+			$count = $this->engine->count( $filter->for_scope( $other ) );
+		} catch ( InvalidArgumentException | License_Limited $e ) {
+			// The filter names a field that means nothing in the other scope — an
+			// ACF group registered on products, WPML's variation-only duplicate
+			// flag — or one whose module the licence does not cover there. That is
+			// not an error: it is the answer to this method's question, and the
+			// answer is "there is nothing to suggest".
+			//
+			// It must never escape, and the reason is what made this worth a
+			// docblock. This method is only reached when the query found NOTHING,
+			// so letting the refusal through replaced a legitimate "no products
+			// match" with a 400 — and the message it carried talked about
+			// variations, to a user who was looking at Products and had asked
+			// nothing about variations. The result they actually wanted was
+			// nowhere on screen, and the stale count from the previous run was
+			// still sitting above the message contradicting it.
+			unset( $e );
+
+			return null;
+		}
 
 		if ( 0 === $count ) {
 			// Nothing there either: the filter is simply too narrow, and pointing
