@@ -1888,3 +1888,47 @@ vocabulary. Scoped and class+class deep for the same reason as
 	text-transform: uppercase;
 	color: var(--co-ink);
 }
+
+/* Four across at most, and never a ragged last line.
+   
+   The built-in rows are hand-authored: each one holds two to four controls the
+   author chose to sit together, so a wrapping flex row is right for them. A
+   module's fields are not authored here at all — there may be three or thirty,
+   and they arrive in whatever order the shop owner arranged them in ACF. Flex
+   wrapping gave that a different rhythm on every site and packed eight fields
+   into pairs. A grid fixes the column count instead, so the section reads the
+   same whatever a module registers.
+   
+   `minmax(0, 1fr)` rather than `1fr`: a grid item's default `min-width: auto`
+   refuses to shrink below its content, and a select with a long option would
+   otherwise push the track wider than its share and break the alignment. */
+.catalogops-module-group .catalogops-filter-row {
+	display: grid;
+	grid-template-columns: repeat( 2, minmax( 0, 1fr ) );
+	gap: 14px 16px;
+	align-items: start;
+}
+
+@media ( min-width: 1100px ) {
+	.catalogops-module-group .catalogops-filter-row {
+		grid-template-columns: repeat( 4, minmax( 0, 1fr ) );
+	}
+}
+
+/* A grid track already sets the width, so the multiselect must stop asking for
+   its own. Left alone, `flex: 1 1 220px` plus `max-width: 340px` makes a set
+   field a different width from the text field beside it in the same column. */
+.catalogops-module-group .catalogops-field,
+.catalogops-module-group .catalogops-field--multi {
+	min-width: 0;
+	max-width: none;
+	flex: initial;
+}
+
+.catalogops-module-group .catalogops-field select,
+.catalogops-module-group .catalogops-field input[type='text'],
+.catalogops-module-group .catalogops-field input[type='number'] {
+	width: 100%;
+	max-width: none;
+	box-sizing: border-box;
+}
