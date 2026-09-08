@@ -40,6 +40,11 @@ export function emptyForm() {
 		attribute: '',
 		attributeValues: [],
 		attributeMode: 'in',
+		// Keyed by field key, each `{ value, mode }`. Empty rather than
+		// pre-populated from the descriptors: a form built before the field list
+		// arrives must still be a valid form, and a row nobody touched must not
+		// become a condition.
+		modules: {},
 	};
 }
 
@@ -103,7 +108,153 @@ export function reconcileTagSelection( previous, next ) {
 	return next;
 }
 
-export function buildFilter( form, scope, brandField ) {
+/**
+ * The controls whose value is a set rather than a single thing.
+ */
+const SET_CONTROLS = [ 'term_set', 'value_set' ];
+
+/**
+ * Coerce a module field's value to the shape its control implies.
+ *
+ * Term sets send numeric ids and value sets send strings, and the difference is
+ * not cosmetic: the engine casts a term id to an integer and would silently turn
+ * a string into 0, which matches nothing and reads as an over-narrow filter.
+ *
+ * @param {string} control The control kind from the descriptor.
+ * @param {*}      value   Whatever the control is holding.
+ * @return {*} The value to send, or undefined when there is nothing to send.
+ */
+export function moduleValue( control, value ) {
+	if ( SET_CONTROLS.includes( control ) ) {
+		const list = ( value || [] ).filter( ( one ) => one !== '' );
+
+		if ( ! list.length ) {
+			return undefined;
+		}
+
+		return 'term_set' === control ? list.map( Number ) : list.map( String );
+	}
+
+	if ( 'toggle' === control ) {
+		// A toggle has three states, not two: on, off, and "not asked". Only the
+		// third means no condition — an explicit "off" is a real question.
+		if ( '' === value || undefined === value || null === value ) {
+			return undefined;
+		}
+
+		return value ? '1' : '0';
+	}
+
+	const single = 'string' === typeof value ? value.trim() : value;
+
+	if ( '' === single || undefined === single || null === single ) {
+		return undefined;
+	}
+
+	return 'number' === control || 'money' === control
+		? Number( single )
+		: single;
+}
+
+/**
+ * The operator a module row sends, chosen from what the field actually declares.
+ *
+ * The descriptor is the authority, not this file. A field that does not declare
+ * the operator its control would naturally use gets no condition rather than one
+ * the engine will refuse — and returning nothing here is safe only because the
+ * caller drops the row entirely, which narrows nothing and widens nothing.
+ *
+ * @param {Object} field The descriptor.
+ * @param {string} mode  'in' for include, 'not_in' for exclude.
+ * @return {string|undefined} The operator token, or undefined.
+ */
+export function moduleOperator( field, mode ) {
+	const declared = field.operators || [];
+	const exclude = 'not_in' === mode;
+
+	const wanted = SET_CONTROLS.includes( field.control )
+		? [ exclude ? 'not_in' : 'in' ]
+		: [ exclude ? '!=' : '=', exclude ? 'not_in' : 'in', 'contains' ];
+
+	return wanted.find( ( operator ) => declared.includes( operator ) );
+}
+
+/**
+ * The conditions a module's fields contribute.
+ *
+ * Kept out of buildFilter's body so the rule that governs them is readable on
+ * its own: a row contributes a condition only when the field is available, means
+ * something in this scope, holds a value, and declares an operator for it. Any
+ * one of those missing drops the row — never a partial condition, because a
+ * condition the engine refuses stops the whole filter, and one it misreads is
+ * worse.
+ *
+ * @param {Object} modules Values keyed by field key: `{ value, mode }`.
+ * @param {Array}  fields  Descriptors from /fields/filterable.
+ * @param {string} scope   'product' or 'variation'.
+ * @return {Array} Conditions.
+ */
+export function moduleConditions( modules, fields, scope ) {
+	const conditions = [];
+
+	( fields || [] ).forEach( ( field ) => {
+		if ( ! field.available ) {
+			return;
+		}
+
+		if ( ! ( field.scopes || [] ).includes( scope ) ) {
+			return;
+		}
+
+		const row = ( modules || {} )[ field.key ];
+
+		if ( ! row ) {
+			return;
+		}
+
+		// Presence is asked FIRST, and the order is load-bearing. It is the one
+		// question carrying no value, and its operator IS the mode — so resolving
+		// an include/exclude operator before getting here would drop a field that
+		// declares only `exists` and `not_exists`, which is exactly what a
+		// presence-only field is.
+		if ( 'exists' === row.mode || 'not_exists' === row.mode ) {
+			if ( ! ( field.operators || [] ).includes( row.mode ) ) {
+				return;
+			}
+
+			conditions.push( { field: field.key, operator: row.mode } );
+
+			return;
+		}
+
+		const operator = moduleOperator( field, row.mode );
+
+		if ( ! operator ) {
+			return;
+		}
+
+		const value = moduleValue( field.control, row.value );
+
+		if ( undefined === value ) {
+			return;
+		}
+
+		conditions.push( { field: field.key, operator, value } );
+	} );
+
+	return conditions;
+}
+
+/**
+ * Build the filter payload from the form state and target scope.
+ *
+ * @param {Object} form         Form values.
+ * @param {string} scope        'product' or 'variation'.
+ * @param {string} brandField   The filter field a brand maps to (from the API).
+ * @param {Array}  moduleFields Descriptors from /fields/filterable.
+ * @return {Object} Filter in the API's shape.
+ */
+export function buildFilter( form, scope, brandField, moduleFields = [] ) {
 	const conditions = [];
 
 	if ( form.priceMin !== '' ) {
@@ -194,6 +345,11 @@ export function buildFilter( form, scope, brandField ) {
 			} );
 		}
 	}
+
+	// Appended after the built-in controls, so a module field reads in the
+	// payload exactly where it reads on screen. Every condition is still ANDed:
+	// a module cannot widen a filter, only narrow it.
+	conditions.push( ...moduleConditions( form.modules, moduleFields, scope ) );
 
 	return { relation: 'AND', scope, conditions };
 }

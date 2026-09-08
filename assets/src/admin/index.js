@@ -1014,6 +1014,102 @@ function MultiSelect( {
 }
 
 /**
+ * One module field's row.
+ *
+ * Appended below the eight built-in controls rather than replacing them. The
+ * built-ins are 296 lines of tested JSX with bespoke behaviour each — a "Without
+ * tag" sentinel that must not go through Number(), an attribute pair that only
+ * exists under one scope — and rewriting them in the same change that introduces
+ * the mechanism would have risked the whole filter to save a section boundary.
+ *
+ * @param {Object}   props          Props.
+ * @param {Object}   props.field    The descriptor from /fields/filterable.
+ * @param {Object}   props.row      This field's `{ value, mode }`, or undefined.
+ * @param {Function} props.onChange Called with the next row.
+ */
+function ModuleField( { field, row, onChange } ) {
+	const value = row ? row.value : '';
+	const mode = row ? row.mode : 'in';
+	const id = `catalogops-module-${ field.key.replace( /[^a-z0-9]/gi, '-' ) }`;
+
+	const set = ( next ) => onChange( { value, mode, ...next } );
+
+	// A field the licence does not cover is shown rather than hidden, and shown
+	// disabled rather than absent. A saved filter can already name it, and a
+	// condition the user cannot see is one they cannot remove — while the engine
+	// goes on refusing to run the filter that carries it.
+	if ( ! field.available ) {
+		return (
+			<div className="catalogops-field">
+				<label htmlFor={ id }>{ field.label }</label>
+				<input id={ id } type="text" value="" disabled readOnly />
+				<span className="catalogops-muted">
+					{ __( 'Needs a paid plan', 'catalogops' ) }
+				</span>
+			</div>
+		);
+	}
+
+	const presence = ( field.operators || [] ).includes( 'exists' );
+
+	return (
+		<div className="catalogops-field">
+			<label htmlFor={ id }>{ field.label }</label>
+
+			{ 'toggle' === field.control ? (
+				<select
+					id={ id }
+					value={ '' === value ? '' : String( value ) }
+					onChange={ ( e ) =>
+						set( {
+							value:
+								'' === e.target.value
+									? ''
+									: 'true' === e.target.value,
+						} )
+					}
+				>
+					<option value="">{ __( 'Any', 'catalogops' ) }</option>
+					<option value="true">{ __( 'Yes', 'catalogops' ) }</option>
+					<option value="false">{ __( 'No', 'catalogops' ) }</option>
+				</select>
+			) : (
+				<input
+					id={ id }
+					type={
+						'number' === field.control || 'money' === field.control
+							? 'number'
+							: 'text'
+					}
+					value={ value }
+					disabled={ 'exists' === mode || 'not_exists' === mode }
+					onChange={ ( e ) => set( { value: e.target.value } ) }
+				/>
+			) }
+
+			<select
+				value={ mode }
+				aria-label={ __( 'How to match', 'catalogops' ) }
+				onChange={ ( e ) => set( { mode: e.target.value } ) }
+			>
+				<option value="in">{ __( 'is', 'catalogops' ) }</option>
+				<option value="not_in">{ __( 'is not', 'catalogops' ) }</option>
+				{ presence && (
+					<option value="exists">
+						{ __( 'has any value', 'catalogops' ) }
+					</option>
+				) }
+				{ presence && (
+					<option value="not_exists">
+						{ __( 'has no value', 'catalogops' ) }
+					</option>
+				) }
+			</select>
+		</div>
+	);
+}
+
+/**
  * Poll an operation until it reaches a terminal status, then call onDone once.
  *
  * @param {Object|null} operation    The operation being watched.
@@ -5050,6 +5146,7 @@ function App() {
 	const [ tags, setTags ] = useState( [] );
 	const [ brands, setBrands ] = useState( [] );
 	const [ brandField, setBrandField ] = useState( '' );
+	const [ moduleFields, setModuleFields ] = useState( [] );
 	const [ attributes, setAttributes ] = useState( [] );
 	// Bumped whenever a schedule is created or acted on, to reload the list.
 	const [ schedulesKey, setSchedulesKey ] = useState( 0 );
@@ -5100,6 +5197,12 @@ function App() {
 		apiFetch( { path: '/catalogops/v1/fields/attributes' } )
 			.then( ( res ) => setAttributes( res.attributes || [] ) )
 			.catch( () => {} );
+		// The fields modules register. An installation with none answers an empty
+		// list, and the section below then renders nothing at all — which is what
+		// every site looks like until a module ships.
+		apiFetch( { path: '/catalogops/v1/fields/filterable' } )
+			.then( ( res ) => setModuleFields( res.fields || [] ) )
+			.catch( () => {} );
 	}, [] );
 
 	// The terms of the currently-selected attribute, for the value dropdown.
@@ -5109,7 +5212,7 @@ function App() {
 
 	const run = useCallback(
 		( toPage ) => {
-			const filter = buildFilter( form, scope, brandField );
+			const filter = buildFilter( form, scope, brandField, moduleFields );
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
@@ -5138,7 +5241,7 @@ function App() {
 				)
 				.finally( () => setLoading( false ) );
 		},
-		[ form, scope, brandField ]
+		[ form, scope, brandField, moduleFields ]
 	);
 
 	useEffect( () => {
@@ -5165,13 +5268,15 @@ function App() {
 	const resetAll = useCallback( () => {
 		const empty = emptyForm();
 		setForm( empty );
-		setAppliedFilter( buildFilter( empty, scope, brandField ) );
+		setAppliedFilter(
+			buildFilter( empty, scope, brandField, moduleFields )
+		);
 		setItems( [] );
 		setTotal( 0 );
 		setOtherScope( null );
 		setPage( 1 );
 		setResetKey( ( k ) => k + 1 );
-	}, [ scope, brandField ] );
+	}, [ scope, brandField, moduleFields ] );
 
 	// Apply: reset only once the operation has settled (its ProgressBar stays).
 	const onApplyDone = useCallback( () => {
@@ -5553,6 +5658,44 @@ function App() {
 										</div>
 									</div>
 								</div>
+
+								{ /* The fields modules add, below the built-in
+								     controls rather than mixed into them. A field
+								     that means nothing in this scope is not
+								     rendered, for the same reason the attribute
+								     row is hidden under the product scope: a
+								     control that cannot produce a condition is a
+								     control that lies. */ }
+								{ moduleFields.filter( ( f ) =>
+									( f.scopes || [] ).includes( scope )
+								).length > 0 && (
+									<div className="catalogops-filter-fields">
+										{ moduleFields
+											.filter( ( f ) =>
+												( f.scopes || [] ).includes(
+													scope
+												)
+											)
+											.map( ( f ) => (
+												<ModuleField
+													key={ f.key }
+													field={ f }
+													row={
+														form.modules[ f.key ]
+													}
+													onChange={ ( next ) =>
+														setForm( {
+															...form,
+															modules: {
+																...form.modules,
+																[ f.key ]: next,
+															},
+														} )
+													}
+												/>
+											) ) }
+									</div>
+								) }
 
 								<div className="catalogops-filter-row">
 									<button

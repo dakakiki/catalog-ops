@@ -14,6 +14,7 @@
 import {
 	buildFilter,
 	emptyForm,
+	moduleValue,
 	NO_TAG,
 	operatorFor,
 	reconcileTagSelection,
@@ -330,5 +331,163 @@ describe( 'reconcileTagSelection', () => {
 		expect( reconcileTagSelection( [ NO_TAG ], [ NO_TAG ] ) ).toEqual( [
 			NO_TAG,
 		] );
+	} );
+} );
+
+describe( 'module fields', () => {
+	const supplier = {
+		key: 'acf:supplier',
+		control: 'text',
+		operators: [ '=', '!=', 'in', 'exists', 'not_exists' ],
+		scopes: [ 'product' ],
+		available: true,
+	};
+
+	const conditions = ( modules, fields = [ supplier ], scope = 'product' ) =>
+		buildFilter( { ...emptyForm(), modules }, scope, '', fields )
+			.conditions;
+
+	it( 'adds a condition for a filled row', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: 'Globex', mode: 'in' } } )
+		).toEqual( [
+			{ field: 'acf:supplier', operator: '=', value: 'Globex' },
+		] );
+	} );
+
+	it( 'uses the exclusion operator the field declares', () => {
+		expect(
+			conditions( {
+				'acf:supplier': { value: 'Globex', mode: 'not_in' },
+			} )[ 0 ].operator
+		).toBe( '!=' );
+	} );
+
+	it( 'adds nothing for a row nobody filled in', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: '', mode: 'in' } } )
+		).toHaveLength( 0 );
+	} );
+
+	/**
+	 * A field the licence does not cover is still SERVED, so the UI can show it
+	 * locked. It must never reach the payload — the engine refuses it, and a
+	 * refusal stops the whole filter rather than just that row.
+	 */
+	it( 'never sends a field the licence does not cover', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: 'Globex', mode: 'in' } }, [
+				{ ...supplier, available: false },
+			] )
+		).toHaveLength( 0 );
+	} );
+
+	/**
+	 * The same guard the built-in attribute row has, for the same reason: a value
+	 * left behind by a scope switch must not travel into a scope where the field
+	 * means nothing.
+	 */
+	it( 'drops a field that does not apply to the current scope', () => {
+		expect(
+			conditions(
+				{ 'acf:supplier': { value: 'Globex', mode: 'in' } },
+				[ supplier ],
+				'variation'
+			)
+		).toHaveLength( 0 );
+	} );
+
+	/**
+	 * The descriptor is the authority. A field that declares no operator this row
+	 * could use contributes nothing rather than a condition the engine refuses.
+	 */
+	it( 'sends nothing when the field declares no usable operator', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: 'Globex', mode: 'in' } }, [
+				{ ...supplier, operators: [ 'between' ] },
+			] )
+		).toHaveLength( 0 );
+	} );
+
+	it( 'asks about presence without a value', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: '', mode: 'not_exists' } } )
+		).toEqual( [ { field: 'acf:supplier', operator: 'not_exists' } ] );
+	} );
+
+	/**
+	 * A presence-only field declares neither '=' nor 'in'. Resolving an
+	 * include/exclude operator before handling presence dropped it entirely.
+	 */
+	it( 'still answers presence for a field that declares only presence', () => {
+		expect(
+			conditions( { 'acf:supplier': { value: '', mode: 'exists' } }, [
+				{ ...supplier, operators: [ 'exists', 'not_exists' ] },
+			] )
+		).toEqual( [ { field: 'acf:supplier', operator: 'exists' } ] );
+	} );
+
+	it( 'appends module conditions after the built-in ones', () => {
+		const filter = buildFilter(
+			{
+				...emptyForm(),
+				priceMin: '10',
+				modules: { 'acf:supplier': { value: 'Globex', mode: 'in' } },
+			},
+			'product',
+			'',
+			[ supplier ]
+		);
+
+		expect( filter.conditions.map( ( c ) => c.field ) ).toEqual( [
+			'price',
+			'acf:supplier',
+		] );
+		expect( filter.relation ).toBe( 'AND' );
+	} );
+
+	it( 'is a no-op when no descriptors have arrived yet', () => {
+		expect(
+			buildFilter( emptyForm(), 'product', '' ).conditions
+		).toHaveLength( 0 );
+	} );
+} );
+
+describe( 'moduleValue', () => {
+	it( 'sends term ids as numbers and value sets as strings', () => {
+		expect( moduleValue( 'term_set', [ '5', '9' ] ) ).toEqual( [ 5, 9 ] );
+		expect( moduleValue( 'value_set', [ 'eco', 'sale' ] ) ).toEqual( [
+			'eco',
+			'sale',
+		] );
+	} );
+
+	it( 'sends a number control as a number', () => {
+		expect( moduleValue( 'number', '10' ) ).toBe( 10 );
+		expect( moduleValue( 'money', '9.99' ) ).toBe( 9.99 );
+	} );
+
+	it( 'keeps a zero, which is a value and not an empty box', () => {
+		expect( moduleValue( 'number', '0' ) ).toBe( 0 );
+	} );
+
+	it( 'trims text', () => {
+		expect( moduleValue( 'text', '  Globex ' ) ).toBe( 'Globex' );
+		expect( moduleValue( 'text', '   ' ) ).toBeUndefined();
+	} );
+
+	/**
+	 * A toggle has three states, not two. An explicit "off" is a real question;
+	 * only "not asked" means no condition.
+	 */
+	it( 'tells an unanswered toggle from one answered no', () => {
+		expect( moduleValue( 'toggle', '' ) ).toBeUndefined();
+		expect( moduleValue( 'toggle', false ) ).toBe( '0' );
+		expect( moduleValue( 'toggle', true ) ).toBe( '1' );
+	} );
+
+	it( 'sends nothing for an empty set', () => {
+		expect( moduleValue( 'term_set', [] ) ).toBeUndefined();
+		expect( moduleValue( 'value_set', [ '' ] ) ).toBeUndefined();
 	} );
 } );
