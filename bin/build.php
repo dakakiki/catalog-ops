@@ -201,6 +201,8 @@ if ( isset( $args['help'] ) || isset( $args['h'] ) ) {
 	co_say( '  --variant=free     omit the SDK (License resolves to unlimited)' );
 	co_say( '  --build            run `npm run build` before packaging' );
 	co_say( '  --output=PATH      output zip path (default dist/catalogops-<version>.zip)' );
+	co_say( '  --allow-missing-sdk  premium build without the SDK — every paid feature' );
+	co_say( '                       unlocked. Never for distribution.' );
 	exit( 0 );
 }
 
@@ -273,26 +275,40 @@ if ( 'premium' === $variant ) {
 	$include[] = 'freemius-secret.php';
 }
 
-$sdk_bundled = false;
+// Licensing is complete only when BOTH the SDK and its secret are staged. The
+// flag used to track the directory alone, so a build missing only the secret
+// still reported "Freemius SDK bundled" — the one line that would have told you
+// the zip was unlicensed, saying the opposite.
+$sdk_bundled = true;
 
 foreach ( $include as $rel ) {
 	$src = $root . DIRECTORY_SEPARATOR . str_replace( '/', DIRECTORY_SEPARATOR, $rel );
 
 	if ( ! file_exists( $src ) ) {
-		// The SDK and its secret are gitignored; warn but don't fail — the plugin
-		// runs without them (License resolves to unlimited).
+		// The SDK and its secret are gitignored, so a fresh clone does not have
+		// them — and without them License::resolve() returns unlimited(). That is
+		// correct for development and fatal for distribution: the zip is named
+		// the same, installs the same, and hands every visitor undo, formulas and
+		// scheduling for nothing. It used to be a warning, which is a line of
+		// build output nobody reads twice. Refuse instead, and make the escape
+		// hatch something you have to type.
 		if ( 'freemius' === $rel || 'freemius-secret.php' === $rel ) {
-			co_warn( "$rel not found — the premium build will behave as SDK-absent (unlimited)." );
+			if ( ! isset( $args['allow-missing-sdk'] ) ) {
+				co_fail(
+					"$rel is missing, so this premium build would ship with every paid feature unlocked.\n"
+					. "         Put the Freemius SDK back at freemius/ (and freemius-secret.php beside it),\n"
+					. '         or pass --allow-missing-sdk if you are deliberately building an unlicensed zip.'
+				);
+			}
+
+			co_warn( "$rel not found — building UNLICENSED at your request. Do not distribute this zip." );
+			$sdk_bundled = false;
 			continue;
 		}
 		if ( 'readme.txt' === $rel ) {
 			continue;
 		}
 		co_fail( "Required path missing: $rel" );
-	}
-
-	if ( 'freemius' === $rel ) {
-		$sdk_bundled = true;
 	}
 
 	co_copy( $src, $stage . DIRECTORY_SEPARATOR . str_replace( '/', DIRECTORY_SEPARATOR, $rel ) );
