@@ -178,6 +178,23 @@ if ( ! class_exists( 'wpdb' ) ) {
 		public function esc_like( $text ) { // phpcs:ignore
 			return addcslashes( (string) $text, '_%\\' );
 		}
+
+		/**
+		 * Undo prepare()'s internal escaping of a literal percent.
+		 *
+		 * Unlike its neighbours this one returns its input rather than null, because
+		 * it is not a database call: real wpdb only strips a placeholder hash that
+		 * its own prepare() put there. Present at all because PHP resolves a method
+		 * before it evaluates the arguments of the call — so a test asserting that
+		 * `count_sql()` refuses a filter would fail on the missing method here,
+		 * naming it, rather than on the refusal it is actually about.
+		 *
+		 * @param string $query Query.
+		 * @return string
+		 */
+		public function remove_placeholder_escape( $query ) { // phpcs:ignore
+			return (string) $query;
+		}
 	}
 }
 
