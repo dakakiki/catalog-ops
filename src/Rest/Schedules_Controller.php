@@ -16,6 +16,7 @@ use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedule_Status;
 use CatalogOps\Operations\Schedules;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Query\Filter_Fields;
 use DateTimeZone;
 use InvalidArgumentException;
@@ -61,17 +62,28 @@ final class Schedules_Controller {
 	private License $license;
 
 	/**
+	 * Module filter-field registry, or null when no modules can register.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $providers;
+
+	/**
 	 * Build the controller.
 	 *
-	 * @param Schedules       $schedules Schedules repository.
-	 * @param Schedule_Runner $runner    Schedule supervisor.
-	 * @param License|null    $license   Plan gating; defaults to unlimited
-	 *                                    (unlicensed development and tests).
+	 * @param Schedules             $schedules Schedules repository.
+	 * @param Schedule_Runner       $runner    Schedule supervisor.
+	 * @param License|null          $license   Plan gating; defaults to unlimited
+	 *                                          (unlicensed development and tests).
+	 * @param Filter_Providers|null $providers Module field registry. Null means
+	 *                                          core keys only, which is what the
+	 *                                          tests and a site with no modules are.
 	 */
-	public function __construct( Schedules $schedules, Schedule_Runner $runner, ?License $license = null ) {
+	public function __construct( Schedules $schedules, Schedule_Runner $runner, ?License $license = null, ?Filter_Providers $providers = null ) {
 		$this->schedules = $schedules;
 		$this->runner    = $runner;
 		$this->license   = $license ?? License::unlimited();
+		$this->providers = $providers;
 	}
 
 	/**
@@ -209,7 +221,21 @@ final class Schedules_Controller {
 			// refused now rather than at 03:00. Schedules::create() writes the row
 			// itself rather than going through Operation_Service, so this is the only
 			// boundary that can catch it before it is stored.
-			Filter_Fields::assert_answerable( $filter );
+			//
+			// **Through the registry when there is one.** This used to call the static
+			// core-key list directly, which knows nothing about modules — so every
+			// module field was refused here and only here: the same filter previewed,
+			// ran and could be applied, and then "No filter field is called
+			// acf:field_cops_season" the moment the user asked for it on a schedule.
+			// {@see Operation_Service::assert_filter_answerable()} is the shape this
+			// now matches, and the two must not drift again: one of them refusing what
+			// the other allows is a user being told their filter is both fine and
+			// impossible.
+			if ( null === $this->providers ) {
+				Filter_Fields::assert_answerable( $filter );
+			} else {
+				$this->providers->assert_supported( $filter );
+			}
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		}

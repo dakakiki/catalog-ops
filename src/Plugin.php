@@ -542,7 +542,11 @@ final class Plugin {
 			static fn( Container $container ): Schedules_Controller => new Schedules_Controller(
 				$container->get( Schedules::class ),
 				$container->get( Schedule_Runner::class ),
-				$container->get( License::class )
+				$container->get( License::class ),
+				// So a schedule is checked against the same field list an
+				// interactive run is. Without it the controller falls back to core
+				// keys and refuses every module field — which it did.
+				$container->get( Filter_Providers::class )
 			)
 		);
 
