@@ -161,7 +161,16 @@ final class Wpml_Context {
 		// whole control empties. WooCommerce's own `product_brand` is exactly this
 		// case on a default install, and a brand is the same word in every language
 		// anyway.
-		if ( true !== apply_filters( 'wpml_is_translated_taxonomy', null, $taxonomy ) ) {
+		//
+		// Truthiness, not identity, and that is not laziness. WPML's answer comes
+		// from `icl_get_sub_setting( 'taxonomies_sync_option', $taxonomy )`
+		// (SitePress::is_translated_element), which returns whatever is stored —
+		// on the development site `product_cat` is the integer `1` and `pa_color`
+		// is the *string* `'1'`. A `true ===` test passed every unit test, because
+		// the stand-in returned a real boolean, and then mapped nothing at all
+		// against real WPML: the Serbian category picker came back holding the
+		// English ids.
+		if ( ! apply_filters( 'wpml_is_translated_taxonomy', null, $taxonomy ) ) {
 			return $term_id;
 		}
 

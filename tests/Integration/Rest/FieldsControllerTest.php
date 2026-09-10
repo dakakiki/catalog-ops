@@ -187,4 +187,96 @@ final class FieldsControllerTest extends WP_UnitTestCase {
 
 		$this->assertContains( $response->get_status(), array( 401, 403 ) );
 	}
+
+	/**
+	 * A translated term is a different term with a different id, so a picker built
+	 * in one language hands the engine ids no product in the other carries.
+	 *
+	 * **The listener below is the trap this test exists for, and it is WPML's real
+	 * behaviour rather than an invention.** WPML puts `SitePress::get_term_adjust_id`
+	 * on the `get_term` filter at priority 1, and it translates a term into the
+	 * language the REQUEST is in — not the one that was asked about. So a mapping
+	 * that is correct at every other step ends by calling `get_term( 73 )` and
+	 * being handed back 18, and the picker fills with exactly the ids the mapping
+	 * exists to replace. Measured on the live catalogue: every id came back in the
+	 * default language while `wpml_object_id` was answering 73 correctly.
+	 */
+	public function test_a_term_list_is_offered_in_the_requested_language(): void {
+		$english = self::factory()->term->create( array( 'taxonomy' => 'product_cat', 'name' => 'LF Apparel' ) );
+		$serbian = self::factory()->term->create( array( 'taxonomy' => 'product_cat', 'name' => 'LF Odeca' ) );
+
+		add_filter( 'wpml_current_language', static fn(): string => 'en' );
+		add_filter(
+			'wpml_is_translated_taxonomy',
+			// The integer WPML really stores, not a boolean.
+			static fn( $answer, $taxonomy ) => 'product_cat' === $taxonomy ? 1 : $answer,
+			10,
+			2
+		);
+		add_filter(
+			'wpml_object_id',
+			static fn( $id ) => (int) $id === $english ? $serbian : null,
+			10,
+			4
+		);
+
+		// WPML translating a term back into the request's own language, which is
+		// English here — exactly what broke this on the live site.
+		add_filter(
+			'get_term',
+			static function ( $term ) use ( $english, $serbian ) {
+				return ( $term instanceof \WP_Term && $serbian === $term->term_id )
+					? \WP_Term::get_instance( $english, 'product_cat' )
+					: $term;
+			},
+			1
+		);
+
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/fields/categories' );
+		$request->set_param( 'language', 'sr' );
+
+		$ids = array_column( rest_do_request( $request )->get_data()['categories'], 'id' );
+
+		$this->assertContains( $serbian, $ids, 'the Serbian term must be offered' );
+		$this->assertNotContains( $english, $ids, 'the English term must not be' );
+	}
+
+	/**
+	 * A taxonomy WPML does not translate has one shared set of terms — WooCommerce's
+	 * `product_brand` is this on a default install — and mapping it would empty the
+	 * control in every language but the default.
+	 */
+	public function test_an_untranslated_taxonomys_list_survives_a_language(): void {
+		if ( ! taxonomy_exists( 'product_brand' ) ) {
+			$this->markTestSkipped( 'This WooCommerce has no product_brand taxonomy.' );
+		}
+
+		$brand = self::factory()->term->create( array( 'taxonomy' => 'product_brand', 'name' => 'LF Acme' ) );
+
+		add_filter( 'wpml_current_language', static fn(): string => 'en' );
+		// product_cat is translated; product_brand is not named, so it is not.
+		add_filter(
+			'wpml_is_translated_taxonomy',
+			static fn( $answer, $taxonomy ) => 'product_cat' === $taxonomy ? 1 : $answer,
+			10,
+			2
+		);
+		add_filter( 'wpml_object_id', static fn() => null, 10, 4 );
+
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/fields/brands' );
+		$request->set_param( 'language', 'sr' );
+
+		$this->assertContains( $brand, array_column( rest_do_request( $request )->get_data()['brands'], 'id' ) );
+	}
+
+	/**
+	 * The pattern on the argument is the only thing standing between a language and
+	 * the statement it ends up in, so it is worth one assertion of its own.
+	 */
+	public function test_a_language_that_is_not_a_language_code_is_refused(): void {
+		$request = new WP_REST_Request( 'GET', '/catalogops/v1/fields/categories' );
+		$request->set_param( 'language', "sr' OR 1=1" );
+
+		$this->assertSame( 400, rest_do_request( $request )->get_status() );
+	}
 }

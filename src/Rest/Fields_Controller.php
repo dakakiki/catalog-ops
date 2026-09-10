@@ -304,7 +304,18 @@ final class Fields_Controller {
 				continue;
 			}
 
-			$translated = get_term( $id, $taxonomy );
+			// `WP_Term::get_instance()` and NOT `get_term()`, and this is the whole
+			// trick. WPML puts `SitePress::get_term_adjust_id` on the `get_term`
+			// filter at priority 1, which translates a term into the language the
+			// REQUEST is in — so asking `get_term()` for the Serbian category 73
+			// hands back the English 18, and the picker fills with exactly the ids
+			// this method exists to replace. Measured: every id came back English
+			// while every other step of the mapping was correct.
+			//
+			// `WP_Term::get_instance()` reads the row (through the same cache) and
+			// applies no filters, so the term that comes back is the term that was
+			// asked for.
+			$translated = \WP_Term::get_instance( $id, $taxonomy );
 
 			if ( $translated instanceof \WP_Term ) {
 				$localized[ $id ] = $translated;

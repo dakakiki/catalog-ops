@@ -167,14 +167,43 @@ final class WpmlContextTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * WPML stores an attribute taxonomy's setting as the STRING '1' — measured in
+	 * `taxonomies_sync_option` on the development site, where `pa_color` and
+	 * `pa_size` are `'1'` while `product_cat` is the integer `1`. Both mean
+	 * translated, and a test that only ever saw one of them would let the other
+	 * silently stop mapping.
+	 */
+	public function test_a_taxonomy_whose_setting_is_a_string_still_maps(): void {
+		$this->speak( 'en' );
+
+		add_filter(
+			'wpml_is_translated_taxonomy',
+			static fn( $answer, $taxonomy ) => 'pa_color' === $taxonomy ? '1' : $answer,
+			10,
+			2
+		);
+		$this->translate_terms( array( 30 => 90 ) );
+
+		$this->assertSame( 90, $this->context->term_in_language( 30, 'pa_color', 'sr' ) );
+	}
+
+	/**
 	 * Stand where WPML stands on `wpml_is_translated_taxonomy`.
+	 *
+	 * **It answers `1`, and the integer is the point.** WPML's answer comes from
+	 * `icl_get_sub_setting( 'taxonomies_sync_option', $taxonomy )`, which returns
+	 * whatever is stored — the integer `1` for `product_cat`, the *string* `'1'`
+	 * for an attribute taxonomy. A stand-in that returned a real boolean made an
+	 * identity test pass here and map nothing at all against real WPML, where the
+	 * Serbian category picker came back holding the English ids. A stub politer
+	 * than the thing it stands for tests the stub.
 	 *
 	 * @param string ...$taxonomies The taxonomies WPML translates.
 	 */
 	private function translates( string ...$taxonomies ): void {
 		add_filter(
 			'wpml_is_translated_taxonomy',
-			static fn( $answer, $taxonomy ) => in_array( $taxonomy, $taxonomies, true ) ? true : $answer,
+			static fn( $answer, $taxonomy ) => in_array( $taxonomy, $taxonomies, true ) ? 1 : $answer,
 			10,
 			2
 		);
