@@ -72,8 +72,8 @@ cannot reproduce — though we will always try to tell you what we found.
 
 ## Refunds
 
-Fourteen days, any reason, no questions asked, one guarantee per customer. The
-whole policy is on the [Refund Policy](/refund-policy/) page.
+Fourteen days, any reason, no questions asked. The whole policy is on the
+[Refund Policy](/refund-policy/) page.
 
 ## What we do not promise
 

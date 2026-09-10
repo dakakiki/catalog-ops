@@ -19,14 +19,6 @@ guarantee that arrives with conditions attached is not much of a guarantee.
 So there are no conditions. Not "if you found a bug we could not fix". Not "if
 you have not downloaded it yet". You changed your mind; that is reason enough.
 
-## One guarantee per customer
-
-The guarantee exists so that a **first** purchase carries no risk. It is not a
-way to use the plugin a fortnight at a time.
-
-If you have already had a refund, a later purchase is final. Nothing else
-changes — you still get the free tier to evaluate with, for as long as you like.
-
 ## How to ask
 
 Email **contact@catalog-ops.app** from the address you bought with, or use the
