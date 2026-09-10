@@ -1,0 +1,6 @@
+node_modules/
+
+# style.css and assets/dist/ are BUILT from assets/src/ by webpack. They are
+# committed on purpose: WordPress reads the theme's name and version out of
+# style.css, so a checkout without it is not a theme at all, and a server that
+# deploys by pulling the repo has no Node on it.

@@ -1,0 +1,75 @@
+// Colour, type and measure. Every value below came from the agreed
+// prototype unchanged; the accent is the plugin's own orange, the colour
+// that means Undo, and it is the one loud colour on the site.
+
+:root {
+  --ground:        #fbfbfd;
+  --surface:       #ffffff;
+  --sunken:        #f1f1f7;
+  --ink:           #191830;
+  --ink-muted:     #55556e;
+  --ink-faint:     #8a8aa2;
+  --rule:          #e3e3ee;
+  --rule-strong:   #cfcfe0;
+  --indigo:        #4338ca;
+  --indigo-deep:   #312e81;
+  --indigo-wash:   #eeecfb;
+  --accent:        #d97706;
+  --accent-wash:   #fdf1e0;
+  --good:          #15803d;
+  --good-wash:     #e7f4ec;
+  --danger:        #b91c1c;
+  --danger-wash:   #fdeeec;
+  --shadow:        0 1px 2px rgba(25, 24, 48, .06), 0 8px 24px -12px rgba(25, 24, 48, .18);
+
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body:    "Newsreader", Georgia, "Times New Roman", serif;
+  --mono:    "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --measure: 34rem;
+  --wide:    70rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #0e0e1c;
+    --surface:     #16162a;
+    --sunken:      #1d1d35;
+    --ink:         #ecebf6;
+    --ink-muted:   #a4a3c0;
+    --ink-faint:   #74738f;
+    --rule:        #292944;
+    --rule-strong: #3a3a5c;
+    --indigo:      #9a92f8;
+    --indigo-deep: #c3bdff;
+    --indigo-wash: #201e3f;
+    --accent:      #f0a12e;
+    --accent-wash: #33240e;
+    --good:        #4ade80;
+    --good-wash:   #10301d;
+    --danger:      #fb7185;
+    --danger-wash: #33161c;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -14px rgba(0, 0, 0, .8);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #0e0e1c;
+  --surface:     #16162a;
+  --sunken:      #1d1d35;
+  --ink:         #ecebf6;
+  --ink-muted:   #a4a3c0;
+  --ink-faint:   #74738f;
+  --rule:        #292944;
+  --rule-strong: #3a3a5c;
+  --indigo:      #9a92f8;
+  --indigo-deep: #c3bdff;
+  --indigo-wash: #201e3f;
+  --accent:      #f0a12e;
+  --accent-wash: #33240e;
+  --good:        #4ade80;
+  --good-wash:   #10301d;
+  --danger:      #fb7185;
+  --danger-wash: #33161c;
+  --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -14px rgba(0, 0, 0, .8);
+}

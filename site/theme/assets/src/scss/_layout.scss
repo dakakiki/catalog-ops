@@ -1,0 +1,94 @@
+// The frame every page shares: the sticky masthead, the footer, and the
+// back-to-top control that hides itself while there is nothing to go back to.
+
+/* ---------------------------------------------------------------- masthead */
+
+.masthead {
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.masthead .wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: .75rem;
+}
+/* The plugin's own lockup, matched to assets/email-logo.png: the stacked-layers
+   mark on its indigo gradient, "Catalog" in ink and "Ops" in indigo, and the
+   letterspaced tagline under both. "Ops" is the coloured half — it was grey
+   here, which quietly made it a different brand from the one in the admin. */
+.brand { display: flex; align-items: center; gap: .58rem; text-decoration: none; color: inherit; }
+.brand-mark { width: 2.05rem; height: 2.05rem; flex: none; display: block; }
+.brand-mark--lg { width: 2.5rem; height: 2.5rem; }
+.brand-text { display: flex; flex-direction: column; gap: .1rem; }
+.brand-name {
+  font-family: var(--display); font-weight: 700; font-size: 1.12rem;
+  letter-spacing: -.025em; line-height: 1;
+}
+.brand-name em { font-style: normal; color: var(--indigo); }
+.brand-tag {
+  font-family: var(--display); font-size: .565rem; font-weight: 500;
+  letter-spacing: .155em; text-transform: uppercase;
+  color: var(--ink-faint); line-height: 1;
+}
+.brand-mark--lg + .brand-text .brand-name { font-size: 1.32rem; }
+.brand-mark--lg + .brand-text .brand-tag { font-size: .62rem; }
+.masthead nav { display: flex; align-items: center; gap: 1.35rem; font-family: var(--display); font-size: .84rem; font-weight: 500; }
+.masthead nav a { color: var(--ink-muted); text-decoration: none; white-space: nowrap; }
+.masthead nav a:hover { color: var(--ink); }
+.masthead nav a.here { color: var(--indigo); }
+/* Below this width there is no room for five, so only the one a visitor is
+   actually looking for survives. */
+@media (max-width: 58rem) { .masthead nav .hide-sm { display: none; } }
+
+/* An anchor jump has to clear the sticky masthead, or the heading it was aimed
+   at lands underneath it and the reader sees the paragraph below instead. */
+section[id] { scroll-margin-top: 5.25rem; }
+
+/* ------------------------------------------------------------------ footer */
+
+footer { border-top: 1px solid var(--rule); background: var(--surface); }
+footer .wrap { padding-block: 2.75rem; display: flex; flex-wrap: wrap; gap: 2rem; justify-content: space-between; align-items: flex-start; }
+footer p { font-size: .9rem; color: var(--ink-faint); }
+.footer-side { display: flex; flex-direction: column; gap: 1rem; }
+/* The whole page as a list, for the reader who scrolled past something and does
+   not want to hunt back up for the bar. */
+.footer-nav {
+  display: grid; gap: .55rem 2.25rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  font-family: var(--display); font-size: .88rem; font-weight: 500;
+}
+@media (min-width: 40rem) { .footer-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.footer-nav a { color: var(--ink-muted); text-decoration: none; white-space: nowrap; }
+.footer-nav a:hover { color: var(--indigo); }
+/* The pages that are not sections of this one. Set apart by a rule rather than
+   mixed into the list above, because "Privacy Policy" and "Scheduling" are not
+   the same kind of destination and a reader looking for one is never looking
+   for the other. */
+.footer-meta {
+  display: flex; flex-wrap: wrap; gap: .4rem 1.25rem;
+  padding-top: .9rem; border-top: 1px solid var(--rule);
+  font-family: var(--display); font-size: .85rem; font-weight: 500;
+}
+.footer-meta a { color: var(--ink-faint); text-decoration: none; white-space: nowrap; }
+.footer-meta a:hover { color: var(--indigo); }
+
+/* ---------------------------------------------------------------- to top */
+
+.to-top {
+  position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20;
+  width: 2.7rem; height: 2.7rem; border-radius: .55rem;
+  display: grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--rule-strong);
+  color: var(--indigo); box-shadow: var(--shadow); text-decoration: none;
+}
+.to-top:hover { border-color: var(--indigo); background: var(--indigo-wash); }
+.to-top svg { width: 1rem; height: 1rem; display: block; }
+/* Hidden while the reader is still at the top, where there is nothing to go
+   back to. Visible is the DEFAULT state, so with JavaScript off the control is
+   simply always there rather than never. */
+.to-top.is-top { opacity: 0; visibility: hidden; pointer-events: none; }

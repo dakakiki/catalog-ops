@@ -1,0 +1,72 @@
+// Pieces used in more than one place: the preview card, its table and chips,
+// and the full-width strips.
+
+/* ------------------------------------------------------------ preview card */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: .7rem;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.panel-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .7rem 1rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--sunken);
+}
+.panel-title { font-family: var(--display); font-size: .8rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-muted); }
+.panel-body { padding: 1.15rem 1rem 1.25rem; }
+
+.count { display: flex; align-items: baseline; gap: .55rem; }
+.count b { font-family: var(--display); font-weight: 700; font-size: 2.35rem; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+.count span { color: var(--ink-muted); font-size: 1rem; }
+
+.criteria { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: 1rem; }
+.chip {
+  font-family: var(--mono); font-size: .755rem; letter-spacing: -.01em;
+  padding: .24rem .5rem; border-radius: .28rem;
+  background: var(--indigo-wash); color: var(--indigo-deep);
+  border: 1px solid transparent;
+}
+.chip.formula { background: var(--sunken); color: var(--ink-muted); border-color: var(--rule); }
+
+table.rows { width: 100%; border-collapse: collapse; margin-top: 1.15rem; font-family: var(--mono); font-size: .8rem; font-variant-numeric: tabular-nums; }
+table.rows th {
+  text-align: left; font-weight: 500; font-size: .68rem; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--ink-faint); padding: 0 0 .45rem; border-bottom: 1px solid var(--rule);
+}
+table.rows th.num, table.rows td.num { text-align: right; }
+table.rows td { padding: .42rem 0; border-bottom: 1px solid var(--rule); color: var(--ink-muted); }
+table.rows tr:last-child td { border-bottom: none; }
+table.rows td.name { color: var(--ink); font-family: var(--body); font-size: .94rem; padding-right: 1rem; }
+td .was { color: var(--ink-faint); text-decoration: line-through; text-decoration-thickness: 1px; }
+td .now { color: var(--good); font-weight: 500; }
+
+.panel-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  padding: .8rem 1rem;
+  border-top: 1px solid var(--rule);
+  background: var(--sunken);
+  font-size: .86rem; color: var(--ink-muted);
+}
+.undo {
+  font-family: var(--display); font-size: .82rem; font-weight: 600;
+  color: var(--accent); border: 1px solid var(--accent); background: var(--accent-wash);
+  padding: .35rem .75rem; border-radius: .32rem;
+  display: inline-flex; align-items: center; gap: .4rem;
+}
+
+/* ------------------------------------------------------------------ strips */
+
+.strip { border-block: 1px solid var(--rule); background: var(--surface); }
+.strip .wrap { padding-block: 1.6rem; }
+.strip p { font-size: 1.1rem; color: var(--ink-muted); max-width: 46rem; }
+.strip strong { color: var(--ink); font-weight: 400; font-style: italic; }
+
+/* The problem statement is the one place on the page that describes damage, so
+   it is the one place that carries the colour the plugin reserves for damage. */
+.strip--problem { background: var(--danger-wash); border-color: transparent; }
+.strip--problem p { color: var(--ink); }
+.strip--problem strong { color: var(--danger); font-style: normal; font-weight: 500; }

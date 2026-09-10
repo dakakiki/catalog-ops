@@ -1,0 +1,40 @@
+// Reset, typography and the two measures every page is set in.
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .display { font-family: var(--display); font-weight: 600; text-wrap: balance; }
+h1 { font-size: clamp(2.4rem, 6vw, 3.9rem); line-height: 1.02; letter-spacing: -.028em; margin: 0; font-weight: 700; }
+h2 { font-size: clamp(1.7rem, 3.4vw, 2.35rem); line-height: 1.1; letter-spacing: -.022em; margin: 0; }
+h3 { font-size: 1.0625rem; line-height: 1.3; letter-spacing: -.01em; margin: 0; }
+p  { margin: 0; }
+a  { color: inherit; }
+
+.eyebrow {
+  font-family: var(--display);
+  font-size: .70rem;
+  font-weight: 600;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  color: var(--indigo);
+}
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.wrap { max-width: var(--wide); margin-inline: auto; padding-inline: 1.5rem; }
+.measure { max-width: var(--measure); }
+
+section { padding-block: clamp(3.5rem, 8vw, 6rem); }
+.section-head { display: flex; flex-direction: column; gap: .85rem; margin-bottom: 2.75rem; }
+.lede { font-size: 1.2rem; color: var(--ink-muted); line-height: 1.55; }
+
+*:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: .2rem; }

@@ -1,0 +1,103 @@
+// The legal page — five documents on one page, with a sticky index beside
+// them on desktop.
+
+/* -------------------------------------------------------------------- head */
+
+.page-head { padding-block: clamp(2.75rem, 6vw, 4rem) 2.25rem; }
+.page-head .lede { font-size: 1.18rem; color: var(--ink-muted); max-width: var(--measure); margin-top: 1rem; }
+
+.draft {
+  margin-top: 1.75rem; max-width: var(--measure);
+  padding: .95rem 1.15rem;
+  border-left: 3px solid var(--accent); background: var(--accent-wash);
+  border-radius: 0 .45rem .45rem 0;
+  font-size: .98rem; color: var(--ink);
+}
+.draft p { margin: 0; }
+.draft b { font-family: var(--display); font-weight: 600; }
+
+/* ------------------------------------------------------------------ layout */
+
+.legal { display: grid; gap: 2.5rem; padding-bottom: clamp(3.5rem, 8vw, 6rem); }
+@media (min-width: 62rem) {
+  .legal { grid-template-columns: 15rem minmax(0, 1fr); gap: 4rem; align-items: start; }
+}
+
+/* The menu. Sticky on desktop so the document you are in is always one click
+   from the one you actually wanted — five legal pages are read by jumping, not
+   by scrolling from the top. */
+.legal-nav { position: sticky; top: 5rem; }
+.legal-nav-title {
+  font-family: var(--display); font-size: .7rem; font-weight: 600;
+  letter-spacing: .15em; text-transform: uppercase; color: var(--ink-faint);
+  padding-bottom: .8rem; border-bottom: 1px solid var(--rule); margin-bottom: .5rem;
+}
+.legal-nav ol { list-style: none; margin: 0; padding: 0; counter-reset: doc; }
+.legal-nav a {
+  display: grid; grid-template-columns: 1.6rem 1fr; align-items: baseline;
+  gap: .3rem; padding: .5rem 0;
+  font-family: var(--display); font-size: .9rem; font-weight: 500;
+  color: var(--ink-muted); text-decoration: none;
+}
+.legal-nav a::before {
+  counter-increment: doc; content: counter(doc, decimal-leading-zero);
+  font-family: var(--mono); font-size: .72rem; color: var(--ink-faint);
+}
+.legal-nav a:hover { color: var(--ink); }
+.legal-nav a:hover::before { color: var(--indigo); }
+.legal-nav a.here { color: var(--indigo); }
+.legal-nav a.here::before { color: var(--indigo); }
+
+@media (max-width: 61.99rem) {
+  .legal-nav { position: static; }
+  .legal-nav ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
+}
+
+/* --------------------------------------------------------------- documents */
+
+article { max-width: var(--measure); scroll-margin-top: 5.25rem; }
+article + article { margin-top: 4.5rem; padding-top: 3.5rem; border-top: 1px solid var(--rule); }
+article header { margin-bottom: 1.75rem; }
+article h2 { margin-bottom: .5rem; }
+.updated { font-family: var(--mono); font-size: .78rem; color: var(--ink-faint); }
+.lead-in { font-size: 1.1rem; color: var(--ink-muted); }
+
+article ul { margin: 0 0 1.05rem; padding-left: 1.15rem; }
+article li { margin-bottom: .4rem; }
+article ol.steps { margin: 0 0 1.05rem; padding-left: 1.3rem; }
+article ol.steps li { margin-bottom: .4rem; }
+
+article strong { font-weight: 500; color: var(--ink); }
+article em { font-style: italic; }
+
+.big {
+  font-family: var(--display); font-weight: 600; font-size: 1.32rem;
+  letter-spacing: -.018em; line-height: 1.3; color: var(--ink);
+  margin: 0 0 1.05rem;
+}
+
+table {
+  width: 100%; border-collapse: collapse; margin: 0 0 1.05rem;
+  font-size: .95rem;
+}
+table th {
+  text-align: left; font-family: var(--display); font-weight: 600; font-size: .8rem;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--ink-faint);
+  padding: 0 1rem .5rem 0; border-bottom: 1px solid var(--rule);
+}
+table td { padding: .5rem 1rem .5rem 0; border-bottom: 1px solid var(--rule); color: var(--ink-muted); }
+table td:first-child { color: var(--ink); }
+
+code {
+  font-family: var(--mono); font-size: .85rem;
+  color: var(--indigo-deep); background: var(--indigo-wash);
+  padding: .1rem .32rem; border-radius: .25rem;
+}
+.fill { color: var(--accent); background: var(--accent-wash); }
+
+.callout {
+  margin: 0 0 1.05rem; padding: .95rem 1.15rem;
+  border: 1px solid var(--rule-strong); border-radius: .55rem;
+  background: var(--surface);
+}
+.callout p:last-child { margin-bottom: 0; }

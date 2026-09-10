@@ -1,0 +1,79 @@
+// The contact page and its form. `.trap` is the honeypot: hidden from people,
+// visible to the robots that fill in everything they find. It is what stands
+// in for a CAPTCHA, because reCAPTCHA would put Google back on a site whose
+// whole privacy position is that it loads nothing from anybody.
+
+/* -------------------------------------------------------------------- head */
+
+.page-head { padding-block: clamp(2.75rem, 6vw, 4rem) 2.5rem; }
+.page-head .lede { font-size: 1.18rem; color: var(--ink-muted); max-width: 34rem; margin-top: 1rem; }
+
+/* ------------------------------------------------------------------ layout */
+
+.contact { display: grid; gap: 3rem; padding-bottom: clamp(3.5rem, 8vw, 6rem); }
+@media (min-width: 58rem) {
+  .contact { grid-template-columns: minmax(0, 1fr) 17rem; gap: 4rem; align-items: start; }
+}
+
+/* -------------------------------------------------------------------- form */
+
+form { display: flex; flex-direction: column; gap: 1.25rem; max-width: 34rem; }
+.field { display: flex; flex-direction: column; gap: .4rem; }
+.field label {
+  font-family: var(--display); font-size: .87rem; font-weight: 600;
+  letter-spacing: -.005em; display: flex; align-items: baseline; gap: .5rem;
+}
+.field .optional { font-family: var(--body); font-weight: 400; font-size: .84rem; color: var(--ink-faint); letter-spacing: 0; }
+.field .hint { font-size: .87rem; color: var(--ink-faint); }
+
+input[type="text"], input[type="email"], input[type="url"], select, textarea {
+  font-family: var(--body); font-size: 1rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule-strong);
+  border-radius: .45rem; padding: .62rem .75rem; width: 100%;
+}
+select { font-family: var(--display); font-size: .95rem; }
+textarea { min-height: 9.5rem; resize: vertical; line-height: 1.6; }
+input::placeholder, textarea::placeholder { color: var(--ink-faint); }
+input:hover, select:hover, textarea:hover { border-color: var(--ink-faint); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--indigo); box-shadow: 0 0 0 3px var(--indigo-wash); }
+
+/* Hidden from people, visible to the robots that fill in everything they find.
+   A honeypot rather than a CAPTCHA on purpose: reCAPTCHA would put Google back
+   on a site whose whole cookie policy rests on Google not being here. */
+.trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+.submit-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+button {
+  font-family: var(--display); font-size: .95rem; font-weight: 600;
+  background: var(--indigo); color: #fff; border: 1px solid transparent;
+  padding: .72rem 1.5rem; border-radius: .45rem; cursor: pointer;
+}
+button:hover { background: var(--indigo-deep); }
+:root[data-theme="dark"] button, :root:not([data-theme="light"]) button { color: #14132a; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) button { color: #fff; } }
+
+.privacy-note { font-size: .89rem; color: var(--ink-faint); max-width: 34rem; }
+
+.notice {
+  padding: .85rem 1.1rem; border-radius: .5rem; font-size: .95rem;
+  border: 1px solid var(--accent); background: var(--accent-wash); color: var(--ink);
+}
+.notice b { font-family: var(--display); font-weight: 600; }
+
+/* ------------------------------------------------------------------- aside */
+
+.aside { display: flex; flex-direction: column; gap: 1.6rem; }
+.aside section { border-top: 2px solid var(--rule); padding-top: .9rem; }
+.aside section:first-child { border-top-color: var(--indigo); }
+.aside p { font-size: .95rem; color: var(--ink-muted); }
+.aside .kicker {
+  font-family: var(--display); font-size: .68rem; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint);
+  display: block; margin-bottom: .5rem;
+}
+
+/* The answer the form gives back. Green when the message went, red when it did
+   not — the same colour language the plugin's own run report uses, so a reader
+   who has seen one recognises the other. */
+.notice--good { border-color: var(--good); background: var(--good-wash); }
+.notice--danger { border-color: var(--danger); background: var(--danger-wash); }
