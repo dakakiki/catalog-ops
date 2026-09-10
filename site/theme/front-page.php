@@ -342,7 +342,19 @@ get_header();
         </svg>
         <span><?php catalogops_the_rich( 'guarantee_text', '<b>14 days, money back.</b> Any reason, no questions asked.' ); ?></span>
       </p>
-      <p class="guarantee-note"><?php catalogops_the_text( 'guarantee_note', 'One guarantee per customer.' ); ?></p>
+      <?php
+      /*
+       * The one limit on the guarantee, and it links to the page that explains
+       * it. Stated bare beside a Buy button it reads as a catch — a condition
+       * with no reason given, at the moment a reader is deciding whether to
+       * trust unfamiliar software with their prices. The refund policy gives the
+       * reason in two sentences; the link is what lets somebody find it without
+       * hunting through the footer.
+       */
+      ?>
+      <p class="guarantee-note">
+        <a href="<?php echo esc_url( catalogops_page_url( 'legal', 'refunds' ) ); ?>"><?php catalogops_the_text( 'guarantee_note', 'One guarantee per customer.' ); ?></a>
+      </p>
     </div>
   </div>
 </section>
