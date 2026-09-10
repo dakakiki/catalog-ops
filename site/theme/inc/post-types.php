@@ -7,93 +7,43 @@
 
 defined( 'ABSPATH' ) || exit;
 
-/**
- * Register the FAQ and compatibility post types.
+/*
+ * ---------------------------------------------------------------------------
+ * `co_faq` and `co_compat` are registered by ACF, from `acf-json/`.
+ * ---------------------------------------------------------------------------
  *
- * **Why post types rather than repeated fields.** Everything else on the
- * landing page is fixed by its own layout — three pricing columns, three
- * promises, five pipeline stages — and those are groups of fields, because
- * adding a fourth column is a change to the design and ought to feel like one.
- * These two are different: a question gets asked and answered, a WooCommerce
- * version ships, and the list is longer than it was. That is a list of things,
- * and WordPress already has an editor for a list of things — one that sorts by
+ * There is no `register_post_type()` here any more. The definitions live in
+ * `acf-json/post_type_co_faq.json` and `post_type_co_compat.json`, which is the
+ * same decision the field groups took and for the same reason: a definition in
+ * PHP is in version control but nowhere a person can look at it, while one in
+ * `acf-json/` is in version control AND listed under ACF > Post Types, where it
+ * can be read, reviewed and changed. Editing one writes the file back.
+ *
+ * **Why these two are post types at all**, when everything else on the landing
+ * page is a group of fields: the rest is fixed by its own layout — three pricing
+ * columns, five pipeline stages — so adding to it means drawing something new.
+ * These two are different. A question gets asked and answered; a WooCommerce
+ * version ships; the list is longer than it was. That is a list of things, and
+ * WordPress already has an editor for a list of things — one that sorts by
  * dragging, searches, keeps revisions, and does not put twenty answers into a
- * single database row.
- *
- * It also happens to be what the free ACF can do. The Repeater field is Pro,
- * and reaching for it here would have bought a worse editor for the money.
+ * single database row. It also happens to be what the free ACF can do, since
+ * the Repeater field is Pro; reaching for it here would have bought a worse
+ * editor for the money.
  *
  * Both are `publicly_queryable => false`: they are read on the landing page and
- * have no page of their own, so a URL for one would be a thin page that
- * competes with the real one in search results.
+ * have no page of their own, so a URL for one would be a thin page competing
+ * with the real one in search results.
+ *
+ * What stays here is the behaviour the JSON cannot describe — the admin
+ * ordering, and the reader the templates use.
  */
-function catalogops_post_types(): void {
-	register_post_type(
-		'co_faq',
-		array(
-			'labels'              => array(
-				'name'               => __( 'FAQ', 'catalogops' ),
-				'singular_name'      => __( 'Question', 'catalogops' ),
-				'add_new_item'       => __( 'Add question', 'catalogops' ),
-				'edit_item'          => __( 'Edit question', 'catalogops' ),
-				'search_items'       => __( 'Search questions', 'catalogops' ),
-				'not_found'          => __( 'No questions yet.', 'catalogops' ),
-				'menu_name'          => __( 'FAQ', 'catalogops' ),
-			),
-			'public'              => false,
-			'publicly_queryable'  => false,
-			'exclude_from_search' => true,
-			'show_ui'             => true,
-			'show_in_menu'        => true,
-			'show_in_rest'        => true,
-			'menu_icon'           => 'dashicons-editor-help',
-			'menu_position'       => 21,
-			'hierarchical'        => false,
-			// The title is the question; the editor is the answer. `page-attributes`
-			// is what puts the order column on the list table, so the questions can
-			// be dragged into the order they should be read in.
-			'supports'            => array( 'title', 'editor', 'page-attributes' ),
-			'has_archive'         => false,
-			'rewrite'             => false,
-		)
-	);
-
-	register_post_type(
-		'co_compat',
-		array(
-			'labels'              => array(
-				'name'               => __( 'Compatibility', 'catalogops' ),
-				'singular_name'      => __( 'Compatibility row', 'catalogops' ),
-				'add_new_item'       => __( 'Add row', 'catalogops' ),
-				'edit_item'          => __( 'Edit row', 'catalogops' ),
-				'not_found'          => __( 'No rows yet.', 'catalogops' ),
-				'menu_name'          => __( 'Compatibility', 'catalogops' ),
-			),
-			'public'              => false,
-			'publicly_queryable'  => false,
-			'exclude_from_search' => true,
-			'show_ui'             => true,
-			'show_in_menu'        => true,
-			'show_in_rest'        => true,
-			'menu_icon'           => 'dashicons-yes-alt',
-			'menu_position'       => 22,
-			'hierarchical'        => false,
-			// Title is the thing (WooCommerce, PHP, Multisite); the editor holds
-			// what is said about it, which is a sentence rather than a version
-			// number often enough to be worth a real field.
-			'supports'            => array( 'title', 'editor', 'page-attributes' ),
-			'has_archive'         => false,
-			'rewrite'             => false,
-		)
-	);
-}
-add_action( 'init', 'catalogops_post_types' );
 
 /**
  * Sort both lists by their manual order in the admin, not by date.
  *
- * A FAQ read newest-first is a FAQ nobody can follow: the questions were
- * written to be read in an order, and the drag handle is how that order is set.
+ * A FAQ read newest-first is a FAQ nobody can follow: the questions were written
+ * to be read in an order, and the drag handle is how that order is set. ACF's
+ * post type screen has no setting for this, which is why it is code.
  *
  * @param WP_Query $query The query.
  */

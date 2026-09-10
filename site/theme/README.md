@@ -35,14 +35,28 @@ Every string on the site is editable, and every field is optional — a page
 nobody has edited renders the copy the site was designed with, so an empty
 database is a finished site rather than a page of empty headings.
 
-- **Pages** — three ACF field groups, declared in `inc/fields.php` rather than
-  drawn in the admin, so they arrive with the templates that read them and are
-  in version control. Landing page, Legal documents, Contact page.
-- **FAQ** and **Compatibility** are post types (`inc/post-types.php`), ordered by
-  dragging. They are the two lists that genuinely grow; everything else is fixed
-  by its own layout — three pricing columns, five pipeline stages — and is a
-  Group of fields, because adding a fourth column is a change to the design and
-  ought to feel like one.
+Everything ACF registers — the three field groups and the two post types —
+lives in **`acf-json/`**, which ACF loads from and saves to by default. The files
+are the source, the admin lists them under *ACF > Field Groups* and *ACF > Post
+Types*, and editing one there writes the file back. They are committed, so a
+checkout carries the editing screens; a fresh install shows them as *Sync
+available* until imported once.
+
+They were PHP at first, and the reason for moving is worth knowing: a
+PHP-registered group is invisible in the admin, and not by omission —
+`ACF_Admin_Internal_Post_Type_List::setup_sync()` skips anything whose `local`
+is not `json` with an explicit `continue`. JSON keeps the definitions in version
+control *and* lets a person see them.
+
+- **Pages** — three field groups: Landing page, Legal documents, Contact page.
+  Their location rules match on the **page template**, never on a page id: an
+  exported id is only true on the site it came from.
+- **FAQ** and **Compatibility** are post types, ordered by dragging. They are
+  the two lists that genuinely grow; everything else is fixed by its own layout
+  — three pricing columns, five pipeline stages — and is a Group of fields,
+  because adding a fourth column is a change to the design and ought to feel
+  like one. `inc/post-types.php` keeps only what the JSON cannot say: the admin
+  ordering, and the reader the templates use.
 - Lists inside a group are a textarea, one item per line. Plan features use a
   leading `-` for a greyed "not in this plan" row; seat prices read
   `5 sites | $199`; the preview card's rows read `Name | 24.00 | 20.99`.
