@@ -86,7 +86,7 @@ final class Schedules_Controller {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'index' ),
 					'permission_callback' => array( $this, 'can_manage' ),
-					'args'                => Paging::args( self::PER_PAGE ),
+					'args'                => Paging::args( self::PER_PAGE ) + Language::args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
@@ -156,20 +156,31 @@ final class Schedules_Controller {
 	/**
 	 * List schedules, newest first, one page at a time.
 	 *
+	 * Under WPML a user sees their own language's schedules, plus the ones that
+	 * belong to no language at all — which includes every schedule written before
+	 * this plugin knew about languages, so a shop that upgrades does not open the
+	 * page and find them gone. The same language reaches the count, or the pager
+	 * would offer pages the list cannot fill.
+	 *
+	 * This is a listing rule and nothing more: what fires, and when, is decided by
+	 * {@see \CatalogOps\Operations\Schedules::due()}, which knows nothing about
+	 * languages and must not.
+	 *
 	 * @param WP_REST_Request $request The request.
 	 */
 	public function index( WP_REST_Request $request ): WP_REST_Response {
-		$slice = Paging::slice( $request, self::PER_PAGE );
+		$slice    = Paging::slice( $request, self::PER_PAGE );
+		$language = Language::from_request( $request );
 
 		$items = array_map(
 			array( $this, 'to_array' ),
-			$this->schedules->all( $slice['per_page'], $slice['offset'] )
+			$this->schedules->all( $slice['per_page'], $slice['offset'], $language )
 		);
 
 		return new WP_REST_Response(
 			array(
 				'items'    => $items,
-				'total'    => $this->schedules->count_all(),
+				'total'    => $this->schedules->count_all( $language ),
 				'page'     => $slice['page'],
 				'per_page' => $slice['per_page'],
 			)
@@ -373,6 +384,13 @@ final class Schedules_Controller {
 			// Why the supervisor stopped it, when it stopped itself. The status alone
 			// leaves the user with one control and no idea whether it will help.
 			'paused_reason'  => $schedule->paused_reason,
+			// Which language's catalogue this schedule works on. Sent even though the
+			// list is already confined to it, because on WPML's "All languages" it is
+			// not confined at all — and a page showing every language's schedules
+			// together with nothing to tell them apart is worse than one that hides
+			// them. Null for a schedule that belongs to no language, which the UI
+			// leaves unlabelled rather than inventing a name for.
+			'language'       => $schedule->language,
 			'filter'         => $schedule->filter_data,
 			'actions'        => $schedule->actions_data,
 			'created_at'     => $schedule->created_at,

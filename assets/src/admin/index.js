@@ -5558,7 +5558,18 @@ function Schedules( { refreshKey, onRan, onFiringSoon } ) {
 			};
 		}
 
-		apiFetch( { path: `/catalogops/v1/schedules?page=${ page }` } )
+		// The schedules a user sees are their own language's, plus the ones that
+		// belong to no language — which includes every schedule written before the
+		// plugin knew about languages. On "All languages" nothing is sent and every
+		// schedule is listed. This is a listing rule only: which schedules FIRE is
+		// decided on the server by a cron tick that has no language at all.
+		const language = currentLanguage();
+
+		apiFetch( {
+			path: `/catalogops/v1/schedules?page=${ page }${
+				language ? `&language=${ encodeURIComponent( language ) }` : ''
+			}`,
+		} )
 			.then( ( res ) => {
 				if ( cancelled ) {
 					return;

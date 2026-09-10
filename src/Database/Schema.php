@@ -13,6 +13,7 @@ use CatalogOps\Database\Migrations\Add_Operation_Language_Column;
 use CatalogOps\Database\Migrations\Add_Operation_Progress_Columns;
 use CatalogOps\Database\Migrations\Add_Operation_Note_And_Schedule_Name_Columns;
 use CatalogOps\Database\Migrations\Add_Operation_Schedule_Column;
+use CatalogOps\Database\Migrations\Add_Schedule_Language_Column;
 use CatalogOps\Database\Migrations\Add_Schedule_Paused_Reason_Column;
 use CatalogOps\Database\Migrations\Create_Core_Tables;
 use CatalogOps\Database\Migrations\Create_Saved_Filters_Table;
@@ -69,6 +70,7 @@ final class Schema {
 			new Add_Operation_Schedule_Column(),
 			new Add_Operation_Note_And_Schedule_Name_Columns(),
 			new Add_Operation_Language_Column(),
+			new Add_Schedule_Language_Column(),
 		);
 
 		usort(

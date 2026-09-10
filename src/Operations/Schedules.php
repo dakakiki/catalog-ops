@@ -81,8 +81,13 @@ final class Schedules {
 				'next_run'     => $next_run_gmt,
 				'notify_email' => $notify_email,
 				'created_at'   => current_time( 'mysql', true ),
+				// Taken from the filter rather than passed in beside it: the column
+				// is a copy of `filter_json`'s language, kept only so the list can
+				// filter on it in SQL, and two arguments for one fact is two things
+				// that can disagree.
+				'language'     => $filter->language(),
 			),
-			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
 
 		return (int) $this->wpdb->insert_id;
@@ -109,34 +114,90 @@ final class Schedules {
 	/**
 	 * All schedules, newest first.
 	 *
-	 * @param int $limit  How many to return.
-	 * @param int $offset How many to skip — one page's worth per page turned.
+	 * @param int         $limit    How many to return.
+	 * @param int         $offset   How many to skip — one page's worth per page turned.
+	 * @param string|null $language Show only schedules belonging to this language
+	 *                              (and the ones belonging to none); null shows all.
 	 * @return list<Schedule>
 	 */
-	public function all( int $limit = 100, int $offset = 0 ): array {
+	public function all( int $limit = 100, int $offset = 0, ?string $language = null ): array {
 		$table  = $this->schema->schedules_table();
 		$limit  = max( 1, $limit );
 		$offset = max( 0, $offset );
 
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		list( $where, $where_args ) = $this->language_where( $language );
+
+		// The language clause is a code constant assembled by language_where(); the
+		// placeholder it carries is bound below with the limit and the offset, in
+		// the order they appear in the statement.
+		$sql  = "SELECT * FROM {$table} {$where} ORDER BY id DESC LIMIT %d OFFSET %d";
+		$args = array( ...$where_args, $limit, $offset );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare( "SELECT * FROM {$table} ORDER BY id DESC LIMIT %d OFFSET %d", $limit, $offset ),
+			$this->wpdb->prepare( $sql, ...$args ),
 			ARRAY_A
 		);
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
 		return array_map( array( $this, 'hydrate' ), $rows );
 	}
 
 	/**
 	 * How many schedules exist, for the pager to know how far the list goes.
+	 *
+	 * Takes the same language as {@see all()} and must be called with the same one:
+	 * a count that included schedules the list is hiding would offer pages the list
+	 * cannot fill.
+	 *
+	 * @param string|null $language Count only schedules this language can see; null counts all.
 	 */
-	public function count_all(): int {
+	public function count_all( ?string $language = null ): int {
 		$table = $this->schema->schedules_table();
 
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		return (int) $this->wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		list( $where, $where_args ) = $this->language_where( $language );
+
+		if ( array() === $where_args ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			return (int) $this->wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+		}
+
+		$sql = "SELECT COUNT(*) FROM {$table} {$where}";
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		return (int) $this->wpdb->get_var( $this->wpdb->prepare( $sql, ...$where_args ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	}
+
+	/**
+	 * The WHERE clause that confines the list to one language, if it is confined.
+	 *
+	 * The twin of {@see Operations::language_where()}, and it says the same thing
+	 * for the same reasons — one method here rather than the condition written
+	 * twice, because the two places that need it are a list and the count that
+	 * pages it.
+	 *
+	 * **A schedule with no language is visible in every language.** NULL is written
+	 * by three different situations — a site with no WPML, a schedule authored on
+	 * WPML's "All languages", and every schedule written before the column existed
+	 * — and none of them is a claim that it belongs to some other language. Hiding
+	 * those rows would empty the schedules page of any shop the moment it upgraded,
+	 * and would hide an all-languages schedule from the very languages it changes.
+	 *
+	 * **{@see due()} does not use this, and must never.** A cron tick has no
+	 * language, and a due list narrowed by one would leave every schedule outside
+	 * the site's default language silently never firing. What a run touches is
+	 * decided by the language inside its own frozen filter.
+	 *
+	 * @param string|null $language The language to confine to, or null for no confinement.
+	 * @return array{0: string, 1: list<string>} The clause (possibly empty) and its arguments.
+	 */
+	private function language_where( ?string $language ): array {
+		if ( null === $language || '' === $language ) {
+			return array( '', array() );
+		}
+
+		return array( 'WHERE ( language = %s OR language IS NULL )', array( $language ) );
 	}
 
 	/**
@@ -301,6 +362,11 @@ final class Schedules {
 			// still on schema 6 the key is absent altogether.
 			array_key_exists( 'paused_reason', $row ) && null !== $row['paused_reason']
 				? (string) $row['paused_reason']
+				: null,
+			// Absent on every row written before migration 11, and NULL on every
+			// schedule that was not confined to a language. Both mean the same here.
+			array_key_exists( 'language', $row ) && '' !== $row['language'] && null !== $row['language']
+				? (string) $row['language']
 				: null,
 		);
 	}
