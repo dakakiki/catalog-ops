@@ -154,6 +154,17 @@ final class Wpml_Context {
 			return $term_id;
 		}
 
+		// A taxonomy WPML does not translate has ONE set of terms, shared by every
+		// language, and there is nothing to map — the term already is the answer.
+		// Asking anyway would be worse than pointless: `wpml_object_id` has no
+		// translation to find, so with the strictness below it answers null and the
+		// whole control empties. WooCommerce's own `product_brand` is exactly this
+		// case on a default install, and a brand is the same word in every language
+		// anyway.
+		if ( true !== apply_filters( 'wpml_is_translated_taxonomy', null, $taxonomy ) ) {
+			return $term_id;
+		}
+
 		$translated = apply_filters( 'wpml_object_id', $term_id, $taxonomy, false, $language );
 
 		return is_numeric( $translated ) ? (int) $translated : null;

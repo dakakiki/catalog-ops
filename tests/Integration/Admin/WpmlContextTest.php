@@ -119,6 +119,7 @@ final class WpmlContextTest extends WP_UnitTestCase {
 	 */
 	public function test_a_term_is_mapped_into_the_requested_language(): void {
 		$this->speak( 'en' );
+		$this->translates( 'product_cat' );
 		$this->translate_terms( array( 18 => 73 ) );
 
 		$this->assertSame( 73, $this->context->term_in_language( 18, 'product_cat', 'sr' ) );
@@ -131,6 +132,7 @@ final class WpmlContextTest extends WP_UnitTestCase {
 	 */
 	public function test_a_term_with_no_translation_is_dropped_rather_than_substituted(): void {
 		$this->speak( 'en' );
+		$this->translates( 'product_cat' );
 		$this->translate_terms( array( 18 => 73 ) );
 
 		$this->assertNull( $this->context->term_in_language( 99, 'product_cat', 'sr' ) );
@@ -145,6 +147,37 @@ final class WpmlContextTest extends WP_UnitTestCase {
 
 		// WPML absent: even a language cannot make this map anything.
 		$this->assertSame( 18, $this->context->term_in_language( 18, 'product_cat', 'sr' ) );
+	}
+
+	/**
+	 * A taxonomy WPML does not translate has one shared set of terms, so a term in
+	 * it is already the answer in every language. WooCommerce's `product_brand` is
+	 * this on a default install — it is absent from `taxonomies_sync_option`
+	 * entirely on the development site — and mapping it anyway would empty the
+	 * brand control in every language but the default.
+	 */
+	public function test_an_untranslated_taxonomy_maps_nothing_and_loses_nothing(): void {
+		$this->speak( 'en' );
+		$this->translates( 'product_cat' );
+		$this->translate_terms( array( 18 => 73 ) );
+
+		// product_brand is not in the translated list, so its term survives as itself
+		// rather than being dropped for having no translation.
+		$this->assertSame( 51, $this->context->term_in_language( 51, 'product_brand', 'sr' ) );
+	}
+
+	/**
+	 * Stand where WPML stands on `wpml_is_translated_taxonomy`.
+	 *
+	 * @param string ...$taxonomies The taxonomies WPML translates.
+	 */
+	private function translates( string ...$taxonomies ): void {
+		add_filter(
+			'wpml_is_translated_taxonomy',
+			static fn( $answer, $taxonomy ) => in_array( $taxonomy, $taxonomies, true ) ? true : $answer,
+			10,
+			2
+		);
 	}
 
 	/**
