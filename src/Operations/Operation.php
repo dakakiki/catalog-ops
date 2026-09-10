@@ -45,6 +45,8 @@ final class Operation {
 	 *                                                           this ran; a snapshot, so deleting or
 	 *                                                           renaming it cannot rewrite history.
 	 * @param string|null                      $note             Why the user ran it, in their words.
+	 * @param string|null                      $language         WPML language this run was confined
+	 *                                                           to, or null for the whole catalogue.
 	 */
 	public function __construct(
 		public readonly int $id,
@@ -71,6 +73,12 @@ final class Operation {
 		// Why the user ran this, in their words. The one thing the row cannot
 		// reconstruct from what it already knows.
 		public readonly ?string $note = null,
+		// Which language's catalogue this run was aimed at. A copy of the frozen
+		// filter's own language, held as a column because the history list filters
+		// on it; null means the run was not confined to one, which is what a site
+		// without WPML, a user on "All languages", and every run made before the
+		// column existed all have in common.
+		public readonly ?string $language = null,
 	) {}
 
 	/**

@@ -96,8 +96,13 @@ final class Operations {
 				'conflict_policy' => null === $conflict_policy ? null : $conflict_policy->value,
 				'schedule_name'   => $schedule_name,
 				'note'            => $note,
+				// Taken from the filter rather than passed in beside it: the column
+				// is a copy of `filter_json`'s language, kept only so the history can
+				// filter on it in SQL, and two arguments for one fact is two things
+				// that can disagree.
+				'language'        => $filter->language(),
 			),
-			array( '%s', '%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s', '%s', '%s' )
+			array( '%s', '%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%s', '%d', '%s', '%s', '%s', '%s' )
 		);
 
 		return (int) $this->wpdb->insert_id;
@@ -183,21 +188,31 @@ final class Operations {
 	/**
 	 * The most recent operations, newest first.
 	 *
-	 * @param int $limit  How many to return.
-	 * @param int $offset How many to skip — one page's worth per page turned.
+	 * @param int         $limit    How many to return.
+	 * @param int         $offset   How many to skip — one page's worth per page turned.
+	 * @param string|null $language Show only runs belonging to this language (and
+	 *                              the ones belonging to none); null shows every run.
 	 * @return list<Operation>
 	 */
-	public function recent( int $limit = 20, int $offset = 0 ): array {
+	public function recent( int $limit = 20, int $offset = 0, ?string $language = null ): array {
 		$table  = $this->schema->operations_table();
 		$limit  = max( 1, $limit );
 		$offset = max( 0, $offset );
 
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		list( $where, $where_args ) = $this->language_where( $language );
+
+		// The language clause is a code constant assembled by language_where(); the
+		// placeholder it carries is bound below with the limit and the offset, in the
+		// order they appear in the statement.
+		$sql  = "SELECT * FROM {$table} {$where} ORDER BY id DESC LIMIT %d OFFSET %d";
+		$args = array( ...$where_args, $limit, $offset );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare( "SELECT * FROM {$table} ORDER BY id DESC LIMIT %d OFFSET %d", $limit, $offset ),
+			$this->wpdb->prepare( $sql, ...$args ),
 			ARRAY_A
 		);
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 
 		return array_map( array( $this, 'hydrate' ), $rows );
 	}
@@ -206,13 +221,54 @@ final class Operations {
 	 * How many operations the history holds. The list used to answer with the
 	 * newest twenty and no hint that there were more; the pager needs the whole
 	 * count to say how far back it goes.
+	 *
+	 * Takes the same language as {@see recent()} and must be called with the same
+	 * one: a count that included runs the list is hiding would page past the end
+	 * of it and show the user empty pages they cannot explain.
+	 *
+	 * @param string|null $language Count only runs this language can see; null counts all.
 	 */
-	public function count_all(): int {
+	public function count_all( ?string $language = null ): int {
 		$table = $this->schema->operations_table();
 
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-		return (int) $this->wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		list( $where, $where_args ) = $this->language_where( $language );
+
+		if ( array() === $where_args ) {
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			return (int) $this->wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+		}
+
+		$sql = "SELECT COUNT(*) FROM {$table} {$where}";
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		return (int) $this->wpdb->get_var( $this->wpdb->prepare( $sql, ...$where_args ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+	}
+
+	/**
+	 * The WHERE clause that confines the history to one language, if it is confined.
+	 *
+	 * One method rather than the same condition written twice, because the two
+	 * places that need it are a list and the count that pages it, and this codebase
+	 * has already paid once for a rule kept in two places that drifted apart.
+	 *
+	 * **A run with no language is visible in every language, and that is the whole
+	 * subtlety here.** NULL is written by three different situations — a site with
+	 * no WPML, a user working on WPML's "All languages", and every run made before
+	 * the column existed — and none of them is a claim that the run belonged to
+	 * some other language. Hiding those rows would empty the history of any shop
+	 * the moment it upgraded, and would hide an all-languages run from the very
+	 * languages it changed.
+	 *
+	 * @param string|null $language The language to confine to, or null for no confinement.
+	 * @return array{0: string, 1: list<string>} The clause (possibly empty) and its arguments.
+	 */
+	private function language_where( ?string $language ): array {
+		if ( null === $language || '' === $language ) {
+			return array( '', array() );
+		}
+
+		return array( 'WHERE ( language = %s OR language IS NULL )', array( $language ) );
 	}
 
 	/**
@@ -419,6 +475,9 @@ final class Operations {
 			// had no schedule or no note. Null reads correctly for all three.
 			isset( $row['schedule_name'] ) && '' !== $row['schedule_name'] ? (string) $row['schedule_name'] : null,
 			isset( $row['note'] ) && '' !== $row['note'] ? (string) $row['note'] : null,
+			// Absent on every row written before migration 10, and NULL on every run
+			// that was not confined to a language. Both mean the same thing here.
+			isset( $row['language'] ) && '' !== $row['language'] ? (string) $row['language'] : null,
 		);
 	}
 }
