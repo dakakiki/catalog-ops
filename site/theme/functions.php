@@ -13,6 +13,7 @@ require_once get_template_directory() . '/inc/content.php';
 require_once get_template_directory() . '/inc/fields.php';
 require_once get_template_directory() . '/inc/post-types.php';
 require_once get_template_directory() . '/inc/contact-form.php';
+require_once get_template_directory() . '/inc/seed.php';
 
 /**
  * Theme supports.

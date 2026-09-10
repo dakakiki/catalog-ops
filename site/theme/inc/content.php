@@ -35,6 +35,8 @@ function catalogops_has_acf(): bool {
  * @param int|null $post_id Page to read from; the current one by default.
  */
 function catalogops_text( string $name, string $default = '', ?int $post_id = null ): string {
+	catalogops_record_default( $name, $default );
+
 	if ( ! catalogops_has_acf() ) {
 		return $default;
 	}
@@ -91,6 +93,8 @@ function catalogops_the_rich( string $name, string $default = '', ?int $post_id 
  * @param int|null $post_id Page to read from.
  */
 function catalogops_group( string $group, string $key, string $default = '', ?int $post_id = null ): string {
+	catalogops_record_default( $group . '/' . $key, $default );
+
 	if ( ! catalogops_has_acf() ) {
 		return $default;
 	}
@@ -119,4 +123,37 @@ function catalogops_lines( string $value ): array {
 	$lines = array_map( 'trim', $lines );
 
 	return array_values( array_filter( $lines, static fn( string $line ): bool => '' !== $line ) );
+}
+
+/**
+ * Note what a field's shipped copy is, while something is listening.
+ *
+ * **This exists so the shipped copy can be put INTO the database rather than
+ * retyped there.** Every default on this site was written and argued over before
+ * it was a theme; seeding the pages by hand would mean transcribing several
+ * thousand words into an editor, and a transcription is where the differences
+ * creep in that nobody spots for months.
+ *
+ * Recording rather than parsing, because a good half of the copy never appears
+ * as a literal argument — the stages, the plans and the preview card are PHP
+ * arrays the templates loop over, and only the call knows which key got which
+ * line. Rendering the page with this switched on is the one way to learn exactly
+ * what it would have shown.
+ *
+ * It costs a single `isset()` when nobody is listening, which is always, because
+ * the sink is only ever created by {@see catalogops_seed_content()}.
+ *
+ * @param string $name    Field name, or `group/key` for one inside a group.
+ * @param string $default The shipped copy.
+ */
+function catalogops_record_default( string $name, string $default ): void {
+	if ( ! isset( $GLOBALS['catalogops_recorded_defaults'] ) ) {
+		return;
+	}
+
+	// First writer wins: a field read twice on one page — the plan name is read
+	// for the heading and again for the button's label — is one field.
+	if ( ! isset( $GLOBALS['catalogops_recorded_defaults'][ $name ] ) ) {
+		$GLOBALS['catalogops_recorded_defaults'][ $name ] = $default;
+	}
 }

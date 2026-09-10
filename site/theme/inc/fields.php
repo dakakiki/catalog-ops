@@ -161,7 +161,14 @@ function catalogops_register_fields(): void {
 		),
 
 		catalogops_tab( 'problem', __( 'Problem', 'catalogops' ) ),
-		catalogops_field( 'problem_text', __( 'The problem, in one paragraph', 'catalogops' ), 'wysiwyg', __( 'The red strip under the hero.', 'catalogops' ) ),
+		// A textarea and not a WYSIWYG, and the reason is structural rather than
+		// stylistic: this renders INSIDE a <p>, and ACF runs a WYSIWYG value
+		// through wpautop on the way out — so the editor produced <p> inside <p>,
+		// which browsers repair by closing the outer one early and taking the
+		// styling with it. A WYSIWYG would also invite headings and lists into a
+		// one-paragraph strip that has no room for them. Inline markup still
+		// works: the value goes through wp_kses_post().
+		catalogops_field( 'problem_text', __( 'The problem, in one paragraph', 'catalogops' ), 'textarea', __( 'One paragraph, shown in the red strip under the hero. Emphasis with &lt;strong&gt; is allowed.', 'catalogops' ), 4 ),
 
 		catalogops_tab( 'pipeline', __( 'How it works', 'catalogops' ) ),
 		catalogops_field( 'how_eyebrow', __( 'Eyebrow', 'catalogops' ) ),
@@ -304,7 +311,8 @@ function catalogops_register_fields(): void {
 
 				catalogops_tab( 'contact_form', __( 'Form', 'catalogops' ) ),
 				catalogops_field( 'contact_submit', __( 'Button text', 'catalogops' ) ),
-				catalogops_field( 'contact_privacy_note', __( 'Note under the button', 'catalogops' ), 'wysiwyg' ),
+				// Textarea for the same reason as problem_text: it renders inside a <p>.
+				catalogops_field( 'contact_privacy_note', __( 'Note under the button', 'catalogops' ), 'textarea', __( 'One paragraph. Write %s where the link to the Privacy Policy should go.', 'catalogops' ), 4 ),
 
 				catalogops_tab( 'contact_aside', __( 'Beside the form', 'catalogops' ) ),
 				catalogops_group_field( 'aside_1', __( 'First panel', 'catalogops' ), array( 'kicker' => array( __( 'Kicker', 'catalogops' ), 'text' ), 'title' => array( __( 'Heading', 'catalogops' ), 'text' ), 'body' => array( __( 'Text', 'catalogops' ), 'textarea' ) ) ),
