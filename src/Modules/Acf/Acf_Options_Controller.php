@@ -7,6 +7,7 @@
 
 namespace CatalogOps\Modules\Acf;
 
+use CatalogOps\Rest\Language;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
@@ -44,7 +45,25 @@ final class Acf_Options_Controller {
 	 *
 	 * @param Acf_Fields $fields The definition reader.
 	 */
-	public function __construct( private readonly Acf_Fields $fields ) {}
+	/**
+	 * The translations WPML holds for this site's ACF text.
+	 *
+	 * @var Acf_Strings
+	 */
+	private Acf_Strings $strings;
+
+	/**
+	 * Build the controller.
+	 *
+	 * @param Acf_Fields       $fields  The definition reader.
+	 * @param Acf_Strings|null $strings The translation reader; the default reads
+	 *                                  this site's own field groups.
+	 */
+	public function __construct( private readonly Acf_Fields $fields, ?Acf_Strings $strings = null ) {
+		global $wpdb;
+
+		$this->strings = $strings ?? new Acf_Strings( $wpdb );
+	}
 
 	/**
 	 * Register the route.
@@ -63,7 +82,7 @@ final class Acf_Options_Controller {
 						'required'          => true,
 						'sanitize_callback' => 'sanitize_text_field',
 					),
-				),
+				) + Language::args(),
 			)
 		);
 	}
@@ -84,6 +103,14 @@ final class Acf_Options_Controller {
 	 * wrote. Sending the label as the id would build a condition that matches
 	 * nothing: `co_origin` stores `us`, not `United States`.
 	 *
+	 * **The name is translated and the id is never touched**, and the split is the
+	 * whole point. ACFML registers each choice's label with WPML String Translation,
+	 * so a shop that has translated "On sale" into Serbian should pick from a
+	 * Serbian list — but what the condition carries, and what is frozen into
+	 * filter_json for a cron tick to replay months later, has to stay `sale`. A
+	 * translated id would be a filter that matched nothing, and matched nothing
+	 * silently.
+	 *
 	 * @param WP_REST_Request $request The request.
 	 */
 	public function options( WP_REST_Request $request ): WP_REST_Response {
@@ -94,12 +121,15 @@ final class Acf_Options_Controller {
 			return new WP_REST_Response( array( 'options' => array() ) );
 		}
 
-		$options = array();
+		$language = Language::from_request( $request );
+		$options  = array();
 
 		foreach ( $this->fields->choices( $definition ) as $value => $label ) {
+			$name = '' === $label ? (string) $value : (string) $label;
+
 			$options[] = array(
 				'id'   => $value,
-				'name' => '' === $label ? $value : $label,
+				'name' => $this->strings->translate( $field_key, 'choices', $name, $language ),
 			);
 		}
 

@@ -1156,7 +1156,21 @@ function ModuleField( { field, row, onChange } ) {
 
 		setLoadingOptions( true );
 
-		apiFetch( { path: field.options_route } )
+		// The route already carries `?field=`, so the language is appended rather
+		// than started. The values it offers are the CURRENT language's labels; the
+		// ids behind them are ACF's stored keys and are the same in every language,
+		// which is what keeps a filter saved in one readable in the other.
+		const language = currentLanguage();
+
+		apiFetch( {
+			path: `${ field.options_route }${
+				language
+					? `${
+							field.options_route.includes( '?' ) ? '&' : '?'
+					  }language=${ encodeURIComponent( language ) }`
+					: ''
+			}`,
+		} )
 			.then( ( res ) => {
 				if ( live ) {
 					setOptions( res.terms || res.options || [] );

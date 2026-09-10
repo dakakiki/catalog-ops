@@ -506,6 +506,115 @@ final class AcfFilterProviderTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * The value picker is the other half, and the split inside it is the point: the
+	 * NAME a shop reads is translated, the ID a condition carries never is. ACF
+	 * stores `sale`, and `sale` is what filter_json has to keep for a cron tick to
+	 * replay months later — a translated id would be a filter that matched nothing,
+	 * and matched nothing silently.
+	 */
+	public function test_a_choice_is_named_in_the_language_but_keeps_its_stored_id(): void {
+		global $wpdb;
+
+		$group = $this->group();
+		$this->field(
+			$group,
+			'field_badges',
+			'badges',
+			'Promo badges',
+			array(
+				'type'    => 'select',
+				'choices' => array(
+					'sale' => 'On sale',
+					'eco'  => 'Eco',
+				),
+			)
+		);
+
+		$seen = array();
+
+		add_filter(
+			'wpml_translate_single_string',
+			static function ( $value, $context, $name, $language ) use ( &$seen ) {
+				$seen[] = $name;
+
+				if ( 'sr' !== $language ) {
+					return $value;
+				}
+
+				return array(
+					'On sale' => 'Na akciji',
+					'Eco'     => 'Eko',
+				)[ $value ] ?? $value;
+			},
+			10,
+			4
+		);
+
+		$controller = new \CatalogOps\Modules\Acf\Acf_Options_Controller( new \CatalogOps\Modules\Acf\Acf_Fields( $wpdb ) );
+
+		$request = new \WP_REST_Request( 'GET', '/catalogops/v1/fields/acf-options' );
+		$request->set_param( 'field', 'field_badges' );
+		$request->set_param( 'language', 'sr' );
+
+		$options = (array) ( $controller->options( $request )->get_data()['options'] ?? array() );
+
+		$this->assertSame(
+			array(
+				array( 'id' => 'sale', 'name' => 'Na akciji' ),
+				array( 'id' => 'eco', 'name' => 'Eko' ),
+			),
+			$options
+		);
+
+		// ACFML files a choice under `-choices-`, not `-label-`; asking for the wrong
+		// slot would miss and hand back English, which looks exactly like a shop that
+		// has not translated anything.
+		$this->assertContains( 'field-field_badges-choices-' . md5( 'On sale' ), $seen );
+	}
+
+	/**
+	 * And with no language, the picker is what it always was and WPML is not asked.
+	 */
+	public function test_a_choice_is_untouched_without_a_language(): void {
+		global $wpdb;
+
+		$group = $this->group();
+		$this->field(
+			$group,
+			'field_badges',
+			'badges',
+			'Promo badges',
+			array(
+				'type'    => 'select',
+				'choices' => array( 'sale' => 'On sale' ),
+			)
+		);
+
+		$asked = false;
+
+		add_filter(
+			'wpml_translate_single_string',
+			static function ( $value ) use ( &$asked ) {
+				$asked = true;
+
+				return 'Na akciji';
+			},
+			10,
+			4
+		);
+
+		$controller = new \CatalogOps\Modules\Acf\Acf_Options_Controller( new \CatalogOps\Modules\Acf\Acf_Fields( $wpdb ) );
+
+		$request = new \WP_REST_Request( 'GET', '/catalogops/v1/fields/acf-options' );
+		$request->set_param( 'field', 'field_badges' );
+
+		$options = (array) ( $controller->options( $request )->get_data()['options'] ?? array() );
+
+		$this->assertFalse( $asked );
+		$this->assertSame( array( array( 'id' => 'sale', 'name' => 'On sale' ) ), $options );
+	}
+
+	/**
 	 * A label nobody has translated comes back as it is, and the field stays in the
 	 * list. Dropping it would hide a field a saved filter may already name.
 	 */
