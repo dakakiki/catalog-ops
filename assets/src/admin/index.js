@@ -5901,16 +5901,29 @@ function App() {
 
 	// Load the category and brand dropdowns once.
 	useEffect( () => {
-		apiFetch( { path: '/catalogops/v1/fields/categories' } )
+		// The pickers list the CURRENT language's terms, because a translated term
+		// is a different term with a different id — Accessories is 18 in English
+		// and 73 in Serbian. A picker filled in one language hands the engine ids
+		// that no product in the other carries, and the filter comes back empty
+		// with nothing about it looking wrong.
+		const inLanguage = ( route ) => {
+			const language = currentLanguage();
+
+			return `/catalogops/v1/fields/${ route }${
+				language ? `?language=${ encodeURIComponent( language ) }` : ''
+			}`;
+		};
+
+		apiFetch( { path: inLanguage( 'categories' ) } )
 			.then( ( res ) => setCategories( res.categories || [] ) )
 			.catch( () => {} );
-		apiFetch( { path: '/catalogops/v1/fields/tags' } )
+		apiFetch( { path: inLanguage( 'tags' ) } )
 			.then( ( res ) => setTags( res.tags || [] ) )
 			.catch( () => {} );
-		apiFetch( { path: '/catalogops/v1/fields/brands' } )
+		apiFetch( { path: inLanguage( 'brands' ) } )
 			.then( ( res ) => setBrands( res.brands || [] ) )
 			.catch( () => {} );
-		apiFetch( { path: '/catalogops/v1/fields/attributes' } )
+		apiFetch( { path: inLanguage( 'attributes' ) } )
 			.then( ( res ) => setAttributes( res.attributes || [] ) )
 			.catch( () => {} );
 		// The fields modules register. An installation with none answers an empty

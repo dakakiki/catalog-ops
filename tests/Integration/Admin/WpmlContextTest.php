@@ -112,6 +112,61 @@ final class WpmlContextTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A translated term is a different row with a different id — Accessories is 18
+	 * in English and 73 in Serbian on the development catalogue — so a picker built
+	 * in one language hands the engine ids no product in the other carries. Nothing
+	 * about the empty result that follows looks like a bug.
+	 */
+	public function test_a_term_is_mapped_into_the_requested_language(): void {
+		$this->speak( 'en' );
+		$this->translate_terms( array( 18 => 73 ) );
+
+		$this->assertSame( 73, $this->context->term_in_language( 18, 'product_cat', 'sr' ) );
+	}
+
+	/**
+	 * The list a language gets is that language's list. A term nobody has
+	 * translated labels nothing there and could match nothing there, and
+	 * translating it is the shop's business rather than this control's to disguise.
+	 */
+	public function test_a_term_with_no_translation_is_dropped_rather_than_substituted(): void {
+		$this->speak( 'en' );
+		$this->translate_terms( array( 18 => 73 ) );
+
+		$this->assertNull( $this->context->term_in_language( 99, 'product_cat', 'sr' ) );
+	}
+
+	/**
+	 * The overwhelmingly common case has to cost nothing and change nothing: with
+	 * no language asked for, or no WPML at all, a term is itself.
+	 */
+	public function test_a_term_is_untouched_without_a_language_or_without_wpml(): void {
+		$this->assertSame( 18, $this->context->term_in_language( 18, 'product_cat', null ) );
+
+		// WPML absent: even a language cannot make this map anything.
+		$this->assertSame( 18, $this->context->term_in_language( 18, 'product_cat', 'sr' ) );
+	}
+
+	/**
+	 * Stand where WPML stands on `wpml_object_id`.
+	 *
+	 * WPML's own signature is ( $id, $type, $return_original_if_missing, $lang ),
+	 * and this listener honours the third argument by ignoring it — the caller
+	 * passes false, and a stand-in that quietly returned the original anyway would
+	 * make the test above pass for the wrong reason.
+	 *
+	 * @param array<int, int> $map Source term id => translated term id.
+	 */
+	private function translate_terms( array $map ): void {
+		add_filter(
+			'wpml_object_id',
+			static fn( $id ) => $map[ (int) $id ] ?? null,
+			10,
+			4
+		);
+	}
+
+	/**
 	 * Stand where WPML stands on `wpml_current_language`.
 	 *
 	 * @param string $code The language WPML would report.

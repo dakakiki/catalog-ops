@@ -119,6 +119,47 @@ final class Wpml_Context {
 	}
 
 	/**
+	 * The same term, seen from another language.
+	 *
+	 * WPML translates taxonomy terms as well as posts, and a translated term is a
+	 * **different row with a different id**: on the development catalogue
+	 * Accessories is term 18 in English and 73 in Serbian, with the same name. So a
+	 * category picker built in one language hands the filter ids that no product in
+	 * the other language carries, and the run returns nothing — which reads as an
+	 * over-narrow filter rather than as a mismatch, because nothing about it looks
+	 * wrong. Measured: `category IN (18, 16, 26)` is 4,596 products unconstrained,
+	 * 4,594 in English and **0** in Serbian.
+	 *
+	 * **`wpml_object_id`, never `wpml_switch_language`.** The switch action calls
+	 * `SitePress::switch_lang( $code, true )`, whose second argument writes the
+	 * user's language cookie — so a throw anywhere between the switch and the
+	 * restore would leave the admin in a language they did not choose, on a REST
+	 * request they cannot see. This filter changes nothing and returns an answer.
+	 *
+	 * **A term with no translation answers null, and is meant to.** The alternative
+	 * — WPML's `$return_original_if_missing`, which hands back the original — would
+	 * put an English category into a Serbian list, where it labels nothing and
+	 * matches nothing. The owner's rule is that each language shows its own
+	 * catalogue, and that a term nobody has translated is the shop's business
+	 * rather than something for this plugin to paper over. So the list a language
+	 * gets is that language's list, and a gap in it is visible as a gap.
+	 *
+	 * @param int         $term_id  The term as this request knows it.
+	 * @param string      $taxonomy Its taxonomy.
+	 * @param string|null $language Target language, or null to change nothing.
+	 * @return int|null The term in that language, or null when there is none.
+	 */
+	public function term_in_language( int $term_id, string $taxonomy, ?string $language ): ?int {
+		if ( null === $language || ! $this->is_active() ) {
+			return $term_id;
+		}
+
+		$translated = apply_filters( 'wpml_object_id', $term_id, $taxonomy, false, $language );
+
+		return is_numeric( $translated ) ? (int) $translated : null;
+	}
+
+	/**
 	 * The whole answer, in the shape the React app is handed.
 	 *
 	 * Null when WPML is not active, which is the app's signal to send no language
