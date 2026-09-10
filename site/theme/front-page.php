@@ -344,16 +344,15 @@ get_header();
       </p>
       <?php
       /*
-       * The one limit on the guarantee, and it links to the page that explains
-       * it. Stated bare beside a Buy button it reads as a catch — a condition
-       * with no reason given, at the moment a reader is deciding whether to
-       * trust unfamiliar software with their prices. The refund policy gives the
-       * reason in two sentences; the link is what lets somebody find it without
-       * hunting through the footer.
+       * The way to the whole policy, not a condition on it. This slot used to
+       * read "One guarantee per customer", which Freemius contradicts at the
+       * checkout — it promises the buyer unconditional protection, in those
+       * words, at the moment of payment. A stamp beside three Buy buttons is
+       * where a reader wants the door to the detail, not a catch.
        */
       ?>
       <p class="guarantee-note">
-        <a href="<?php echo esc_url( catalogops_page_url( 'legal', 'refunds' ) ); ?>"><?php catalogops_the_text( 'guarantee_note', 'One guarantee per customer.' ); ?></a>
+        <a href="<?php echo esc_url( catalogops_page_url( 'legal', 'refunds' ) ); ?>"><?php catalogops_the_text( 'guarantee_note', 'How refunds work' ); ?></a>
       </p>
     </div>
   </div>
@@ -402,8 +401,7 @@ get_header();
   
         <details>
           <summary>Can I get a refund?</summary>
-          <div class="faq-body"><div class="faq-body-inner"><p>Within 14 days, for any reason, with no questions asked. You cancel, we refund the whole amount, and any conversation about why comes afterwards or not at all.</p>
-  <p>The guarantee is one per customer. It exists so that a first purchase carries no risk — not as a way to use the plugin a fortnight at a time.</p></div></div>
+          <div class="faq-body"><div class="faq-body-inner"><p>Within 14 days, for any reason, with no questions asked. You cancel, we refund the whole amount, and any conversation about why comes afterwards or not at all.</p></div></div>
         </details>
   
         <details>
