@@ -4,3 +4,7 @@ node_modules/
 # committed on purpose: WordPress reads the theme's name and version out of
 # style.css, so a checkout without it is not a theme at all, and a server that
 # deploys by pulling the repo has no Node on it.
+
+# acf-json/ is COMMITTED. It is where the field groups live — ACF loads them
+# from here by default, lists them in the admin, and writes any edit back to
+# these files. A checkout without them is a site with no editing screens.

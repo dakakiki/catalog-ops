@@ -148,6 +148,20 @@ function catalogops_page_url( string $slug, string $anchor = '' ): string {
 }
 
 /**
+ * The id of one of the site's own pages, by slug.
+ *
+ * The sibling of {@see catalogops_page_url()}, for the places that need the id
+ * rather than the address. Zero when the page does not exist.
+ *
+ * @param string $slug Page slug.
+ */
+function catalogops_page_id( string $slug ): int {
+	$page = get_page_by_path( $slug );
+
+	return $page instanceof WP_Post ? (int) $page->ID : 0;
+}
+
+/**
  * A link to a section of the landing page, from any page.
  *
  * On the landing page itself these stay bare fragments, so the browser scrolls
