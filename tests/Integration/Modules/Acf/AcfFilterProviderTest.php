@@ -407,4 +407,121 @@ final class AcfFilterProviderTest extends WP_UnitTestCase {
 		$this->assertFalse( $this->provider->handles_filter( 'meta:acf_thing' ) );
 		$this->assertFalse( $this->provider->handles_filter( 'price' ) );
 	}
+
+	/**
+	 * ACFML registers every ACF field label with WPML String Translation, under the
+	 * group it belongs to and keyed `field-{key}-label-{md5 of the label}`. A shop
+	 * that has translated its field names should see them in the filter.
+	 *
+	 * The listener below stands exactly where WPML stands, and it asserts the
+	 * arguments it is given rather than only the answer: the context and the name
+	 * are ACFML's convention, and getting either wrong would miss silently and hand
+	 * back the English label — which looks identical to a shop that simply has not
+	 * translated anything.
+	 */
+	public function test_a_label_is_offered_in_the_language_that_was_asked_for(): void {
+		$group = $this->group();
+		$this->field( $group, 'field_season', 'season', 'Season', array( 'type' => 'text' ) );
+
+		$seen = array();
+
+		add_filter(
+			'wpml_translate_single_string',
+			static function ( $value, $context, $name, $language ) use ( &$seen ) {
+				$seen[] = compact( 'value', 'context', 'name', 'language' );
+
+				return ( 'Season' === $value && 'sr' === $language ) ? 'Sezona' : $value;
+			},
+			10,
+			4
+		);
+
+		$fields = $this->provider->filter_fields( 'sr' );
+		$labels = array();
+
+		foreach ( $fields as $field ) {
+			$labels[ $field->key ] = $field->label;
+		}
+
+		$this->assertSame( 'Sezona', $labels['acf:field_season'] ?? null );
+
+		$this->assertSame( 'acf-field-group-group_test', $seen[0]['context'] );
+		$this->assertSame( 'field-field_season-label-' . md5( 'Season' ), $seen[0]['name'] );
+		$this->assertSame( 'sr', $seen[0]['language'] );
+	}
+
+	/**
+	 * The column label travels with the field into the results table, so it has to
+	 * be the translated one too — a header in one language above a filter row in
+	 * another is worse than both being English.
+	 */
+	public function test_the_column_label_is_translated_with_the_field_label(): void {
+		$group = $this->group();
+		$this->field( $group, 'field_season', 'season', 'Season', array( 'type' => 'text' ) );
+
+		add_filter( 'wpml_translate_single_string', static fn( $value ) => 'Season' === $value ? 'Sezona' : $value, 10, 4 );
+
+		foreach ( $this->provider->filter_fields( 'sr' ) as $field ) {
+			if ( 'acf:field_season' === $field->key ) {
+				$this->assertSame( 'Sezona', $field->column_label );
+
+				return;
+			}
+		}
+
+		$this->fail( 'the field was not offered at all' );
+	}
+
+	/**
+	 * No language asked for is the overwhelmingly common case — every site without
+	 * WPML, and every caller that existed before this — and it must not so much as
+	 * ask. A provider that consulted WPML anyway would translate into whatever
+	 * language the request resolved as, which on a REST call is the site default.
+	 */
+	public function test_no_language_asks_for_no_translation_at_all(): void {
+		$group = $this->group();
+		$this->field( $group, 'field_season', 'season', 'Season', array( 'type' => 'text' ) );
+
+		$asked = false;
+
+		add_filter(
+			'wpml_translate_single_string',
+			static function ( $value ) use ( &$asked ) {
+				$asked = true;
+
+				return 'Sezona';
+			},
+			10,
+			4
+		);
+
+		$labels = array();
+
+		foreach ( $this->provider->filter_fields() as $field ) {
+			$labels[ $field->key ] = $field->label;
+		}
+
+		$this->assertFalse( $asked, 'nothing should have been asked of WPML' );
+		$this->assertSame( 'Season', $labels['acf:field_season'] ?? null );
+	}
+
+	/**
+	 * A label nobody has translated comes back as it is, and the field stays in the
+	 * list. Dropping it would hide a field a saved filter may already name.
+	 */
+	public function test_an_untranslated_label_is_left_alone_and_the_field_stays(): void {
+		$group = $this->group();
+		$this->field( $group, 'field_season', 'season', 'Season', array( 'type' => 'text' ) );
+
+		// WPML's own behaviour when it holds no translation: it returns the original.
+		add_filter( 'wpml_translate_single_string', static fn( $value ) => $value, 10, 4 );
+
+		$labels = array();
+
+		foreach ( $this->provider->filter_fields( 'sr' ) as $field ) {
+			$labels[ $field->key ] = $field->label;
+		}
+
+		$this->assertSame( 'Season', $labels['acf:field_season'] ?? null );
+	}
 }

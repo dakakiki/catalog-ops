@@ -5944,7 +5944,7 @@ function App() {
 		// The `finally` is what separates "not asked yet" from "asked, nothing
 		// came back". Both are an empty list, and they must not look alike: the
 		// first is worth holding a place for, the second is worth forgetting.
-		apiFetch( { path: '/catalogops/v1/fields/filterable' } )
+		apiFetch( { path: inLanguage( 'filterable' ) } )
 			.then( ( res ) => setModuleFields( res.fields || [] ) )
 			.catch( () => {} )
 			.finally( () => setModuleFieldsLoaded( true ) );

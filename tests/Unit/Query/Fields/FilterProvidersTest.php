@@ -209,7 +209,9 @@ final class FilterProvidersTest extends TestCase {
 				return 'Test module';
 			}
 
-			public function filter_fields(): array {
+			public function filter_fields( ?string $language = null ): array {
+				unset( $language );
+
 				return $this->fields;
 			}
 

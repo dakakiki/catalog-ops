@@ -129,15 +129,23 @@ final class Fields_Controller {
 	 * stay that way for now; serving them too would mean rewriting eight tested
 	 * controls in the same change as introducing the mechanism, and the spec's
 	 * de-risking advice is to append a module section below them instead.
+	 *
+	 * The labels come back in the language the request is being made in, so a
+	 * shop that has translated its ACF field names sees them. Only the labels
+	 * move: the keys are what a saved filter persists, and a key that meant a
+	 * different field in a different language would be a filter that changed its
+	 * mind when somebody switched languages.
+	 *
+	 * @param WP_REST_Request $request The request, for the language to label in.
 	 */
-	public function filterable(): WP_REST_Response {
+	public function filterable( WP_REST_Request $request ): WP_REST_Response {
 		if ( null === $this->providers ) {
 			return new WP_REST_Response( array( 'fields' => array() ) );
 		}
 
 		$fields = array();
 
-		foreach ( $this->providers->all_fields() as $entry ) {
+		foreach ( $this->providers->all_fields( Language::from_request( $request ) ) as $entry ) {
 			$field = $entry['field'];
 
 			$fields[] = array(
@@ -177,6 +185,7 @@ final class Fields_Controller {
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'filterable' ),
 				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => Language::args(),
 			)
 		);
 

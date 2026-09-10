@@ -171,9 +171,15 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 * post row and is therefore not listed — see {@see Acf_Fields} for why that is
 	 * the right side to be wrong on.
 	 *
+	 * Labels, and only labels, follow the language. ACFML registers each field's
+	 * label with WPML String Translation, and {@see translate_label()} asks for the
+	 * one language rather than for "the current one" — see the note there.
+	 *
+	 * @param string|null $language Language to label the fields in, or null for the
+	 *                              labels as ACF stores them.
 	 * @return list<Filter_Field>
 	 */
-	public function filter_fields(): array {
+	public function filter_fields( ?string $language = null ): array {
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
 				"SELECT ID, post_name, post_title, post_excerpt, post_parent, post_content
@@ -197,6 +203,11 @@ final class Acf_Filter_Provider implements Filter_Provider {
 		foreach ( $rows as $row ) {
 			$by_id[ (int) $row['ID'] ] = $row;
 		}
+
+		// Each group's own key, because WPML files a field's label under the group
+		// it belongs to. One query rather than one per group, and only when a
+		// language was asked for.
+		$group_keys = null === $language ? array() : $this->group_keys();
 
 		$scopes_by_group = array();
 		$fields          = array();
@@ -226,7 +237,13 @@ final class Acf_Filter_Provider implements Filter_Provider {
 				continue;
 			}
 
-			$field = $this->describe( $definition, $scopes, $by_id );
+			$field = $this->describe(
+				$definition,
+				$scopes,
+				$by_id,
+				(string) ( $group_keys[ $group_id ] ?? '' ),
+				$language
+			);
 
 			if ( null !== $field ) {
 				$fields[] = $field;
@@ -272,8 +289,10 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 * @param array<string, mixed>             $definition Hydrated definition.
 	 * @param Query_Scope[]                    $scopes     Scopes the owning group covers.
 	 * @param array<int, array<string, mixed>> $by_id   Every acf-field row by id.
+	 * @param string                           $group_key  Key of the owning field group.
+	 * @param string|null                      $language   Language to label in, or null.
 	 */
-	private function describe( array $definition, array $scopes, array $by_id ): ?Filter_Field {
+	private function describe( array $definition, array $scopes, array $by_id, string $group_key = '', ?string $language = null ): ?Filter_Field {
 		try {
 			list( $value_kind, $control ) = $this->fields->value_kind( $definition );
 		} catch ( Filter_Field_Unavailable $e ) {
@@ -290,16 +309,18 @@ final class Acf_Filter_Provider implements Filter_Provider {
 			return null;
 		}
 
+		$label = $this->field_label( $definition, $by_id, $group_key, $language );
+
 		return new Filter_Field(
 			self::PREFIX . (string) $definition['key'],
-			$this->field_label( $definition, $by_id ),
+			$label,
 			$control,
 			$operators,
 			$scopes,
 			Filter_Control::VALUE_SET === $control
 				? Acf_Options_Controller::ROUTE . '?field=' . rawurlencode( (string) $definition['key'] )
 				: '',
-			$this->field_label( $definition, $by_id ),
+			$label,
 			false,
 			$this->fields->storage_format( $definition )
 		);
@@ -315,19 +336,110 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 *
 	 * @param array<string, mixed>             $definition Hydrated definition.
 	 * @param array<int, array<string, mixed>> $by_id      Every acf-field row by id.
+	 * @param string                           $group_key  Key of the owning field group.
+	 * @param string|null                      $language   Language to label in, or null.
 	 */
-	private function field_label( array $definition, array $by_id ): string {
+	private function field_label( array $definition, array $by_id, string $group_key = '', ?string $language = null ): string {
 		$parts  = array();
 		$parent = (int) ( $definition['parent'] ?? 0 );
 
 		for ( $depth = 0; $depth < 10 && isset( $by_id[ $parent ] ); $depth++ ) {
-			array_unshift( $parts, (string) $by_id[ $parent ]['post_title'] );
+			// Each ancestor is a field in its own right, with its own registered
+			// label, so each is translated on its own key rather than the chain
+			// being translated as one string nobody ever registered.
+			array_unshift(
+				$parts,
+				$this->translate_label(
+					(string) $by_id[ $parent ]['post_name'],
+					(string) $by_id[ $parent ]['post_title'],
+					$group_key,
+					$language
+				)
+			);
 			$parent = (int) $by_id[ $parent ]['post_parent'];
 		}
 
-		$parts[] = (string) ( $definition['label'] ?? $definition['name'] ?? '' );
+		$parts[] = $this->translate_label(
+			(string) ( $definition['key'] ?? '' ),
+			(string) ( $definition['label'] ?? $definition['name'] ?? '' ),
+			$group_key,
+			$language
+		);
 
 		return implode( ' › ', array_filter( $parts ) );
+	}
+
+	/**
+	 * One ACF label, in the language asked for.
+	 *
+	 * ACFML registers every field label with WPML String Translation under the
+	 * group it belongs to, so the translation a shop enters in WPML is already
+	 * there to be read — this only asks for it. A site with no WPML, or a label
+	 * nobody has translated, gets the label back unchanged, which is what the list
+	 * showed before any of this existed.
+	 *
+	 * **It asks for a language rather than for "the current one", and that is the
+	 * whole point.** ACF's own `acf/load_field` translation resolves against
+	 * whatever language the request is in, and a REST request from wp-admin is in
+	 * the site's default — so calling ACF here would hand English labels to a user
+	 * working in Serbian, and look exactly as though nothing had been translated.
+	 * The same trap that returned English term ids from `get_term()`.
+	 *
+	 * The string's name is ACFML's own convention, `field-{key}-label-{md5}` — the
+	 * md5 being of the original label, which is why it is computed from the label
+	 * rather than stored. Verified against the live site: md5( 'Season' ) is
+	 * `6c7a445aa85245a31c24d3e8ee5408b9`, the name WPML holds. If ACFML ever
+	 * changes the convention the lookup simply misses and the English label comes
+	 * back — the list stays correct and merely stops being translated, which is the
+	 * right way for this to fail.
+	 *
+	 * @param string      $field_key  The ACF field key (`field_cops_season`).
+	 * @param string      $label      The label as ACF stores it.
+	 * @param string      $group_key  Key of the owning field group.
+	 * @param string|null $language   Language to translate into, or null for none.
+	 */
+	private function translate_label( string $field_key, string $label, string $group_key, ?string $language ): string {
+		if ( null === $language || '' === $label || '' === $field_key || '' === $group_key ) {
+			return $label;
+		}
+
+		$translated = apply_filters(
+			'wpml_translate_single_string',
+			$label,
+			'acf-field-group-' . $group_key,
+			'field-' . $field_key . '-label-' . md5( $label ),
+			$language
+		);
+
+		return is_string( $translated ) && '' !== $translated ? $translated : $label;
+	}
+
+	/**
+	 * Every `acf-field-group` post's key, by post id.
+	 *
+	 * Read straight from the posts table for the same reason every other read in
+	 * this module is: `acf_get_field_groups()` runs filter chains and consults a
+	 * request-scoped store, so it can answer differently in two requests that
+	 * should agree.
+	 *
+	 * @return array<int, string>
+	 */
+	private function group_keys(): array {
+		$rows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT ID, post_name FROM {$this->wpdb->posts} WHERE post_type = %s",
+				'acf-field-group'
+			),
+			ARRAY_A
+		);
+
+		$keys = array();
+
+		foreach ( (array) $rows as $row ) {
+			$keys[ (int) $row['ID'] ] = (string) $row['post_name'];
+		}
+
+		return $keys;
 	}
 
 	/**

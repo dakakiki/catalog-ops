@@ -71,9 +71,24 @@ interface Filter_Provider {
 	 * discovers its site's fields here — `acf_get_field_groups()`, WPML's active
 	 * languages — and freezes what it learns into the descriptors it returns.
 	 *
+	 * **The language is handed in rather than read, and it is the language to
+	 * ANSWER IN, not the one the request happens to be in.** Those are different
+	 * on every path this plugin has: a REST call from wp-admin resolves as the
+	 * site's default language whatever the user is looking at, so a provider that
+	 * asked "what language am I in?" would translate its labels into English for a
+	 * user working in Serbian and look, from the outside, exactly as if nothing had
+	 * been translated. Null means "however they are stored", which is what a site
+	 * without WPML and every caller before this both want.
+	 *
+	 * Only labels may vary with it. Keys, operators, scopes and storage are the
+	 * same in every language — a key is persisted in filter_json and must mean one
+	 * thing forever — so a provider that returned a different SET of fields per
+	 * language would break every filter a user saved in the other one.
+	 *
+	 * @param string|null $language Language code to label the fields in, or null.
 	 * @return list<Filter_Field>
 	 */
-	public function filter_fields(): array;
+	public function filter_fields( ?string $language = null ): array;
 
 	/**
 	 * Whether this provider owns the given filter key.
