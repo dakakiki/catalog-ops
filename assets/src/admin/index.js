@@ -240,6 +240,91 @@ const MODULES_EXPECTED = Boolean(
 );
 
 /**
+ * The language this whole page is working in, captured by the server on THIS page
+ * load and sent back with every request that resolves a filter or lists past work.
+ *
+ * `null` when WPML is not active, which is most shops: they send no language, see
+ * no indicator, and get exactly the behaviour they had before any of this existed.
+ *
+ * When WPML is active this is `{ code, label }`, and `code` is itself null on
+ * WPML's "All languages" — the setting that means "place no constraint". The two
+ * nulls are told apart by which one it is: no LANGUAGE at all is a shop without
+ * WPML, a LANGUAGE with a null code is a user deliberately working across every
+ * language.
+ *
+ * It is captured server-side at page load rather than read per request because
+ * WPML honours "all" only under is_admin(), and a REST call is not — see
+ * Wpml_Context.
+ */
+const LANGUAGE =
+	( window.catalogopsConfig && window.catalogopsConfig.language ) || null;
+
+/**
+ * The language code to send with a request, or undefined to send nothing.
+ *
+ * Undefined rather than null, so it drops out of a JSON body entirely instead of
+ * arriving as an explicit null — a filter written before languages existed carries
+ * no key at all, and a request from a shop without WPML should look exactly like
+ * one of those.
+ *
+ * @return {string|undefined} The language code, or undefined.
+ */
+function currentLanguage() {
+	return LANGUAGE && LANGUAGE.code ? LANGUAGE.code : undefined;
+}
+
+/**
+ * Which language this page is working in, said out loud in the header.
+ *
+ * The plugin never asks the user to pick a language — it works in whichever one
+ * they are already in — and that is exactly why it has to say which. An unstated
+ * frame is invisible until it is wrong: a shopkeeper who switched to Serbian two
+ * screens ago, filtered, previewed 12,000 products and pressed Apply has no other
+ * way to know which 12,000 those were.
+ *
+ * Renders nothing at all where there is nothing to say. A shop with one language
+ * must not be told it has one.
+ *
+ * @return {Object|null} The indicator element, or null.
+ */
+function LanguageIndicator() {
+	if ( ! LANGUAGE ) {
+		return null;
+	}
+
+	const all = ! LANGUAGE.code;
+
+	return (
+		<span
+			className={ `catalogops-language${
+				all ? ' catalogops-language--all' : ''
+			}` }
+			title={
+				all
+					? __(
+							'CatalogOps is working across every language. Filters, edits and schedules will reach the whole catalogue.',
+							'catalogops'
+					  )
+					: sprintf(
+							/* translators: %s: language name, e.g. Srpski. */
+							__(
+								'CatalogOps is working in %s. Filters, edits and schedules reach that language only — switch with the language selector in the admin bar.',
+								'catalogops'
+							),
+							LANGUAGE.label
+					  )
+			}
+		>
+			<span
+				className="dashicons dashicons-translation"
+				aria-hidden="true"
+			/>
+			{ all ? __( 'All languages', 'catalogops' ) : LANGUAGE.label }
+		</span>
+	);
+}
+
+/**
  * Whether the current plan permits a capability. Unknown flags default to true
  * (fail open); only an explicit `false` from the server gates the control.
  *
@@ -4695,7 +4780,17 @@ function History( { refreshKey, onChanged, firingSoon = false } ) {
 			};
 		}
 
-		apiFetch( { path: `/catalogops/v1/operations?page=${ page }` } )
+		// The history a user sees is their own language's, plus the runs that
+		// belong to no language — which includes every run made before the plugin
+		// knew about languages, so upgrading never looks like the past was wiped.
+		// On "All languages" nothing is sent and every run is listed.
+		const language = currentLanguage();
+
+		apiFetch( {
+			path: `/catalogops/v1/operations?page=${ page }${
+				language ? `&language=${ encodeURIComponent( language ) }` : ''
+			}`,
+		} )
 			.then( ( res ) => {
 				if ( cancelled ) {
 					return;
@@ -5785,7 +5880,7 @@ function App() {
 	// The filter that was actually applied to the table (frozen on Apply), so
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
-		buildFilter( emptyForm(), 'product' )
+		buildFilter( emptyForm(), 'product', [], currentLanguage() )
 	);
 
 	// First-run onboarding + the mandatory backup acknowledgement (CONTEXT §9).
@@ -5838,7 +5933,12 @@ function App() {
 
 	const run = useCallback(
 		( toPage ) => {
-			const filter = buildFilter( form, scope, moduleFields );
+			const filter = buildFilter(
+				form,
+				scope,
+				moduleFields,
+				currentLanguage()
+			);
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
@@ -5894,7 +5994,9 @@ function App() {
 	const resetAll = useCallback( () => {
 		const empty = emptyForm();
 		setForm( empty );
-		setAppliedFilter( buildFilter( empty, scope, moduleFields ) );
+		setAppliedFilter(
+			buildFilter( empty, scope, moduleFields, currentLanguage() )
+		);
 		setItems( [] );
 		setTotal( 0 );
 		setOtherScope( null );
@@ -5996,6 +6098,7 @@ function App() {
 							{ __( 'Bulk catalog operations', 'catalogops' ) }
 						</span>
 					</span>
+					<LanguageIndicator />
 				</div>
 
 				<Onboarding

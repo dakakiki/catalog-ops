@@ -416,14 +416,22 @@ export function moduleConditions( modules, fields, scope ) {
 }
 
 /**
- * Build the filter payload from the form state and target scope.
+ * Build the filter payload from the form state, target scope, and language.
  *
- * @param {Object} form         Form values.
- * @param {string} scope        'product' or 'variation'.
- * @param {Array}  moduleFields Descriptors from /fields/filterable.
+ * The language sits beside the scope and never among the conditions, because it
+ * is the same kind of fact: which objects are being talked about at all, decided
+ * before any condition is asked and not chosen on this form. It is passed in
+ * rather than read from a global so this file stays pure and testable.
+ *
+ * @param {Object}           form         Form values.
+ * @param {string}           scope        'product' or 'variation'.
+ * @param {Array}            moduleFields Descriptors from /fields/filterable.
+ * @param {string|undefined} language     WPML language code, or undefined for
+ *                                        every language (no WPML, or "All
+ *                                        languages").
  * @return {Object} Filter in the API's shape.
  */
-export function buildFilter( form, scope, moduleFields = [] ) {
+export function buildFilter( form, scope, moduleFields = [], language ) {
 	const conditions = [];
 
 	if ( form.priceMin !== '' ) {
@@ -525,7 +533,17 @@ export function buildFilter( form, scope, moduleFields = [] ) {
 	// a module cannot widen a filter, only narrow it.
 	conditions.push( ...moduleConditions( form.modules, moduleFields, scope ) );
 
-	return { relation: 'AND', scope, conditions };
+	// The key is omitted rather than sent as null when there is no language, so a
+	// payload from a shop without WPML is byte-identical to one written before
+	// languages existed. The server treats absent, null and '' alike, but a shop
+	// with no WPML should not be leaving evidence of a feature it does not have in
+	// every saved filter and every frozen operation it ever makes.
+	return {
+		relation: 'AND',
+		scope,
+		...( language ? { language } : {} ),
+		conditions,
+	};
 }
 
 /**

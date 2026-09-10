@@ -289,6 +289,53 @@ describe( 'buildFilter', () => {
 			);
 		} );
 	} );
+
+	/**
+	 * The language is a sibling of the scope, so it has to travel exactly the way
+	 * the scope does: on the payload, never among the conditions. A condition would
+	 * be wrong twice over — it would appear in the filter summary as something the
+	 * user chose, and the "remove this condition" repair path would offer to remove
+	 * the frame the whole page is working inside.
+	 */
+	describe( 'the language', () => {
+		it( 'rides beside the scope, not among the conditions', () => {
+			const filter = buildFilter( form(), 'product', [], 'sr' );
+
+			expect( filter.language ).toBe( 'sr' );
+			expect( filter.conditions ).toEqual( [] );
+		} );
+
+		/**
+		 * A shop without WPML must produce a payload byte-identical to the one it
+		 * produced before any of this existed — not one carrying an explicit null,
+		 * which would put evidence of a feature it does not have into every saved
+		 * filter and every frozen operation it ever makes.
+		 */
+		it( 'is absent entirely when there is no language', () => {
+			expect( buildFilter( form(), 'product' ) ).not.toHaveProperty(
+				'language'
+			);
+			expect(
+				buildFilter( form(), 'product', [], undefined )
+			).not.toHaveProperty( 'language' );
+			expect(
+				buildFilter( form(), 'product', [], '' )
+			).not.toHaveProperty( 'language' );
+		} );
+
+		it( 'survives alongside real conditions and the variation scope', () => {
+			const filter = buildFilter(
+				form( { priceMin: '10' } ),
+				'variation',
+				[],
+				'sr'
+			);
+
+			expect( filter.language ).toBe( 'sr' );
+			expect( filter.scope ).toBe( 'variation' );
+			expect( conditionFor( filter, 'price' ).operator ).toBe( '>=' );
+		} );
+	} );
 } );
 
 describe( 'operatorFor', () => {

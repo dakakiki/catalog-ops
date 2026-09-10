@@ -84,6 +84,43 @@
 	color: var(--co-muted);
 }
 
+/* The language this page is working in. Pushed to the far end of the header
+   rather than tucked beside the tagline: it is a statement about everything
+   below it, not a second subtitle. Quiet by default — indigo, the colour that
+   means "runs once" — because it is context, not a warning. */
+.catalogops-language {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 5px 11px 5px 8px;
+	border: 1px solid #c7d2fe;
+	border-radius: 999px;
+	background: #eef2ff;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.4;
+	color: #3730a3;
+	cursor: default;
+	white-space: nowrap;
+}
+
+.catalogops-language .dashicons {
+	width: 16px;
+	height: 16px;
+	font-size: 16px;
+	opacity: 0.75;
+}
+
+/* "All languages" is the wider setting, and looking wider is the point: on it a
+   filter reaches every language at once, which is the one state where somebody
+   should look twice before pressing Apply. */
+.catalogops-language--all {
+	border-color: #fcd34d;
+	background: #fffbeb;
+	color: #92400e;
+}
+
 /* --- Cards -------------------------------------------------------------- */
 
 .catalogops-card,
