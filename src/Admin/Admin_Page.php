@@ -44,6 +44,13 @@ final class Admin_Page {
 	private ?Filter_Providers $providers;
 
 	/**
+	 * Which language the user is looking at the catalogue in.
+	 *
+	 * @var Wpml_Context
+	 */
+	private Wpml_Context $wpml;
+
+	/**
 	 * Build the admin page.
 	 *
 	 * @param string                $plugin_file Absolute path to the main plugin file.
@@ -53,15 +60,20 @@ final class Admin_Page {
 	 *                                           whether it holds anything — so the
 	 *                                           filter knows at first paint that a
 	 *                                           module section is coming.
+	 * @param Wpml_Context|null     $wpml        The language reader; the default is
+	 *                                           the real one, which answers "no
+	 *                                           WPML" on a site that has none.
 	 */
 	public function __construct(
 		string $plugin_file,
 		?License $license = null,
-		?Filter_Providers $providers = null
+		?Filter_Providers $providers = null,
+		?Wpml_Context $wpml = null
 	) {
 		$this->plugin_file = $plugin_file;
 		$this->license     = $license ?? License::unlimited();
 		$this->providers   = $providers;
+		$this->wpml        = $wpml ?? new Wpml_Context();
 	}
 
 	/**
@@ -183,6 +195,17 @@ final class Admin_Page {
 				'currency'     => function_exists( 'get_woocommerce_currency_symbol' )
 					? html_entity_decode( get_woocommerce_currency_symbol(), ENT_QUOTES, 'UTF-8' )
 					: '',
+				// Which language the user is working in — captured HERE, on an admin
+				// page load, and nowhere else. A REST request cannot be asked this
+				// question: WPML accepts "all" only under is_admin(), so on the one
+				// setting that means "the whole catalogue" a server-side read inside
+				// our own route answers with the default language instead and quietly
+				// confines the work to English. See {@see Wpml_Context}.
+				//
+				// Null on a site without WPML, and the app then sends no language and
+				// draws no indicator: a shop with one language must not be told it
+				// has one.
+				'language'     => $this->wpml->to_array(),
 			)
 		);
 	}

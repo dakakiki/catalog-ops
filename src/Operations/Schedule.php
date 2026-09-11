@@ -40,6 +40,9 @@ final class Schedule {
 	 * @param string                           $notify_email Report recipient (may be empty).
 	 * @param string                           $created_at   Creation time (GMT MySQL datetime).
 	 * @param string|null                      $paused_reason Why the supervisor paused it, or null.
+	 * @param string|null                      $language     WPML language this schedule was
+	 *                                                       authored in, or null for the whole
+	 *                                                       catalogue.
 	 */
 	public function __construct(
 		public readonly int $id,
@@ -56,6 +59,13 @@ final class Schedule {
 		public readonly string $notify_email,
 		public readonly string $created_at,
 		public readonly ?string $paused_reason = null,
+		// Which language's catalogue this schedule belongs to. A copy of the frozen
+		// filter's own language, held as a column because the list filters on it;
+		// null means it was not confined to one, which a site without WPML, a user
+		// on "All languages", and every schedule written before the column existed
+		// all have in common. What a fire actually touches is decided by the filter,
+		// never by this.
+		public readonly ?string $language = null,
 	) {}
 
 	/**

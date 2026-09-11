@@ -3,7 +3,7 @@
  * Plugin Name:       CatalogOps
  * Plugin URI:        https://github.com/dakakiki/catalog-ops
  * Description:       Bulk operations for large WooCommerce catalogs — filter, preview, snapshot, execute, undo.
- * Version:           0.7.3
+ * Version:           0.8.1
  * Requires PHP:      8.1
  * Requires at least: 6.0
  * Requires Plugins:  woocommerce
@@ -19,7 +19,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CATALOGOPS_VERSION', '0.7.3' );
+define( 'CATALOGOPS_VERSION', '0.8.1' );
 define( 'CATALOGOPS_MIN_PHP', '8.1' );
 define( 'CATALOGOPS_FILE', __FILE__ );
 define( 'CATALOGOPS_PATH', plugin_dir_path( __FILE__ ) );
@@ -115,9 +115,16 @@ if ( is_readable( CATALOGOPS_PATH . 'freemius/start.php' ) && ! function_exists(
 				'has_addons'          => false,
 				'has_paid_plans'      => true,
 				'is_org_compliant'    => true,
+				// `pricing` and `contact` are switched off and replaced by our own
+				// screens — see CatalogOps\Admin\Pricing_Page, which carries the
+				// argument and, more importantly, what it costs. `account` is
+				// deliberately left ON: it is where a licence is activated,
+				// deactivated and synced, and none of that is presentation.
 				'menu'                => array(
 					'slug'    => 'catalogops',
 					'support' => false,
+					'pricing' => false,
+					'contact' => false,
 				),
 			);
 
@@ -135,6 +142,40 @@ if ( is_readable( CATALOGOPS_PATH . 'freemius/start.php' ) && ! function_exists(
 
 	cat_fs();
 	do_action( 'cat_fs_loaded' );
+}
+
+/**
+ * Remove the plugin's data. Registered below, never called directly.
+ *
+ * A plain global function because that is what both registrations can take: WP
+ * serialises the callback name into an option, and Freemius stores it on its own
+ * action. A closure or a method would work for neither.
+ */
+function catalogops_uninstall(): void {
+	if ( class_exists( \CatalogOps\Uninstaller::class ) ) {
+		\CatalogOps\Uninstaller::run();
+	}
+}
+
+/*
+ * Where the uninstall cleanup is reached from, and why it is not uninstall.php.
+ *
+ * WordPress prefers an `uninstall.php` in the plugin folder over the uninstall
+ * hook, and calls ONLY that file. The Freemius SDK registers its own uninstall
+ * hook to delete its account data and tell its API the install is gone — so
+ * shipping the file silently disables all of it, which is why Freemius rejects a
+ * deployment containing one. The SDK's `after_uninstall` action is the seam it
+ * offers instead, and it fires after that work rather than in place of it.
+ *
+ * The `else` is not a formality: the SDK is absent from the source repo, from
+ * CI, and from any build made without it, and a plugin that cleaned up after
+ * itself only when a licensing backend happened to be bundled would leave its
+ * tables behind on exactly the installs least able to notice.
+ */
+if ( function_exists( 'cat_fs' ) ) {
+	cat_fs()->add_action( 'after_uninstall', 'catalogops_uninstall' );
+} else {
+	register_uninstall_hook( CATALOGOPS_FILE, 'catalogops_uninstall' );
 }
 
 /*

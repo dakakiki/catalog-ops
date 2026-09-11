@@ -7,7 +7,9 @@
 
 namespace CatalogOps\Rest;
 
+use CatalogOps\Admin\Wpml_Context;
 use CatalogOps\Query\Fields\Filter_Providers;
+use WP_REST_Request;
 use WP_REST_Response;
 use WP_REST_Server;
 use wpdb;
@@ -84,16 +86,27 @@ final class Fields_Controller {
 	private ?Filter_Providers $providers;
 
 	/**
+	 * Reads the language a term list should be offered in.
+	 *
+	 * @var Wpml_Context
+	 */
+	private Wpml_Context $wpml;
+
+	/**
 	 * Build the controller.
 	 *
 	 * @param wpdb                  $wpdb      WordPress database handle.
 	 * @param Filter_Providers|null $providers Module field registry. Null answers
 	 *                                         an empty list, which is what an
 	 *                                         installation with no modules is.
+	 * @param Wpml_Context|null     $wpml      The language reader; the default is
+	 *                                         the real one, which changes nothing
+	 *                                         on a site without WPML.
 	 */
-	public function __construct( wpdb $wpdb, ?Filter_Providers $providers = null ) {
+	public function __construct( wpdb $wpdb, ?Filter_Providers $providers = null, ?Wpml_Context $wpml = null ) {
 		$this->wpdb      = $wpdb;
 		$this->providers = $providers;
+		$this->wpml      = $wpml ?? new Wpml_Context();
 	}
 
 	/**
@@ -116,15 +129,23 @@ final class Fields_Controller {
 	 * stay that way for now; serving them too would mean rewriting eight tested
 	 * controls in the same change as introducing the mechanism, and the spec's
 	 * de-risking advice is to append a module section below them instead.
+	 *
+	 * The labels come back in the language the request is being made in, so a
+	 * shop that has translated its ACF field names sees them. Only the labels
+	 * move: the keys are what a saved filter persists, and a key that meant a
+	 * different field in a different language would be a filter that changed its
+	 * mind when somebody switched languages.
+	 *
+	 * @param WP_REST_Request $request The request, for the language to label in.
 	 */
-	public function filterable(): WP_REST_Response {
+	public function filterable( WP_REST_Request $request ): WP_REST_Response {
 		if ( null === $this->providers ) {
 			return new WP_REST_Response( array( 'fields' => array() ) );
 		}
 
 		$fields = array();
 
-		foreach ( $this->providers->all_fields() as $entry ) {
+		foreach ( $this->providers->all_fields( Language::from_request( $request ) ) as $entry ) {
 			$field = $entry['field'];
 
 			$fields[] = array(
@@ -164,6 +185,7 @@ final class Fields_Controller {
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'filterable' ),
 				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => Language::args(),
 			)
 		);
 
@@ -184,6 +206,7 @@ final class Fields_Controller {
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'brands' ),
 				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => Language::args(),
 			)
 		);
 
@@ -194,6 +217,7 @@ final class Fields_Controller {
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'categories' ),
 				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => Language::args(),
 			)
 		);
 
@@ -204,6 +228,7 @@ final class Fields_Controller {
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'attributes' ),
 				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => Language::args(),
 			)
 		);
 
@@ -214,8 +239,108 @@ final class Fields_Controller {
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( $this, 'tags' ),
 				'permission_callback' => array( $this, 'can_manage' ),
+				'args'                => Language::args(),
 			)
 		);
+	}
+
+	/**
+	 * A taxonomy's terms, in the language the request is being made in.
+	 *
+	 * Every one of these four lists feeds a control whose selection becomes term
+	 * ids in filter_json, so all four have to answer the same way — one method
+	 * rather than the same four lines written four times, which is how a rule ends
+	 * up applying to three of them.
+	 *
+	 * **A translated term is a different row with a different id.** On the
+	 * development catalogue Accessories is term 18 in English and 73 in Serbian,
+	 * with the same name; `product_cat` holds 26 terms for 13 categories. So a
+	 * picker filled in one language hands the engine ids that no product in the
+	 * other language carries, and the run comes back empty — measured, before this:
+	 * `category IN (18, 16, 26)` is 4,596 products unconstrained, 4,594 in English
+	 * and **0** in Serbian. Nothing about that looks like a bug; it looks like a
+	 * filter that found nothing.
+	 *
+	 * A term with no translation in the requested language is left out. The list a
+	 * language gets is that language's list: a term nobody has translated labels
+	 * nothing here and could match nothing here, and translating it is the shop's
+	 * business rather than something for this control to disguise.
+	 *
+	 * Without WPML, or with no language on the request, this is `get_terms()` and
+	 * nothing else — the same call these routes have always made.
+	 *
+	 * @param string          $taxonomy The taxonomy to list.
+	 * @param WP_REST_Request $request  The request, for its language.
+	 * @return list<\WP_Term>
+	 */
+	private function terms_for( string $taxonomy, WP_REST_Request $request ): array {
+		$terms = get_terms(
+			array(
+				'taxonomy'   => $taxonomy,
+				// A category with no products is still one a user may want to filter
+				// by, and the honest answer to that filter is nothing rather than a
+				// missing entry they cannot choose.
+				'hide_empty' => false,
+				'orderby'    => 'name',
+			)
+		);
+
+		if ( ! is_array( $terms ) ) {
+			return array();
+		}
+
+		$language = Language::from_request( $request );
+
+		if ( null === $language ) {
+			return $terms;
+		}
+
+		$localized = array();
+
+		foreach ( $terms as $term ) {
+			$id = $this->wpml->term_in_language( (int) $term->term_id, $taxonomy, $language );
+
+			if ( null === $id ) {
+				continue;
+			}
+
+			// Keyed by the translated id, because the source list may already hold
+			// both languages' terms — WPML filters `get_terms()` by the current
+			// language, and a REST request's current language is not the one being
+			// asked about here. Both rows then map to the same translation, and the
+			// user would be offered the same category twice.
+			if ( isset( $localized[ $id ] ) ) {
+				continue;
+			}
+
+			// `WP_Term::get_instance()` and NOT `get_term()`, and this is the whole
+			// trick. WPML puts `SitePress::get_term_adjust_id` on the `get_term`
+			// filter at priority 1, which translates a term into the language the
+			// REQUEST is in — so asking `get_term()` for the Serbian category 73
+			// hands back the English 18, and the picker fills with exactly the ids
+			// this method exists to replace. Measured: every id came back English
+			// while every other step of the mapping was correct.
+			//
+			// `WP_Term::get_instance()` reads the row (through the same cache) and
+			// applies no filters, so the term that comes back is the term that was
+			// asked for.
+			$translated = \WP_Term::get_instance( $id, $taxonomy );
+
+			if ( $translated instanceof \WP_Term ) {
+				$localized[ $id ] = $translated;
+			}
+		}
+
+		// Ordered by name again: the translations were fetched one at a time, and
+		// their names need not sort the way the originals did.
+		$localized = array_values( $localized );
+
+		usort(
+			$localized,
+			static fn( \WP_Term $a, \WP_Term $b ): int => strcasecmp( $a->name, $b->name )
+		);
+
+		return $localized;
 	}
 
 	/**
@@ -261,9 +386,11 @@ final class Fields_Controller {
 	 * still one a user may want to filter by, and the honest answer to that filter
 	 * is nothing rather than a missing entry they cannot choose.
 	 *
+	 * @param WP_REST_Request $request The request, for the language its list
+	 *                                 should be offered in.
 	 * @return WP_REST_Response
 	 */
-	public function brands(): WP_REST_Response {
+	public function brands( WP_REST_Request $request ): WP_REST_Response {
 		if ( ! taxonomy_exists( 'product_brand' ) ) {
 			// WooCommerce older than 9.6, or a shop whose brands come from a plugin
 			// registering something else. An empty list leaves the control empty
@@ -271,13 +398,7 @@ final class Fields_Controller {
 			return new WP_REST_Response( array( 'brands' => array() ) );
 		}
 
-		$terms = get_terms(
-			array(
-				'taxonomy'   => 'product_brand',
-				'hide_empty' => false,
-				'orderby'    => 'name',
-			)
-		);
+		$terms = $this->terms_for( 'product_brand', $request );
 
 		$brands = array();
 
@@ -299,15 +420,12 @@ final class Fields_Controller {
 
 	/**
 	 * The product categories, for the filter's category picker.
+	 *
+	 * @param WP_REST_Request $request The request, for the language its list
+	 *                                 should be offered in.
 	 */
-	public function categories(): WP_REST_Response {
-		$terms = get_terms(
-			array(
-				'taxonomy'   => 'product_cat',
-				'hide_empty' => false,
-				'orderby'    => 'name',
-			)
-		);
+	public function categories( WP_REST_Request $request ): WP_REST_Response {
+		$terms = $this->terms_for( 'product_cat', $request );
 
 		$categories = array();
 		if ( is_array( $terms ) ) {
@@ -327,15 +445,12 @@ final class Fields_Controller {
 	 * The product tags, for the filter's tag picker. Tags are a flat taxonomy a
 	 * store uses for cross-cutting groupings ("sale", "collection", "clearance"),
 	 * which makes them a natural bulk-edit target alongside categories.
+	 *
+	 * @param WP_REST_Request $request The request, for the language its list
+	 *                                 should be offered in.
 	 */
-	public function tags(): WP_REST_Response {
-		$terms = get_terms(
-			array(
-				'taxonomy'   => 'product_tag',
-				'hide_empty' => false,
-				'orderby'    => 'name',
-			)
-		);
+	public function tags( WP_REST_Request $request ): WP_REST_Response {
+		$terms = $this->terms_for( 'product_tag', $request );
 
 		$tags = array();
 		if ( is_array( $terms ) ) {
@@ -357,8 +472,11 @@ final class Fields_Controller {
 	 * size/colour belongs in the filter, CONTEXT §3). Each attribute maps to the
 	 * `attribute:<taxonomy>` filter field the query engine understands; a
 	 * variation matches on its own chosen value, a product on having the term.
+	 *
+	 * @param WP_REST_Request $request The request, for the language its lists
+	 *                                 should be offered in.
 	 */
-	public function attributes(): WP_REST_Response {
+	public function attributes( WP_REST_Request $request ): WP_REST_Response {
 		$attributes = array();
 
 		if ( ! function_exists( 'wc_get_attribute_taxonomies' ) ) {
@@ -367,13 +485,7 @@ final class Fields_Controller {
 
 		foreach ( wc_get_attribute_taxonomies() as $attribute ) {
 			$taxonomy = wc_attribute_taxonomy_name( $attribute->attribute_name );
-			$terms    = get_terms(
-				array(
-					'taxonomy'   => $taxonomy,
-					'hide_empty' => false,
-					'orderby'    => 'name',
-				)
-			);
+			$terms    = $this->terms_for( $taxonomy, $request );
 
 			$values = array();
 			if ( is_array( $terms ) ) {

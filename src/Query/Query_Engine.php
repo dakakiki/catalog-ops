@@ -47,6 +47,17 @@ final class Query_Engine {
 	private ?Storage_Compiler $compiler = null;
 
 	/**
+	 * Whether this site has WPML's translations table, once it has been asked.
+	 *
+	 * Null until the first filter that carries a language needs to know; a filter
+	 * with no language never asks, so a site without WPML never pays for the
+	 * question. See {@see assert_translations_table()}.
+	 *
+	 * @var bool|null
+	 */
+	private ?bool $has_translations = null;
+
+	/**
 	 * Build the engine over a database handle.
 	 *
 	 * The registry is nullable, and that is not laziness: thirteen sites construct
@@ -188,6 +199,35 @@ final class Query_Engine {
 				ON co_price.post_id = l.product_id
 				AND co_price.meta_key = '_regular_price'
 				AND co_price.meta_value <> ''";
+		}
+
+		// The language, when the filter carries one. Joined rather than tested for
+		// the reason written above — this is positive set membership, the shape that
+		// turned one second into four minutes when it was left in the WHERE clause.
+		//
+		// The join cannot multiply rows: `icl_translations` carries
+		// `UNIQUE KEY el_type_id (element_type, element_id)`, so an object has at
+		// most one row per element type and the result set keeps its cardinality
+		// without a DISTINCT. Its `KEY id_type_language (element_id, element_type,
+		// language_code)` is this join's access path in exactly this column order.
+		//
+		// The anchor is the object itself, never its parent: WPML gives a variation
+		// its own `icl_translations` row (measured on the live catalogue — 50,000
+		// under each of two languages, no gaps), so a variation-scope filter asks
+		// about the variation. Reasoning from taxonomies, where a variation inherits
+		// from its parent, would return a plausible, non-empty, wrong set.
+		//
+		// An object with no row at all is invisible in every language, deliberately:
+		// it is invisible to WPML too, and WPML refuses to translate it.
+		if ( null !== $filter->language() ) {
+			$translations = $this->assert_translations_table();
+
+			$joins[]     = "INNER JOIN {$translations} co_lang
+				ON co_lang.element_id = l.product_id
+				AND co_lang.element_type = %s
+				AND co_lang.language_code = %s";
+			$join_args[] = 'post_' . $scope->post_type();
+			$join_args[] = $filter->language();
 		}
 
 		list( $where, $where_args, $condition_joins, $condition_join_args ) = $this->build_where( $filter );
@@ -573,6 +613,60 @@ final class Query_Engine {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- UI-facing message, sanitized at the REST boundary.
 			'This filter cannot be run: ' . $reason
 		);
+	}
+
+	/**
+	 * The translations table, or a refusal if this site no longer has one.
+	 *
+	 * A filter only carries a language because WPML was active when somebody wrote
+	 * it. WPML can be deactivated afterwards, and a saved filter, a schedule and a
+	 * frozen operation all outlive that — so the language can outlive the table it
+	 * names, and something has to decide what a confinement to Serbian means on a
+	 * site that no longer has Serbian.
+	 *
+	 * **It refuses, and the alternative is why.** Dropping the confinement and
+	 * running unconfined is the one failure this pipeline may never have: a nightly
+	 * schedule written to reprice the Serbian catalogue would, on the morning after
+	 * WPML was switched off, silently reprice the whole shop. Widening is
+	 * unrecoverable in a way that stopping is not.
+	 *
+	 * A {@see Filter_Field_Unavailable} is exactly the right refusal because the
+	 * machinery for it already exists: 400 at the REST boundary with the sentence
+	 * shown to the user, and on the unattended path a schedule that pauses itself
+	 * with a recorded reason instead of starving every later schedule.
+	 *
+	 * The presence of the table is asked of the database rather than of
+	 * `defined( 'ICL_SITEPRESS_VERSION' )`, for the same reason the ACF module reads
+	 * `acf-field` posts rather than calling ACF: durable state answers a preview and
+	 * a cron tick identically, and a constant defined by a plugin's load order does
+	 * not. It also means a test can create the table and be believed without having
+	 * to counterfeit WPML itself.
+	 *
+	 * Cached for the life of the engine — the answer cannot change inside one
+	 * request, and `resolve()` and `count()` of one preview would otherwise ask
+	 * twice.
+	 *
+	 * @throws Filter_Field_Unavailable When the table is absent.
+	 */
+	private function assert_translations_table(): string {
+		$table = $this->wpdb->prefix . 'icl_translations';
+
+		if ( null === $this->has_translations ) {
+			$probe = $this->wpdb->prepare( 'SHOW TABLES LIKE %s', $table );
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$found = (string) $this->wpdb->get_var( $probe );
+
+			$this->has_translations = 0 === strcasecmp( $found, $table );
+		}
+
+		if ( ! $this->has_translations ) {
+			$this->refuse_statement(
+				'it is limited to one language, and this site no longer has WPML installed. Remove the language limit to run it over the whole catalogue.'
+			);
+		}
+
+		return $table;
 	}
 
 	/**

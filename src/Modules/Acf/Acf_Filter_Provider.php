@@ -118,15 +118,27 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	);
 
 	/**
+	 * The translations WPML holds for this site's ACF text.
+	 *
+	 * @var Acf_Strings
+	 */
+	private Acf_Strings $strings;
+
+	/**
 	 * Build the provider.
 	 *
-	 * @param wpdb       $wpdb   WordPress database handle.
-	 * @param Acf_Fields $fields The definition reader.
+	 * @param wpdb             $wpdb    WordPress database handle.
+	 * @param Acf_Fields       $fields  The definition reader.
+	 * @param Acf_Strings|null $strings The translation reader; the default reads
+	 *                                  this site's own field groups.
 	 */
 	public function __construct(
 		private readonly wpdb $wpdb,
-		private readonly Acf_Fields $fields
-	) {}
+		private readonly Acf_Fields $fields,
+		?Acf_Strings $strings = null
+	) {
+		$this->strings = $strings ?? new Acf_Strings( $wpdb );
+	}
 
 	/**
 	 * The licensed module these fields belong to.
@@ -171,9 +183,15 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 * post row and is therefore not listed — see {@see Acf_Fields} for why that is
 	 * the right side to be wrong on.
 	 *
+	 * Labels, and only labels, follow the language. ACFML registers each field's
+	 * label with WPML String Translation, and {@see Acf_Strings} asks for the one
+	 * language rather than for "the current one" — see the note there.
+	 *
+	 * @param string|null $language Language to label the fields in, or null for the
+	 *                              labels as ACF stores them.
 	 * @return list<Filter_Field>
 	 */
-	public function filter_fields(): array {
+	public function filter_fields( ?string $language = null ): array {
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
 				"SELECT ID, post_name, post_title, post_excerpt, post_parent, post_content
@@ -226,7 +244,7 @@ final class Acf_Filter_Provider implements Filter_Provider {
 				continue;
 			}
 
-			$field = $this->describe( $definition, $scopes, $by_id );
+			$field = $this->describe( $definition, $scopes, $by_id, $language );
 
 			if ( null !== $field ) {
 				$fields[] = $field;
@@ -272,8 +290,9 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 * @param array<string, mixed>             $definition Hydrated definition.
 	 * @param Query_Scope[]                    $scopes     Scopes the owning group covers.
 	 * @param array<int, array<string, mixed>> $by_id   Every acf-field row by id.
+	 * @param string|null                      $language   Language to label in, or null.
 	 */
-	private function describe( array $definition, array $scopes, array $by_id ): ?Filter_Field {
+	private function describe( array $definition, array $scopes, array $by_id, ?string $language = null ): ?Filter_Field {
 		try {
 			list( $value_kind, $control ) = $this->fields->value_kind( $definition );
 		} catch ( Filter_Field_Unavailable $e ) {
@@ -290,16 +309,18 @@ final class Acf_Filter_Provider implements Filter_Provider {
 			return null;
 		}
 
+		$label = $this->field_label( $definition, $by_id, $language );
+
 		return new Filter_Field(
 			self::PREFIX . (string) $definition['key'],
-			$this->field_label( $definition, $by_id ),
+			$label,
 			$control,
 			$operators,
 			$scopes,
 			Filter_Control::VALUE_SET === $control
 				? Acf_Options_Controller::ROUTE . '?field=' . rawurlencode( (string) $definition['key'] )
 				: '',
-			$this->field_label( $definition, $by_id ),
+			$label,
 			false,
 			$this->fields->storage_format( $definition )
 		);
@@ -315,20 +336,38 @@ final class Acf_Filter_Provider implements Filter_Provider {
 	 *
 	 * @param array<string, mixed>             $definition Hydrated definition.
 	 * @param array<int, array<string, mixed>> $by_id      Every acf-field row by id.
+	 * @param string|null                      $language   Language to label in, or null.
 	 */
-	private function field_label( array $definition, array $by_id ): string {
+	private function field_label( array $definition, array $by_id, ?string $language = null ): string {
 		$parts  = array();
 		$parent = (int) ( $definition['parent'] ?? 0 );
 
 		for ( $depth = 0; $depth < 10 && isset( $by_id[ $parent ] ); $depth++ ) {
-			array_unshift( $parts, (string) $by_id[ $parent ]['post_title'] );
+			// Each ancestor is a field in its own right, with its own registered
+			// label, so each is translated on its own key rather than the chain
+			// being translated as one string nobody ever registered.
+			array_unshift(
+				$parts,
+				$this->strings->translate(
+					(string) $by_id[ $parent ]['post_name'],
+					'label',
+					(string) $by_id[ $parent ]['post_title'],
+					$language
+				)
+			);
 			$parent = (int) $by_id[ $parent ]['post_parent'];
 		}
 
-		$parts[] = (string) ( $definition['label'] ?? $definition['name'] ?? '' );
+		$parts[] = $this->strings->translate(
+			(string) ( $definition['key'] ?? '' ),
+			'label',
+			(string) ( $definition['label'] ?? $definition['name'] ?? '' ),
+			$language
+		);
 
 		return implode( ' › ', array_filter( $parts ) );
 	}
+
 
 	/**
 	 * The `acf-field-group` post a field ultimately belongs to, walking up through

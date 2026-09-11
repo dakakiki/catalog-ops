@@ -50,6 +50,15 @@ final class Operation_Summary {
 	);
 
 	/**
+	 * The language this summary is being written in, taken from the filter it
+	 * describes. Null until describe() reads one, and null for every run that was
+	 * not confined to a language.
+	 *
+	 * @var string|null
+	 */
+	private ?string $language = null;
+
+	/**
 	 * Build the describer.
 	 *
 	 * @param wpdb                  $wpdb      WordPress database handle.
@@ -68,6 +77,14 @@ final class Operation_Summary {
 	 * @return array{scope: string, conditions: list<array{label: string, operator: string, value: string}>, actions: list<array{label: string, change: string}>}
 	 */
 	public function describe( array $filter_data, array $actions_data ): array {
+		// The language the run was aimed at, read off the frozen filter it is
+		// describing — so a module's field is named the way it was named on the
+		// screen the run was started from, rather than in whichever language this
+		// request happens to resolve as.
+		$this->language = isset( $filter_data['language'] ) && is_string( $filter_data['language'] ) && '' !== $filter_data['language']
+			? $filter_data['language']
+			: null;
+
 		$scope = Query_Scope::tryFrom( (string) ( $filter_data['scope'] ?? '' ) )
 			?? Query_Scope::default_scope();
 
@@ -160,7 +177,7 @@ final class Operation_Summary {
 		// gone the key is the honest answer — it is what the filter still says, and
 		// it is what the user has to remove if they want the filter to run again.
 		if ( null !== $this->providers ) {
-			foreach ( $this->providers->all_fields() as $entry ) {
+			foreach ( $this->providers->all_fields( $this->language ) as $entry ) {
 				if ( $entry['field']->key === $field ) {
 					return $entry['field']->label;
 				}

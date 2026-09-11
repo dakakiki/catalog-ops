@@ -16,6 +16,7 @@ use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedule_Status;
 use CatalogOps\Operations\Schedules;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Fields\Filter_Providers;
 use CatalogOps\Query\Filter_Fields;
 use DateTimeZone;
 use InvalidArgumentException;
@@ -61,17 +62,28 @@ final class Schedules_Controller {
 	private License $license;
 
 	/**
+	 * Module filter-field registry, or null when no modules can register.
+	 *
+	 * @var Filter_Providers|null
+	 */
+	private ?Filter_Providers $providers;
+
+	/**
 	 * Build the controller.
 	 *
-	 * @param Schedules       $schedules Schedules repository.
-	 * @param Schedule_Runner $runner    Schedule supervisor.
-	 * @param License|null    $license   Plan gating; defaults to unlimited
-	 *                                    (unlicensed development and tests).
+	 * @param Schedules             $schedules Schedules repository.
+	 * @param Schedule_Runner       $runner    Schedule supervisor.
+	 * @param License|null          $license   Plan gating; defaults to unlimited
+	 *                                          (unlicensed development and tests).
+	 * @param Filter_Providers|null $providers Module field registry. Null means
+	 *                                          core keys only, which is what the
+	 *                                          tests and a site with no modules are.
 	 */
-	public function __construct( Schedules $schedules, Schedule_Runner $runner, ?License $license = null ) {
+	public function __construct( Schedules $schedules, Schedule_Runner $runner, ?License $license = null, ?Filter_Providers $providers = null ) {
 		$this->schedules = $schedules;
 		$this->runner    = $runner;
 		$this->license   = $license ?? License::unlimited();
+		$this->providers = $providers;
 	}
 
 	/**
@@ -86,7 +98,7 @@ final class Schedules_Controller {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'index' ),
 					'permission_callback' => array( $this, 'can_manage' ),
-					'args'                => Paging::args( self::PER_PAGE ),
+					'args'                => Paging::args( self::PER_PAGE ) + Language::args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
@@ -156,20 +168,31 @@ final class Schedules_Controller {
 	/**
 	 * List schedules, newest first, one page at a time.
 	 *
+	 * Under WPML a user sees their own language's schedules, plus the ones that
+	 * belong to no language at all — which includes every schedule written before
+	 * this plugin knew about languages, so a shop that upgrades does not open the
+	 * page and find them gone. The same language reaches the count, or the pager
+	 * would offer pages the list cannot fill.
+	 *
+	 * This is a listing rule and nothing more: what fires, and when, is decided by
+	 * {@see \CatalogOps\Operations\Schedules::due()}, which knows nothing about
+	 * languages and must not.
+	 *
 	 * @param WP_REST_Request $request The request.
 	 */
 	public function index( WP_REST_Request $request ): WP_REST_Response {
-		$slice = Paging::slice( $request, self::PER_PAGE );
+		$slice    = Paging::slice( $request, self::PER_PAGE );
+		$language = Language::from_request( $request );
 
 		$items = array_map(
 			array( $this, 'to_array' ),
-			$this->schedules->all( $slice['per_page'], $slice['offset'] )
+			$this->schedules->all( $slice['per_page'], $slice['offset'], $language )
 		);
 
 		return new WP_REST_Response(
 			array(
 				'items'    => $items,
-				'total'    => $this->schedules->count_all(),
+				'total'    => $this->schedules->count_all( $language ),
 				'page'     => $slice['page'],
 				'per_page' => $slice['per_page'],
 			)
@@ -198,7 +221,21 @@ final class Schedules_Controller {
 			// refused now rather than at 03:00. Schedules::create() writes the row
 			// itself rather than going through Operation_Service, so this is the only
 			// boundary that can catch it before it is stored.
-			Filter_Fields::assert_answerable( $filter );
+			//
+			// **Through the registry when there is one.** This used to call the static
+			// core-key list directly, which knows nothing about modules — so every
+			// module field was refused here and only here: the same filter previewed,
+			// ran and could be applied, and then "No filter field is called
+			// acf:field_cops_season" the moment the user asked for it on a schedule.
+			// {@see Operation_Service::assert_filter_answerable()} is the shape this
+			// now matches, and the two must not drift again: one of them refusing what
+			// the other allows is a user being told their filter is both fine and
+			// impossible.
+			if ( null === $this->providers ) {
+				Filter_Fields::assert_answerable( $filter );
+			} else {
+				$this->providers->assert_supported( $filter );
+			}
 		} catch ( InvalidArgumentException $e ) {
 			return $this->error( 'catalogops_invalid_request', $e->getMessage(), 400 );
 		}
@@ -373,6 +410,13 @@ final class Schedules_Controller {
 			// Why the supervisor stopped it, when it stopped itself. The status alone
 			// leaves the user with one control and no idea whether it will help.
 			'paused_reason'  => $schedule->paused_reason,
+			// Which language's catalogue this schedule works on. Sent even though the
+			// list is already confined to it, because on WPML's "All languages" it is
+			// not confined at all — and a page showing every language's schedules
+			// together with nothing to tell them apart is worse than one that hides
+			// them. Null for a schedule that belongs to no language, which the UI
+			// leaves unlabelled rather than inventing a name for.
+			'language'       => $schedule->language,
 			'filter'         => $schedule->filter_data,
 			'actions'        => $schedule->actions_data,
 			'created_at'     => $schedule->created_at,

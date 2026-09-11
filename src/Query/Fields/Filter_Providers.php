@@ -99,9 +99,13 @@ final class Filter_Providers {
 	 * field a saved filter already uses — a dropped field is how a user ends up
 	 * looking at a filter that no longer says what they wrote.
 	 *
+	 * @param string|null $language Language to label the fields in, or null for
+	 *                              however they are stored. Only labels vary with
+	 *                              it — a field key is persisted in filter_json and
+	 *                              means one thing in every language.
 	 * @return list<array{field: Filter_Field, module: string, label: string, available: bool}>
 	 */
-	public function all_fields(): array {
+	public function all_fields( ?string $language = null ): array {
 		$fields = array();
 
 		foreach ( $this->providers as $provider ) {
@@ -109,7 +113,7 @@ final class Filter_Providers {
 			$available = '' === $module || $this->license->has_module( $module );
 			$label     = $provider->label();
 
-			foreach ( $provider->filter_fields() as $field ) {
+			foreach ( $provider->filter_fields( $language ) as $field ) {
 				$fields[] = array(
 					'field'     => $field,
 					'module'    => $module,

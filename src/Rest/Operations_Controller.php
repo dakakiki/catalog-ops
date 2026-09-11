@@ -190,7 +190,7 @@ final class Operations_Controller {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'index' ),
 					'permission_callback' => array( $this, 'can_manage' ),
-					'args'                => Paging::args( self::HISTORY_PER_PAGE ),
+					'args'                => Paging::args( self::HISTORY_PER_PAGE ) + Language::args(),
 				),
 			)
 		);
@@ -483,11 +483,18 @@ final class Operations_Controller {
 	 * more, which is the same as losing them. It now carries the whole count, so
 	 * the history can be walked back as far as retention keeps it.
 	 *
+	 * Under WPML the history a user sees is their own language's, plus the runs
+	 * that belong to no language at all — which includes every run made before this
+	 * plugin knew about languages, so a shop that upgrades does not open the page
+	 * and find its past gone. The same language reaches the count, or the pager
+	 * would offer pages the list cannot fill.
+	 *
 	 * @param WP_REST_Request $request The request.
 	 */
 	public function index( WP_REST_Request $request ): WP_REST_Response {
-		$slice = Paging::slice( $request, self::HISTORY_PER_PAGE );
-		$rows  = $this->operations->recent( $slice['per_page'], $slice['offset'] );
+		$slice    = Paging::slice( $request, self::HISTORY_PER_PAGE );
+		$language = Language::from_request( $request );
+		$rows     = $this->operations->recent( $slice['per_page'], $slice['offset'], $language );
 
 		// One grouped count for the page rather than one per row: this list polls
 		// every two seconds while anything is running, and each row needs to know
@@ -505,7 +512,7 @@ final class Operations_Controller {
 		return new WP_REST_Response(
 			array(
 				'items'    => $operations,
-				'total'    => $this->operations->count_all(),
+				'total'    => $this->operations->count_all( $language ),
 				'page'     => $slice['page'],
 				'per_page' => $slice['per_page'],
 			)
@@ -851,6 +858,13 @@ final class Operations_Controller {
 			// The user's own reason for the run. The history knows what changed,
 			// when, by whom and how many; this is the only place it can learn why.
 			'note'               => $operation->note,
+			// Which language's catalogue this run was aimed at. Sent even though the
+			// list is already confined to it, because on WPML's "All languages" it is
+			// not confined at all — and a page showing every language's runs together
+			// with nothing to tell them apart is worse than one that hides them. Null
+			// for a run that belonged to no language, which the UI leaves unlabelled
+			// rather than inventing a name for.
+			'language'           => $operation->language,
 			'conflict_policy'    => null === $operation->conflict_policy ? null : $operation->conflict_policy->value,
 			'user_id'            => $operation->user_id,
 			'user_name'          => $this->user_name( $operation->user_id ),

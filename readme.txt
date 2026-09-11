@@ -6,7 +6,7 @@ Tested up to: 7.1
 Requires PHP: 8.1
 WC requires at least: 9.0
 WC tested up to: 11.0
-Stable tag: 0.7.3
+Stable tag: 0.8.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -79,6 +79,19 @@ Yes. All strings (PHP and the React admin app) are translatable; a `.pot` templa
 3. Operation history with one-click undo.
 
 == Changelog ==
+
+= 0.8.1 =
+* Changed: the uninstall cleanup moved out of `uninstall.php` and onto the uninstall hook. WordPress calls that file *instead of* the hook, so shipping one silently prevented the licensing SDK from doing its own uninstall work. What gets removed is unchanged: the plugin's tables, its scheduled background actions, its options and the per-user tour flag, on every site of a network.
+
+= 0.8.0 =
+* Added: on a WPML site, CatalogOps now works in whatever language you are already in — filter, results, bulk edit, schedules and history, all of it. It never asks which language you mean, because standing in one and being asked is a question the screen can already answer. On WPML's "All languages" nothing is confined and the whole catalogue is in reach, which is the same behaviour a shop without WPML has always had.
+* Added: the header says which language the page is working in. An unstated frame is invisible until it is wrong, and somebody who switched language two screens ago, filtered, previewed twelve thousand products and pressed Apply has no other way to know which twelve thousand those were. A shop with one language is told nothing, because it has nothing to be told.
+* Added: the category, tag, brand and attribute pickers list the current language's own terms. A translated term is a different term with a different id — on a bilingual catalogue the same category can be 18 in one language and 73 in another — so a picker filled in one language used to hand the filter ids that no product in the other carried, and the run came back empty with nothing about it looking wrong. A term nobody has translated is left out rather than substituted: each language shows its own catalogue.
+* Added: past runs and schedules are listed under the language they were made in, and all of them under "All languages". Work that belongs to no language — everything made before this release included — stays visible in every language, so upgrading never looks like the history was wiped.
+* Added: the labels and the offered values of ACF fields follow the language too. The stored value behind a choice never does: it is what the filter freezes, and a translated one would match nothing, silently.
+* Fixed: a schedule could not be created from a filter that used a field from ACF, while the identical filter previewed, ran and applied without complaint. The schedule route was checking the filter against the built-in field list, which knows nothing about modules.
+* Changed: what a finished run could not do is now stated in a notice, like every other message on the screen, instead of as loose text under the Apply button.
+* Changed: the Pricing and Contact items in CatalogOps' own menu are now its own — the plans as they appear on catalog-ops.app, and a link out to the site's contact form. Account is untouched: it is where a licence is activated and synced, and that is not a matter of appearance.
 
 = 0.7.3 =
 * Added: every operation that finishes now emails a report, whatever started it and whether or not anything was skipped. Until now a run that changed everything it promised said nothing, on the reasoning that an hourly schedule sending two dozen cheerful reports a day teaches its reader to delete them unopened. What outweighed that is that silence cannot be read: a clean run, a schedule that never fired, cron not reaching the site and a host quietly dropping outgoing mail all produce exactly the same no mail at all, and telling them apart meant opening a screen the report exists to spare you. A report that always arrives is also the only one whose absence means something. Sites that want the old quiet can silence any one source through the `catalogops_send_notifications` filter.

@@ -22,6 +22,7 @@ use CatalogOps\Query\Fields\Value_Kind;
 use CatalogOps\Query\Operator;
 use CatalogOps\Query\Query_Scope;
 use CatalogOps\Rest\Fields_Controller;
+use WP_REST_Request;
 use WP_UnitTestCase;
 
 /**
@@ -85,7 +86,7 @@ final class FilterableFieldsTest extends WP_UnitTestCase {
 	public function test_no_registry_is_an_empty_list_not_an_error(): void {
 		global $wpdb;
 
-		$response = ( new Fields_Controller( $wpdb ) )->filterable();
+		$response = ( new Fields_Controller( $wpdb ) )->filterable( new WP_REST_Request( 'GET', '/catalogops/v1/fields/filterable' ) );
 
 		$this->assertSame( array( 'fields' => array() ), $response->get_data() );
 	}
@@ -118,7 +119,7 @@ final class FilterableFieldsTest extends WP_UnitTestCase {
 			new Filter_Providers( $license, $this->provider() )
 		);
 
-		$data = $controller->filterable()->get_data();
+		$data = $controller->filterable( new WP_REST_Request( 'GET', '/catalogops/v1/fields/filterable' ) )->get_data();
 
 		return $data['fields'];
 	}
@@ -137,7 +138,9 @@ final class FilterableFieldsTest extends WP_UnitTestCase {
 				return 'Test module';
 			}
 
-			public function filter_fields(): array {
+			public function filter_fields( ?string $language = null ): array {
+				unset( $language );
+
 				return array(
 					new Filter_Field(
 						'demo:supplier',

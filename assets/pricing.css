@@ -1,0 +1,346 @@
+/**
+ * The Pricing screen.
+ *
+ * The layout, the proportions and the colours are the website's pricing table,
+ * carried over deliberately so the two read as one product — a buyer who saw the
+ * plans on catalog-ops.app and then opens this screen should recognise it.
+ *
+ * What is NOT carried over is the site's three typefaces. They are 463 KB of
+ * self-hosted variable fonts, and shipping them inside a plugin so that one
+ * screen can set a heading in Archivo would be the largest thing in the zip by a
+ * wide margin. wp-admin's own stack is used instead, which is also the stack
+ * every other screen in this plugin uses.
+ *
+ * Dark mode is deliberately absent: wp-admin has no dark mode to follow, and a
+ * card that went dark inside a light admin would be the only dark thing on the
+ * page.
+ */
+
+.catalogops-pricing {
+	--co-ink: #191830;
+	--co-ink-muted: #55556e;
+	--co-ink-faint: #8a8aa2;
+	--co-surface: #fff;
+	--co-rule: #e3e3ee;
+	--co-rule-strong: #cfcfe0;
+	--co-indigo: #4338ca;
+	--co-indigo-deep: #312e81;
+	--co-indigo-wash: #eeecfb;
+	--co-accent: #d97706;
+	--co-accent-wash: #fdf1e0;
+
+	max-width: 68rem;
+	color: var( --co-ink );
+}
+
+/* --- Heading ----------------------------------------------------------- */
+
+.catalogops-pricing__head {
+	max-width: 40rem;
+	margin: 0 0 1.6rem;
+}
+
+.catalogops-pricing__eyebrow {
+	display: block;
+	margin-bottom: 0.35rem;
+	font-size: 0.7rem;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var( --co-accent );
+}
+
+.catalogops-pricing h1 {
+	margin: 0 0 0.5rem;
+	padding: 0;
+	font-size: 1.9rem;
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	line-height: 1.15;
+	color: var( --co-ink );
+}
+
+.catalogops-pricing__lede {
+	margin: 0;
+	max-width: 38rem;
+	font-size: 0.98rem;
+	line-height: 1.6;
+	color: var( --co-ink-muted );
+}
+
+.catalogops-pricing__licensed {
+	margin: 0 0 1.4rem;
+	max-width: 44rem;
+}
+
+/* --- The three columns ------------------------------------------------- */
+
+/* One column on a narrow screen, three when there is room. wp-admin's content
+   area is already narrow on a folded menu, so the breakpoint is on the container
+   rather than the viewport where that matters most. */
+.catalogops-plans {
+	display: grid;
+	gap: 1.1rem;
+	align-items: stretch;
+}
+
+@media ( min-width: 56rem ) {
+	.catalogops-plans {
+		grid-template-columns: repeat( 3, 1fr );
+	}
+}
+
+.catalogops-plan {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+	padding: 1.6rem 1.4rem;
+	background: var( --co-surface );
+	border: 1px solid var( --co-rule );
+	border-radius: 0.7rem;
+}
+
+/* The paid tiers carry the colour; Free is left plain, because a card competing
+   for attention it does not want is just noise. */
+.catalogops-plan.is-featured {
+	border-color: var( --co-indigo );
+	box-shadow: 0 1px 2px rgba( 25, 24, 48, 0.06 ), 0 8px 24px -12px rgba( 25, 24, 48, 0.18 );
+}
+
+.catalogops-plan.is-featured .catalogops-plan__price b {
+	color: var( --co-indigo );
+}
+
+.catalogops-plan.is-studio {
+	border-color: var( --co-accent );
+}
+
+.catalogops-plan.is-studio .catalogops-plan__price b {
+	color: var( --co-accent );
+}
+
+.catalogops-plan.is-studio .catalogops-plan__tag {
+	color: var( --co-accent );
+	background: var( --co-accent-wash );
+}
+
+.catalogops-plan__name {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	font-size: 1.05rem;
+	font-weight: 600;
+}
+
+.catalogops-plan__tag {
+	padding: 0.2rem 0.45rem;
+	border-radius: 0.25rem;
+	font-size: 0.66rem;
+	font-weight: 600;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var( --co-indigo );
+	background: var( --co-indigo-wash );
+}
+
+.catalogops-plan__price {
+	display: flex;
+	align-items: baseline;
+	gap: 0.35rem;
+	margin: 0;
+}
+
+.catalogops-plan__price b {
+	font-size: 2.2rem;
+	font-weight: 700;
+	letter-spacing: -0.03em;
+	font-variant-numeric: tabular-nums;
+}
+
+.catalogops-plan__price span {
+	font-size: 0.9rem;
+	color: var( --co-ink-faint );
+}
+
+/* `flex: 1` is what makes three cards with different numbers of features end
+   their buttons on the same line. */
+.catalogops-plan__features {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	font-size: 0.94rem;
+	color: var( --co-ink-muted );
+}
+
+.catalogops-plan__features li {
+	display: grid;
+	grid-template-columns: 1rem 1fr;
+	gap: 0.55rem;
+	align-items: start;
+	margin: 0;
+}
+
+.catalogops-plan__features li::before {
+	content: "—";
+	font-size: 0.8rem;
+	line-height: 1.7;
+	color: var( --co-ink-faint );
+}
+
+/* A feature the plan does NOT have. The marker changes as well as the colour:
+   colour alone is not a distinction for a reader who cannot see it. */
+.catalogops-plan__features li.is-off {
+	color: var( --co-ink-faint );
+}
+
+.catalogops-plan__features li.is-off::before {
+	content: "·";
+}
+
+.catalogops-plan__seats {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	padding-top: 0.85rem;
+	border-top: 1px solid var( --co-rule );
+	font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+	font-size: 0.81rem;
+	color: var( --co-ink-muted );
+	font-variant-numeric: tabular-nums;
+}
+
+.catalogops-plan__seats div {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+/* --- The buttons ------------------------------------------------------- */
+
+/* Not `.button`: wp-admin's button is 40px of grey chrome and would make the one
+   decision on this screen look like a form control. These are the site's
+   buttons, and `!important` is avoided by simply not borrowing the class. */
+.catalogops-plan__cta {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.62rem 1rem;
+	border: 1px solid transparent;
+	border-radius: 0.45rem;
+	font-size: 0.95rem;
+	font-weight: 600;
+	line-height: 1.2;
+	text-decoration: none;
+	transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.catalogops-plan__cta:focus {
+	outline: 2px solid var( --co-indigo );
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+.catalogops-plan__cta.is-primary {
+	background: var( --co-indigo );
+	color: #fff;
+}
+
+.catalogops-plan__cta.is-primary:hover,
+.catalogops-plan__cta.is-primary:focus {
+	background: var( --co-indigo-deep );
+	color: #fff;
+}
+
+.catalogops-plan__cta.is-quiet {
+	border-color: var( --co-rule-strong );
+	color: var( --co-ink );
+}
+
+.catalogops-plan__cta.is-quiet:hover,
+.catalogops-plan__cta.is-quiet:focus {
+	border-color: var( --co-ink-faint );
+	color: var( --co-ink );
+}
+
+/* Where the Free column's button would be. It keeps the row of buttons aligned
+   by occupying the same band, and says the one thing the website cannot: which
+   tier this site is actually on. */
+.catalogops-plan__current {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin: 0;
+	padding: 0.62rem 1rem;
+	border: 1px dashed var( --co-rule-strong );
+	border-radius: 0.45rem;
+	font-size: 0.9rem;
+	color: var( --co-ink-faint );
+}
+
+.catalogops-plan__note {
+	margin: -0.3rem 0 0;
+	font-size: 0.85rem;
+	color: var( --co-ink-faint );
+}
+
+/* --- The guarantee ----------------------------------------------------- */
+
+/* A stamp, not a banner: `fit-content` with auto margins centres it under the
+   whole row, and the pill shape keeps it from reading as a fourth card. The only
+   colour is the return arrow — the same orange as Undo, because money back is
+   that same idea applied to the purchase. */
+.catalogops-guarantee {
+	width: fit-content;
+	max-width: 100%;
+	margin: 2.1rem auto 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.38rem;
+	padding: 0.95rem 1.6rem;
+	border: 1px solid var( --co-rule-strong );
+	border-radius: 0.7rem;
+	background: var( --co-surface );
+	text-align: center;
+}
+
+.catalogops-guarantee__main {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.6rem;
+	margin: 0;
+	font-size: 0.97rem;
+	color: var( --co-ink-muted );
+}
+
+.catalogops-guarantee__mark {
+	font-size: 1.15rem;
+	line-height: 1;
+	color: var( --co-accent );
+}
+
+.catalogops-guarantee__main b {
+	font-weight: 600;
+	color: var( --co-ink );
+	letter-spacing: -0.01em;
+}
+
+.catalogops-guarantee__note {
+	margin: 0;
+	font-size: 0.86rem;
+}
+
+.catalogops-guarantee__note a {
+	color: var( --co-ink-faint );
+	text-decoration: none;
+}
+
+.catalogops-guarantee__note a:hover {
+	color: var( --co-ink-muted );
+	text-decoration: underline;
+}

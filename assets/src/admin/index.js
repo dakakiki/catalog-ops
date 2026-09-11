@@ -240,6 +240,91 @@ const MODULES_EXPECTED = Boolean(
 );
 
 /**
+ * The language this whole page is working in, captured by the server on THIS page
+ * load and sent back with every request that resolves a filter or lists past work.
+ *
+ * `null` when WPML is not active, which is most shops: they send no language, see
+ * no indicator, and get exactly the behaviour they had before any of this existed.
+ *
+ * When WPML is active this is `{ code, label }`, and `code` is itself null on
+ * WPML's "All languages" — the setting that means "place no constraint". The two
+ * nulls are told apart by which one it is: no LANGUAGE at all is a shop without
+ * WPML, a LANGUAGE with a null code is a user deliberately working across every
+ * language.
+ *
+ * It is captured server-side at page load rather than read per request because
+ * WPML honours "all" only under is_admin(), and a REST call is not — see
+ * Wpml_Context.
+ */
+const LANGUAGE =
+	( window.catalogopsConfig && window.catalogopsConfig.language ) || null;
+
+/**
+ * The language code to send with a request, or undefined to send nothing.
+ *
+ * Undefined rather than null, so it drops out of a JSON body entirely instead of
+ * arriving as an explicit null — a filter written before languages existed carries
+ * no key at all, and a request from a shop without WPML should look exactly like
+ * one of those.
+ *
+ * @return {string|undefined} The language code, or undefined.
+ */
+function currentLanguage() {
+	return LANGUAGE && LANGUAGE.code ? LANGUAGE.code : undefined;
+}
+
+/**
+ * Which language this page is working in, said out loud in the header.
+ *
+ * The plugin never asks the user to pick a language — it works in whichever one
+ * they are already in — and that is exactly why it has to say which. An unstated
+ * frame is invisible until it is wrong: a shopkeeper who switched to Serbian two
+ * screens ago, filtered, previewed 12,000 products and pressed Apply has no other
+ * way to know which 12,000 those were.
+ *
+ * Renders nothing at all where there is nothing to say. A shop with one language
+ * must not be told it has one.
+ *
+ * @return {Object|null} The indicator element, or null.
+ */
+function LanguageIndicator() {
+	if ( ! LANGUAGE ) {
+		return null;
+	}
+
+	const all = ! LANGUAGE.code;
+
+	return (
+		<span
+			className={ `catalogops-language${
+				all ? ' catalogops-language--all' : ''
+			}` }
+			title={
+				all
+					? __(
+							'CatalogOps is working across every language. Filters, edits and schedules will reach the whole catalogue.',
+							'catalogops'
+					  )
+					: sprintf(
+							/* translators: %s: language name, e.g. Srpski. */
+							__(
+								'CatalogOps is working in %s. Filters, edits and schedules reach that language only — switch with the language selector in the admin bar.',
+								'catalogops'
+							),
+							LANGUAGE.label
+					  )
+			}
+		>
+			<span
+				className="dashicons dashicons-translation"
+				aria-hidden="true"
+			/>
+			{ all ? __( 'All languages', 'catalogops' ) : LANGUAGE.label }
+		</span>
+	);
+}
+
+/**
  * Whether the current plan permits a capability. Unknown flags default to true
  * (fail open); only an explicit `false` from the server gates the control.
  *
@@ -1071,7 +1156,21 @@ function ModuleField( { field, row, onChange } ) {
 
 		setLoadingOptions( true );
 
-		apiFetch( { path: field.options_route } )
+		// The route already carries `?field=`, so the language is appended rather
+		// than started. The values it offers are the CURRENT language's labels; the
+		// ids behind them are ACF's stored keys and are the same in every language,
+		// which is what keeps a filter saved in one readable in the other.
+		const language = currentLanguage();
+
+		apiFetch( {
+			path: `${ field.options_route }${
+				language
+					? `${
+							field.options_route.includes( '?' ) ? '&' : '?'
+					  }language=${ encodeURIComponent( language ) }`
+					: ''
+			}`,
+		} )
 			.then( ( res ) => {
 				if ( live ) {
 					setOptions( res.terms || res.options || [] );
@@ -1717,13 +1816,29 @@ function ProgressBar( { op } ) {
 	// and a real run settled the argument: 3,042 items changed and 4 left alone
 	// because they already held the value, which is a footnote, and it held a full
 	// green completed bar on the screen to say so.
+	// What is left is a message, so it is shaped like every other message in this
+	// app: a notice. It used to render into a bare `catalogops-progress` div,
+	// which styles a progress bar and nothing else — so the one outcome that
+	// outlives its run was also the one piece of text on the screen with no frame
+	// around it, a heading and a bullet list loose under the Apply button. Every
+	// other ReasonList in this file already sits inside a notice or the skip
+	// summary card; this was the only one that did not.
+	//
+	// The tone follows the worse of the two facts. A failure is an error — the
+	// change was meant to happen and did not — while a skip is a rule doing its
+	// job, which is a warning at most. A run with both is reported as an error,
+	// because that is the half the user has to act on.
 	if ( settled ) {
 		if ( op.failed === 0 && skipped.length === 0 ) {
 			return null;
 		}
 
 		return (
-			<div className="catalogops-progress">
+			<div
+				className={ `notice ${
+					op.failed > 0 ? 'notice-error' : 'notice-warning'
+				} catalogops-inline-notice catalogops-progress__outcome` }
+			>
 				{ op.failed > 0 && (
 					<p>
 						{ sprintf(
@@ -1739,10 +1854,10 @@ function ProgressBar( { op } ) {
 					</p>
 				) }
 				{ skipped.length > 0 && (
-					<div className="catalogops-progress__note">
+					<>
 						<p>{ __( 'Not changed:', 'catalogops' ) }</p>
 						<ReasonList items={ skipped } />
-					</div>
+					</>
 				) }
 			</div>
 		);
@@ -4695,7 +4810,17 @@ function History( { refreshKey, onChanged, firingSoon = false } ) {
 			};
 		}
 
-		apiFetch( { path: `/catalogops/v1/operations?page=${ page }` } )
+		// The history a user sees is their own language's, plus the runs that
+		// belong to no language — which includes every run made before the plugin
+		// knew about languages, so upgrading never looks like the past was wiped.
+		// On "All languages" nothing is sent and every run is listed.
+		const language = currentLanguage();
+
+		apiFetch( {
+			path: `/catalogops/v1/operations?page=${ page }${
+				language ? `&language=${ encodeURIComponent( language ) }` : ''
+			}`,
+		} )
 			.then( ( res ) => {
 				if ( cancelled ) {
 					return;
@@ -5463,7 +5588,18 @@ function Schedules( { refreshKey, onRan, onFiringSoon } ) {
 			};
 		}
 
-		apiFetch( { path: `/catalogops/v1/schedules?page=${ page }` } )
+		// The schedules a user sees are their own language's, plus the ones that
+		// belong to no language — which includes every schedule written before the
+		// plugin knew about languages. On "All languages" nothing is sent and every
+		// schedule is listed. This is a listing rule only: which schedules FIRE is
+		// decided on the server by a cron tick that has no language at all.
+		const language = currentLanguage();
+
+		apiFetch( {
+			path: `/catalogops/v1/schedules?page=${ page }${
+				language ? `&language=${ encodeURIComponent( language ) }` : ''
+			}`,
+		} )
 			.then( ( res ) => {
 				if ( cancelled ) {
 					return;
@@ -5785,7 +5921,7 @@ function App() {
 	// The filter that was actually applied to the table (frozen on Apply), so
 	// bulk edits target what the user is looking at.
 	const [ appliedFilter, setAppliedFilter ] = useState( () =>
-		buildFilter( emptyForm(), 'product' )
+		buildFilter( emptyForm(), 'product', [], currentLanguage() )
 	);
 
 	// First-run onboarding + the mandatory backup acknowledgement (CONTEXT §9).
@@ -5806,16 +5942,29 @@ function App() {
 
 	// Load the category and brand dropdowns once.
 	useEffect( () => {
-		apiFetch( { path: '/catalogops/v1/fields/categories' } )
+		// The pickers list the CURRENT language's terms, because a translated term
+		// is a different term with a different id — Accessories is 18 in English
+		// and 73 in Serbian. A picker filled in one language hands the engine ids
+		// that no product in the other carries, and the filter comes back empty
+		// with nothing about it looking wrong.
+		const inLanguage = ( route ) => {
+			const language = currentLanguage();
+
+			return `/catalogops/v1/fields/${ route }${
+				language ? `?language=${ encodeURIComponent( language ) }` : ''
+			}`;
+		};
+
+		apiFetch( { path: inLanguage( 'categories' ) } )
 			.then( ( res ) => setCategories( res.categories || [] ) )
 			.catch( () => {} );
-		apiFetch( { path: '/catalogops/v1/fields/tags' } )
+		apiFetch( { path: inLanguage( 'tags' ) } )
 			.then( ( res ) => setTags( res.tags || [] ) )
 			.catch( () => {} );
-		apiFetch( { path: '/catalogops/v1/fields/brands' } )
+		apiFetch( { path: inLanguage( 'brands' ) } )
 			.then( ( res ) => setBrands( res.brands || [] ) )
 			.catch( () => {} );
-		apiFetch( { path: '/catalogops/v1/fields/attributes' } )
+		apiFetch( { path: inLanguage( 'attributes' ) } )
 			.then( ( res ) => setAttributes( res.attributes || [] ) )
 			.catch( () => {} );
 		// The fields modules register. An installation with none answers an empty
@@ -5825,7 +5974,7 @@ function App() {
 		// The `finally` is what separates "not asked yet" from "asked, nothing
 		// came back". Both are an empty list, and they must not look alike: the
 		// first is worth holding a place for, the second is worth forgetting.
-		apiFetch( { path: '/catalogops/v1/fields/filterable' } )
+		apiFetch( { path: inLanguage( 'filterable' ) } )
 			.then( ( res ) => setModuleFields( res.fields || [] ) )
 			.catch( () => {} )
 			.finally( () => setModuleFieldsLoaded( true ) );
@@ -5838,7 +5987,12 @@ function App() {
 
 	const run = useCallback(
 		( toPage ) => {
-			const filter = buildFilter( form, scope, moduleFields );
+			const filter = buildFilter(
+				form,
+				scope,
+				moduleFields,
+				currentLanguage()
+			);
 			setAppliedFilter( filter );
 			setLoading( true );
 			setError( '' );
@@ -5894,7 +6048,9 @@ function App() {
 	const resetAll = useCallback( () => {
 		const empty = emptyForm();
 		setForm( empty );
-		setAppliedFilter( buildFilter( empty, scope, moduleFields ) );
+		setAppliedFilter(
+			buildFilter( empty, scope, moduleFields, currentLanguage() )
+		);
 		setItems( [] );
 		setTotal( 0 );
 		setOtherScope( null );
@@ -5996,6 +6152,7 @@ function App() {
 							{ __( 'Bulk catalog operations', 'catalogops' ) }
 						</span>
 					</span>
+					<LanguageIndicator />
 				</div>
 
 				<Onboarding

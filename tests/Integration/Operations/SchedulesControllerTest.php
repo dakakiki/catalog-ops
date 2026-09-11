@@ -25,7 +25,15 @@ use CatalogOps\Operations\Operations;
 use CatalogOps\Operations\Recurrence;
 use CatalogOps\Operations\Schedule_Runner;
 use CatalogOps\Operations\Schedules;
+use CatalogOps\Query\Fields\Field_Storage;
+use CatalogOps\Query\Fields\Filter_Control;
+use CatalogOps\Query\Fields\Filter_Field;
+use CatalogOps\Query\Fields\Filter_Provider;
+use CatalogOps\Query\Fields\Filter_Providers;
+use CatalogOps\Query\Fields\Value_Kind;
 use CatalogOps\Query\Filter;
+use CatalogOps\Query\Operator;
+use CatalogOps\Query\Query_Scope;
 use CatalogOps\Query\Query_Engine;
 use CatalogOps\Rest\Schedules_Controller;
 use WP_Error;
@@ -284,7 +292,7 @@ final class SchedulesControllerTest extends Operations_Database_Case {
 	 *
 	 * @param License $license The plan to gate on.
 	 */
-	private function controller_for( License $license ): Schedules_Controller {
+	private function controller_for( License $license, ?Filter_Providers $providers = null ): Schedules_Controller {
 		global $wpdb;
 
 		$changes = new Changes( $wpdb, $this->schema );
@@ -299,6 +307,112 @@ final class SchedulesControllerTest extends Operations_Database_Case {
 		);
 		$runner = new Schedule_Runner( $this->schedules, $service, $this->operations );
 
-		return new Schedules_Controller( $this->schedules, $runner, $license );
+		return new Schedules_Controller( $this->schedules, $runner, $license, $providers );
+	}
+
+	/**
+	 * A schedule must be checked against the same field list an interactive run is.
+	 *
+	 * This refused every module field, and only here: the identical filter
+	 * previewed, ran and could be applied, and then answered "No filter field is
+	 * called acf:field_cops_season" the moment the user asked for it on a schedule.
+	 * The controller was calling the static core-key list, which knows nothing about
+	 * modules, while Operation_Service went through the registry.
+	 */
+	public function test_a_schedule_may_use_a_module_field(): void {
+		$providers = new Filter_Providers( License::unlimited(), $this->module_provider() );
+
+		$request = $this->create_request();
+		$request->set_param(
+			'filter',
+			array(
+				'relation'   => 'AND',
+				'scope'      => 'product',
+				'conditions' => array(
+					array(
+						'field'    => 'demo:supplier',
+						'operator' => '=',
+						'value'    => 'Acme',
+					),
+				),
+			)
+		);
+
+		$response = $this->controller_for( License::unlimited(), $providers )->create( $request );
+
+		$this->assertNotInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 1, $this->schedules->count_all() );
+	}
+
+	/**
+	 * And a key nothing claims is still refused, or the fix above would have traded
+	 * one silent failure for a schedule that fails at 03:00 with nobody watching.
+	 */
+	public function test_a_schedule_naming_an_unknown_field_is_still_refused(): void {
+		$providers = new Filter_Providers( License::unlimited(), $this->module_provider() );
+
+		$request = $this->create_request();
+		$request->set_param(
+			'filter',
+			array(
+				'relation'   => 'AND',
+				'scope'      => 'product',
+				'conditions' => array(
+					array(
+						'field'    => 'demo:nothing_offers_this',
+						'operator' => '=',
+						'value'    => 'x',
+					),
+				),
+			)
+		);
+
+		$response = $this->controller_for( License::unlimited(), $providers )->create( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 400, $response->get_error_data()['status'] ?? 0 );
+		$this->assertSame( 0, $this->schedules->count_all() );
+	}
+
+	/**
+	 * A provider offering one text field on products.
+	 */
+	private function module_provider(): Filter_Provider {
+		return new class() implements Filter_Provider {
+
+			public function module(): string {
+				return 'acf';
+			}
+
+			public function label(): string {
+				return 'Test module';
+			}
+
+			public function filter_fields( ?string $language = null ): array {
+				unset( $language );
+
+				return array(
+					new Filter_Field(
+						'demo:supplier',
+						'Supplier',
+						Filter_Control::TEXT,
+						array( Operator::EQUALS, Operator::NOT_EQUALS, Operator::IN ),
+						array( Query_Scope::PRODUCT ),
+						'',
+						'Supplier'
+					),
+				);
+			}
+
+			public function handles_filter( string $key ): bool {
+				return str_starts_with( $key, 'demo:' );
+			}
+
+			public function storage_for( string $key, Query_Scope $scope ): Field_Storage {
+				unset( $scope );
+
+				return Field_Storage::post_meta( 'demo_supplier', Value_Kind::TEXT );
+			}
+		};
 	}
 }
