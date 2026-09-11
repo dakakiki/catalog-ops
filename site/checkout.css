@@ -1,0 +1,124 @@
+/*
+ * CatalogOps — Freemius checkout theme.
+ *
+ * Loaded from Dashboard → Plans → Customization → Custom Checkout CSS file.
+ * The file must be served over HTTPS, or the checkout stops being PCI
+ * compliant and Freemius refuses it.
+ *
+ * ONLY custom properties are set here. Not one selector touches layout, and
+ * that is the whole discipline: Freemius rebuild the checkout's markup as they
+ * please, and a rule that positions something breaks silently the day they do.
+ * Variables survive that; `position` and `margin` do not.
+ *
+ * The design system has two layers. Layer one is the raw palette
+ * (--fs-ds-blue-*, --fs-ds-neutral-*); layer two is the theme
+ * (--fs-ds-theme-*) that components actually read. Replacing layer one is the
+ * documented path — their advice is to keep the LIGHTNESS of each step and
+ * change only the hue, so contrast survives. That is what the scales below do.
+ * Layer two is then set again by hand for the handful of places that carry a
+ * literal rather than a reference, so the result does not depend on which of
+ * the two it is.
+ */
+
+:root {
+	/*
+	 * Blue → indigo, step for step at the same lightness. 500 is the accent the
+	 * checkout uses for buttons, focus rings and links; 600 is its hover. Those
+	 * two are the site's own indigo, so the button that says "Buy Solo" and the
+	 * button that takes the card are the same colour.
+	 */
+	--fs-ds-blue-10:  #eeecfb;
+	--fs-ds-blue-100: #d8d4fb;
+	--fs-ds-blue-200: #b4aef7;
+	--fs-ds-blue-300: #8f88f2;
+	--fs-ds-blue-400: #6d64ec;
+	--fs-ds-blue-500: #4f46e5;
+	--fs-ds-blue-600: #4338ca;
+	--fs-ds-blue-700: #3730a3;
+	--fs-ds-blue-800: #2e2882;
+	--fs-ds-blue-900: #221c63;
+
+	/*
+	 * Neutrals keep their lightness and lose their blue-grey cast for the
+	 * indigo-biased greys the site uses. A pure or blue grey beside an indigo
+	 * accent reads as two unrelated decisions; this is the same neutral the
+	 * pricing table sits on.
+	 */
+	--fs-ds-neutral-10:  #f5f5fa;
+	--fs-ds-neutral-100: #e6e6f0;
+	--fs-ds-neutral-200: #cfcfe0;
+	--fs-ds-neutral-300: #a3a3bd;
+	--fs-ds-neutral-400: #8a8aa2;
+	--fs-ds-neutral-500: #6e6e8a;
+	--fs-ds-neutral-600: #55556e;
+	--fs-ds-neutral-700: #43435c;
+	--fs-ds-neutral-800: #33334a;
+	--fs-ds-neutral-900: #191830;
+	--fs-ds-neutral-900-fade-60: rgba(25, 24, 48, .6);
+	--fs-ds-neutral-900-fade-92: rgba(25, 24, 48, .08);
+
+	/*
+	 * Radii, matched to the site's controls (.42rem buttons, .7rem cards). A
+	 * length is the one kind of override that cannot break a layout — it only
+	 * rounds what is already there.
+	 */
+	--fs-ds-appearance-border-radius: 7px;
+	--fs-ds-appearance-border-radius-lg: 11px;
+
+	/*
+	 * Green, red and yellow are deliberately left alone. They are not brand
+	 * colours here, they are the difference between "paid" and "declined", and
+	 * their contrast is tuned. Repainting a state colour to match a website is
+	 * the kind of tidiness that costs someone a misread error message.
+	 */
+}
+
+/*
+ * Layer two, set explicitly. If these already reference the palette above they
+ * are simply being told the same thing twice; if they carry a literal, this is
+ * the only thing that moves them. Either way the outcome is the same, which is
+ * the point — the file should not depend on an implementation detail that is
+ * invisible from outside.
+ *
+ * The selector list covers both surfaces: the hosted page the website links to,
+ * and the checkout the SDK opens inside wp-admin, which the documentation says
+ * is themed through `.dashboard-mode`. A buyer upgrading from inside the plugin
+ * gets the same colours as one arriving from the pricing table.
+ */
+:root,
+.dashboard-mode {
+	--fs-ds-theme-primary-accent-color: #4f46e5;
+	--fs-ds-theme-primary-accent-color-hover: #4338ca;
+
+	--fs-ds-theme-control-border-active-color: #4f46e5;
+	--fs-ds-theme-control-text-color: #191830;
+	--fs-ds-theme-text-color: #191830;
+	--fs-ds-theme-heading-text-color: #33334a;
+	--fs-ds-theme-muted-text-color: #55556e;
+
+	--fs-ds-theme-notice-info-border: #4f46e5;
+	--fs-ds-theme-notice-info-color: #4338ca;
+
+	--fs-ds-theme-footer-link-color: #b4aef7;
+	--fs-ds-theme-footer-control-border-focus: #8f88f2;
+	--fs-ds-theme-signal-bar-expand-button-background-color: #4f46e5;
+
+	/*
+	 * Two shadows carry the old accent as a literal hex inside a longer value,
+	 * so they cannot follow the palette and have to be restated whole. The focus
+	 * ring is the most-seen accent on the page — it is on screen every time
+	 * somebody types into a field.
+	 */
+	--fs-ds-box-shadow-control-active: 0 1px 2px 0 rgba(31, 41, 51, .08), 0 0 0 1px #4f46e5;
+	--fs-ds-box-shadow-switch-active: 0 0 0 2px #fff, 0 0 0 4px #4f46e5;
+}
+
+/*
+ * The typeface is deliberately NOT changed.
+ *
+ * The site sets Archivo and Newsreader, and neither belongs here. The checkout's
+ * spacing is tuned to Source Sans 3's metrics; a wider face re-wraps field
+ * labels and error messages in a form nobody gets to preview before a real
+ * customer meets it. Colour carries the brand recognition at no such risk, and
+ * a payment page is the last place to spend a risk on recognition.
+ */

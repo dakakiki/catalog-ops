@@ -1,0 +1,313 @@
+<title>Contact CatalogOps</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  --ground:        #fbfbfd;
+  --surface:       #ffffff;
+  --sunken:        #f1f1f7;
+  --ink:           #191830;
+  --ink-muted:     #55556e;
+  --ink-faint:     #8a8aa2;
+  --rule:          #e3e3ee;
+  --rule-strong:   #cfcfe0;
+  --indigo:        #4338ca;
+  --indigo-deep:   #312e81;
+  --indigo-wash:   #eeecfb;
+  --accent:        #d97706;
+  --accent-wash:   #fdf1e0;
+  --good:          #15803d;
+  --good-wash:     #e7f4ec;
+  --danger:        #b91c1c;
+  --shadow:        0 1px 2px rgba(25, 24, 48, .06), 0 8px 24px -12px rgba(25, 24, 48, .18);
+
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body:    "Newsreader", Georgia, "Times New Roman", serif;
+  --mono:    "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --wide: 66rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #0e0e1c;
+    --surface:     #16162a;
+    --sunken:      #1d1d35;
+    --ink:         #ecebf6;
+    --ink-muted:   #a4a3c0;
+    --ink-faint:   #74738f;
+    --rule:        #292944;
+    --rule-strong: #3a3a5c;
+    --indigo:      #9a92f8;
+    --indigo-deep: #c3bdff;
+    --indigo-wash: #201e3f;
+    --accent:      #f0a12e;
+    --accent-wash: #33240e;
+    --good:        #4ade80;
+    --good-wash:   #10301d;
+    --danger:      #fb7185;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -14px rgba(0, 0, 0, .8);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #0e0e1c;
+  --surface:     #16162a;
+  --sunken:      #1d1d35;
+  --ink:         #ecebf6;
+  --ink-muted:   #a4a3c0;
+  --ink-faint:   #74738f;
+  --rule:        #292944;
+  --rule-strong: #3a3a5c;
+  --indigo:      #9a92f8;
+  --indigo-deep: #c3bdff;
+  --indigo-wash: #201e3f;
+  --accent:      #f0a12e;
+  --accent-wash: #33240e;
+  --good:        #4ade80;
+  --good-wash:   #10301d;
+  --danger:      #fb7185;
+  --shadow:      0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -14px rgba(0, 0, 0, .8);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--body); font-size: 1.0625rem; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { font-family: var(--display); font-weight: 600; text-wrap: balance; }
+h1 { font-size: clamp(2.1rem, 5vw, 2.9rem); line-height: 1.05; letter-spacing: -.028em; margin: 0; font-weight: 700; }
+h2 { font-size: 1.05rem; letter-spacing: -.01em; margin: 0 0 .4rem; }
+p  { margin: 0; }
+a  { color: var(--indigo); text-underline-offset: .18em; }
+a:hover { color: var(--indigo-deep); }
+
+.wrap { max-width: var(--wide); margin-inline: auto; padding-inline: 1.5rem; }
+.eyebrow {
+  font-family: var(--display); font-size: .70rem; font-weight: 600;
+  letter-spacing: .15em; text-transform: uppercase; color: var(--indigo);
+}
+
+/* ---------------------------------------------------------------- masthead */
+
+.masthead { border-bottom: 1px solid var(--rule); background: var(--surface); position: sticky; top: 0; z-index: 10; }
+.masthead .wrap { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: .75rem; }
+.brand { display: flex; align-items: center; gap: .58rem; text-decoration: none; color: inherit; }
+.brand-mark { width: 2.05rem; height: 2.05rem; flex: none; display: block; }
+.brand-text { display: flex; flex-direction: column; gap: .1rem; }
+.brand-name { font-family: var(--display); font-weight: 700; font-size: 1.12rem; letter-spacing: -.025em; line-height: 1; }
+.brand-name em { font-style: normal; color: var(--indigo); }
+.brand-tag { font-family: var(--display); font-size: .565rem; font-weight: 500; letter-spacing: .155em; text-transform: uppercase; color: var(--ink-faint); line-height: 1; }
+.masthead nav a { font-family: var(--display); font-size: .84rem; font-weight: 500; color: var(--ink-muted); text-decoration: none; white-space: nowrap; }
+.masthead nav a:hover { color: var(--ink); }
+
+/* -------------------------------------------------------------------- head */
+
+.page-head { padding-block: clamp(2.75rem, 6vw, 4rem) 2.5rem; }
+.page-head .lede { font-size: 1.18rem; color: var(--ink-muted); max-width: 34rem; margin-top: 1rem; }
+
+/* ------------------------------------------------------------------ layout */
+
+.contact { display: grid; gap: 3rem; padding-bottom: clamp(3.5rem, 8vw, 6rem); }
+@media (min-width: 58rem) {
+  .contact { grid-template-columns: minmax(0, 1fr) 17rem; gap: 4rem; align-items: start; }
+}
+
+/* -------------------------------------------------------------------- form */
+
+form { display: flex; flex-direction: column; gap: 1.25rem; max-width: 34rem; }
+.field { display: flex; flex-direction: column; gap: .4rem; }
+.field label {
+  font-family: var(--display); font-size: .87rem; font-weight: 600;
+  letter-spacing: -.005em; display: flex; align-items: baseline; gap: .5rem;
+}
+.field .optional { font-family: var(--body); font-weight: 400; font-size: .84rem; color: var(--ink-faint); letter-spacing: 0; }
+.field .hint { font-size: .87rem; color: var(--ink-faint); }
+
+input[type="text"], input[type="email"], input[type="url"], select, textarea {
+  font-family: var(--body); font-size: 1rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule-strong);
+  border-radius: .45rem; padding: .62rem .75rem; width: 100%;
+}
+select { font-family: var(--display); font-size: .95rem; }
+textarea { min-height: 9.5rem; resize: vertical; line-height: 1.6; }
+input::placeholder, textarea::placeholder { color: var(--ink-faint); }
+input:hover, select:hover, textarea:hover { border-color: var(--ink-faint); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--indigo); box-shadow: 0 0 0 3px var(--indigo-wash); }
+
+/* Hidden from people, visible to the robots that fill in everything they find.
+   A honeypot rather than a CAPTCHA on purpose: reCAPTCHA would put Google back
+   on a site whose whole cookie policy rests on Google not being here. */
+.trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+.submit-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+button {
+  font-family: var(--display); font-size: .95rem; font-weight: 600;
+  background: var(--indigo); color: #fff; border: 1px solid transparent;
+  padding: .72rem 1.5rem; border-radius: .45rem; cursor: pointer;
+}
+button:hover { background: var(--indigo-deep); }
+:root[data-theme="dark"] button, :root:not([data-theme="light"]) button { color: #14132a; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) button { color: #fff; } }
+
+.privacy-note { font-size: .89rem; color: var(--ink-faint); max-width: 34rem; }
+
+.notice {
+  padding: .85rem 1.1rem; border-radius: .5rem; font-size: .95rem;
+  border: 1px solid var(--accent); background: var(--accent-wash); color: var(--ink);
+}
+.notice b { font-family: var(--display); font-weight: 600; }
+
+/* ------------------------------------------------------------------- aside */
+
+.aside { display: flex; flex-direction: column; gap: 1.6rem; }
+.aside section { border-top: 2px solid var(--rule); padding-top: .9rem; }
+.aside section:first-child { border-top-color: var(--indigo); }
+.aside p { font-size: .95rem; color: var(--ink-muted); }
+.aside .kicker {
+  font-family: var(--display); font-size: .68rem; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint);
+  display: block; margin-bottom: .5rem;
+}
+
+/* ------------------------------------------------------------------ footer */
+
+footer { border-top: 1px solid var(--rule); background: var(--surface); }
+footer .wrap { padding-block: 2.5rem; display: flex; flex-wrap: wrap; gap: 1.5rem; justify-content: space-between; align-items: center; }
+footer p { font-size: .9rem; color: var(--ink-faint); }
+
+*:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: .2rem; }
+
+@media (prefers-reduced-motion: no-preference) {
+  input, select, textarea, button, .masthead nav a { transition: border-color .16s ease, box-shadow .16s ease, background .16s ease, color .16s ease; }
+}
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="co-grad" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5b57ee"/>
+      <stop offset="1" stop-color="#3f2fc4"/>
+    </linearGradient>
+    <symbol id="co-mark" viewBox="0 0 40 40">
+      <rect width="40" height="40" rx="9" fill="url(#co-grad)"/>
+      <path d="M20 9 31 15 20 21 9 15Z" fill="#ffffff"/>
+      <path d="M9 20 20 26 31 20" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.72"/>
+      <path d="M9 25 20 31 31 25" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.45"/>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="https://claude.ai/code/artifact/60d13808-7540-4973-9115-a3f6d9542707">
+      <svg class="brand-mark" role="img" aria-label="CatalogOps"><use href="#co-mark"/></svg>
+      <span class="brand-text">
+        <span class="brand-name">Catalog<em>Ops</em></span>
+        <span class="brand-tag">Bulk catalog operations</span>
+      </span>
+    </a>
+    <nav><a href="https://claude.ai/code/artifact/60d13808-7540-4973-9115-a3f6d9542707">← Back to the site</a></nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="page-head">
+    <span class="eyebrow">Contact</span>
+    <h1>Write to us</h1>
+    <p class="lede">A person reads every message — the same person who wrote the plugin. Answers usually come the same working day, and always within two.</p>
+  </div>
+
+  <div class="contact">
+
+    <div>
+      <form novalidate>
+        <div class="field">
+          <label for="topic">What is this about?</label>
+          <select id="topic" name="topic" required>
+            <option value="presale">Before buying — will it do what I need?</option>
+            <option value="bug">Something is not working</option>
+            <option value="billing">Billing, licence or refund</option>
+            <option value="other">Something else</option>
+          </select>
+          <span class="hint">This decides who reads it first and how quickly.</span>
+        </div>
+
+        <div class="field">
+          <label for="email">Your email</label>
+          <input id="email" name="email" type="email" required autocomplete="email" placeholder="you@yourshop.com">
+          <span class="hint">The only field we truly need — it is where the answer goes.</span>
+        </div>
+
+        <div class="field">
+          <label for="name">Your name <span class="optional">optional</span></label>
+          <input id="name" name="name" type="text" autocomplete="name" placeholder="So we know what to call you">
+        </div>
+
+        <div class="field">
+          <label for="site">Your shop's address <span class="optional">optional</span></label>
+          <input id="site" name="site" type="url" placeholder="https://yourshop.com">
+          <span class="hint">Helps for anything that is not working. We do not visit it without asking.</span>
+        </div>
+
+        <div class="field">
+          <label for="message">Your message</label>
+          <textarea id="message" name="message" required placeholder="If something went wrong, what you expected and what happened instead is usually enough to find it."></textarea>
+        </div>
+
+        <div class="trap" aria-hidden="true">
+          <label for="company">Company — leave this empty</label>
+          <input id="company" name="company" type="text" tabindex="-1" autocomplete="off">
+        </div>
+
+        <div class="submit-row">
+          <button type="submit">Send message</button>
+        </div>
+
+        <p class="privacy-note">We use your message and your address only to answer you, and keep them so the history makes sense if you write again. Nothing here goes to a mailing list. See the <a href="https://claude.ai/code/artifact/cd038139-82d9-4480-8999-f9d16dc2a0d6#privacy">Privacy Policy</a>.</p>
+
+        <p class="notice"><b>Prototype.</b> This form is not connected to anything yet — nothing is sent and nothing is stored. Write to <a href="mailto:contact@catalog-ops.app">contact@catalog-ops.app</a> in the meantime.</p>
+      </form>
+    </div>
+
+    <aside class="aside">
+      <section>
+        <span class="kicker">Billing goes elsewhere</span>
+        <h2>Invoices, VAT and payments</h2>
+        <p>Freemius is the seller of record, so invoices, VAT numbers and card problems are theirs and they can act on them immediately. Write to us anyway if you are not sure — we will point you the right way rather than send you back.</p>
+      </section>
+
+      <section>
+        <span class="kicker">If something broke</span>
+        <h2>What saves a round trip</h2>
+        <p>The operation number from the history, and what you expected against what happened. That is usually enough. Versions and active plugins help too, and we will ask if we need them.</p>
+      </section>
+
+      <section>
+        <span class="kicker">Not sure yet</span>
+        <h2>You can try it first</h2>
+        <p>The free tier filters, previews and applies up to 200 objects per operation, on one site, for as long as you like. Often that answers "will it work on my catalogue" faster than we can.</p>
+      </section>
+    </aside>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="https://claude.ai/code/artifact/60d13808-7540-4973-9115-a3f6d9542707">
+      <svg class="brand-mark" role="img" aria-label="CatalogOps"><use href="#co-mark"/></svg>
+      <span class="brand-text">
+        <span class="brand-name">Catalog<em>Ops</em></span>
+        <span class="brand-tag">Bulk catalog operations</span>
+      </span>
+    </a>
+    <p>catalog-ops.app · contact@catalog-ops.app</p>
+  </div>
+</footer>
