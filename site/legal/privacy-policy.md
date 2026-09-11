@@ -8,7 +8,7 @@
 
 ## Who is responsible
 
-CatalogOps is run by **[FULL NAME]**, an individual trader in Serbia.
+CatalogOps is run by Davor Kikindjanin, an individual trader in Serbia.
 
 - Email: **contact@catalog-ops.app**
 - Postal address: available on request at the address above.
@@ -34,7 +34,8 @@ page, and the browser's user-agent string. These exist to keep the site running
 and to investigate abuse.
 
 - Legal basis: legitimate interest in operating and securing the site.
-- Retention: **[N] days**, then deleted.
+- Retention: **7 days**, then deleted. That is the period our host, Hetzner,
+  keeps web-server and mail-server logs for.
 
 **Audience measurement (Plausible).** Visits are counted with
 [Plausible Analytics](https://plausible.io), hosted in the European Union.
@@ -102,7 +103,9 @@ again.
 ## Who else sees any of this
 
 - **Freemius** — payments, licensing, updates.
-- **[HOSTING PROVIDER]** — the server this site runs on.
+- **Hetzner Online GmbH** (Germany) — the server this site runs on, and the
+  mailbox that receives what you send us. Our processor under a data-processing
+  agreement; inside the EEA.
 - **Plausible** — aggregate visit counts, hosted in the EU.
 
 Nobody else. Your data is not sold, rented, or handed to advertisers, and it is
@@ -110,10 +113,34 @@ not used to build a profile of you.
 
 ## International transfers
 
-We are in Serbia. Serbia has an adequacy decision from the European Commission
-for the transfer of personal data, so data reaching us from the EEA does so on
-that basis. Freemius is in the United States and handles transfers under its own
-published safeguards.
+**Nothing this site collects is stored outside the European Economic Area.** The
+server, its logs and the mailbox that receives your messages are all with Hetzner
+in Germany. Audience measurement is with Plausible in the European Union.
+
+**How we work with it in practice.** We use each of these services through its
+own web interface and nothing else. Mail is read in Hetzner's webmail, so there
+is no mail client and no copy of your message on any machine of ours. Customer
+records are read in the Freemius dashboard; we do not export them, and we keep no
+list of customers anywhere else. If that ever changes — if we start sending a
+newsletter, for instance — this page changes with it, before it does.
+
+We are established in Serbia, which is outside the EEA and is **not** covered by
+an adequacy decision of the European Commission. We reach the data described
+above by logging in to those EEA services from Serbia; it is not copied here in
+the ordinary course.
+
+Because that data stays with our processors inside the EEA, and we are its
+controller rather than a further recipient, we do not rely on a transfer
+mechanism for it. What you send us through the contact form you send directly and
+on your own initiative, which under the European Data Protection Board's guidance
+is not a transfer at all.
+
+**Freemius Inc.** is the one service outside the EEA: it is in the United States,
+and its data-processing agreement incorporates the European Commission's Standard
+Contractual Clauses of 2021 for transfers.
+
+The GDPR and the UK GDPR apply to us directly, because CatalogOps is offered to
+customers in those territories.
 
 ## Your rights
 

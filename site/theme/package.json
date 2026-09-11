@@ -1,0 +1,31 @@
+{
+    "name": "catalogops-theme",
+    "version": "0.1.0",
+    "private": true,
+    "description": "The CatalogOps marketing theme.",
+    "license": "GPL-2.0-or-later",
+    "scripts": {
+        "build": "webpack --mode production",
+        "start": "webpack --mode development --watch",
+        "lint:js": "eslint assets/src/js",
+        "lint:css": "stylelint \"assets/src/scss/**/*.scss\""
+    },
+    "browserslist": [
+        "> 0.5%",
+        "last 2 versions",
+        "not dead"
+    ],
+    "devDependencies": {
+        "autoprefixer": "^10.4.20",
+        "css-loader": "^7.1.2",
+        "css-minimizer-webpack-plugin": "^7.0.0",
+        "mini-css-extract-plugin": "^2.9.2",
+        "postcss": "^8.4.49",
+        "postcss-loader": "^8.1.1",
+        "sass": "^1.83.0",
+        "sass-loader": "^16.0.4",
+        "webpack": "^5.97.1",
+        "webpack-cli": "^6.0.1",
+        "webpack-remove-empty-scripts": "^1.0.4"
+    }
+}

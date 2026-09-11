@@ -1,0 +1,40 @@
+/*!
+Theme Name: CatalogOps
+Theme URI: https://catalog-ops.app/
+Author: CatalogOps
+Description: The marketing site for CatalogOps, the bulk-operations plugin for WooCommerce. Loads no fonts, scripts or pixels from anybody else, which is what lets the site set no cookies at all.
+Version: 0.1.0
+Requires at least: 6.5
+Tested up to: 6.8
+Requires PHP: 8.1
+License: GPL-2.0-or-later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
+Text Domain: catalogops
+Tags: one-column, custom-colors, accessibility-ready, translation-ready
+*/
+
+/*
+ * THIS FILE IS THE SOURCE. `style.css` in the theme root is BUILT from it by
+ * webpack — do not edit that file, it is overwritten on every build.
+ *
+ * The comment above is preserved into the build (a `/*!` comment survives
+ * minification), because WordPress reads a theme's name and version out of the
+ * top of style.css and would otherwise refuse to list the theme at all.
+ *
+ * The order below is the cascade, and it is deliberate: tokens define the
+ * vocabulary, base sets the defaults, layout draws the frame every page shares,
+ * components are the pieces used more than once, and the three page partials
+ * come last so a page can override a shared rule without a specificity fight.
+ * Motion is last of all, because it is the only thing here that may be
+ * switched off wholesale.
+ */
+
+@use 'fonts';
+@use 'tokens';
+@use 'base';
+@use 'layout';
+@use 'components';
+@use 'home';
+@use 'legal';
+@use 'contact';
+@use 'motion';

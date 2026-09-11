@@ -1,0 +1,66 @@
+// Everything here is inside a no-preference query, so a reader who asks for
+// less motion gets a page that simply does not move.
+
+/* ---------------------------------------------------------------- motion */
+
+/* Everything here is inside a no-preference query, so a reader who asks for
+   less motion gets the finished page and never an element parked at zero
+   opacity. The final state IS the default state: the animation only supplies a
+   starting offset, which is also why the page reads correctly with JS off. */
+@media (prefers-reduced-motion: no-preference) {
+  :root { scroll-behavior: smooth; }
+
+  .rise { animation: co-rise .55s cubic-bezier(.2, .7, .3, 1) backwards; }
+  .rise-1 { animation-delay: .04s; }
+  .rise-2 { animation-delay: .10s; }
+  .rise-3 { animation-delay: .16s; }
+  .rise-4 { animation-delay: .22s; }
+  .rise-5 { animation-delay: .30s; }
+
+  @keyframes co-rise {
+    from { opacity: 0; transform: translateY(.55rem); }
+  }
+
+  .faq summary::after { transition: transform .26s cubic-bezier(.2, .7, .3, 1), margin-top .26s cubic-bezier(.2, .7, .3, 1); }
+  .faq summary { transition: color .18s ease; }
+  .to-top { transition: opacity .22s ease, visibility .22s, border-color .18s ease, background .18s ease; }
+  .btn, .plan { transition: transform .18s ease, border-color .18s ease, background .18s ease; }
+  .btn:hover { transform: translateY(-1px); }
+  .plan:hover { transform: translateY(-2px); }
+
+  /* Sections arrive as the reader reaches them.
+     Everything below is gated twice: by this motion query, and by the
+     data-reveal attribute that the script sets only once it is certain it can
+     take the hidden state back off again. With JavaScript off, with an error in
+     it, or with reduced motion asked for, no rule here ever applies and the page
+     is simply finished. */
+  [data-reveal="on"] .reveal { opacity: 0; transform: translateY(1.1rem); }
+  [data-reveal="on"] .reveal.is-in {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity .55s cubic-bezier(.2, .7, .3, 1),
+      transform .55s cubic-bezier(.2, .7, .3, 1);
+    transition-delay: calc( var(--i, 0) * 70ms );
+  }
+
+  .promise:nth-child(2), .fact:nth-child(2), .plan:nth-child(2) { --i: 1; }
+  .promise:nth-child(3), .fact:nth-child(3), .plan:nth-child(3) { --i: 2; }
+
+  /* The pipeline rules draw left to right, which is the one thing on this page
+     where motion says something true: the stages happen in that order. Tied to
+     the reveal rather than to load, or it would finish drawing while the reader
+     is still three sections above it. */
+  @media (min-width: 56rem) {
+    [data-reveal="on"] .stages.reveal .stage::before { transform: scaleX(0); }
+    [data-reveal="on"] .stages.reveal.is-in .stage::before {
+      transform: scaleX(1);
+      transition: transform .5s cubic-bezier(.2, .7, .3, 1);
+    }
+    [data-reveal="on"] .stages.reveal.is-in .stage:nth-child(1)::before { transition-delay: .10s; }
+    [data-reveal="on"] .stages.reveal.is-in .stage:nth-child(2)::before { transition-delay: .18s; }
+    [data-reveal="on"] .stages.reveal.is-in .stage:nth-child(3)::before { transition-delay: .26s; }
+    [data-reveal="on"] .stages.reveal.is-in .stage:nth-child(4)::before { transition-delay: .34s; }
+    [data-reveal="on"] .stages.reveal.is-in .stage:nth-child(5)::before { transition-delay: .42s; }
+  }
+}
