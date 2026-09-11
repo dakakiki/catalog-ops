@@ -127,14 +127,20 @@ newsletter, for instance — this page changes with it, before it does.
 We are established in Serbia, which is outside the EEA and is **not** covered by
 an adequacy decision of the European Commission. We reach the data described
 above by logging in to those EEA services from Serbia; it is not copied here in
-the ordinary course. That access is made on the basis of **[TRANSFER BASIS]**.
+the ordinary course.
 
-The GDPR and the UK GDPR apply to us directly, because CatalogOps is offered to
-customers in those territories.
+Because that data stays with our processors inside the EEA, and we are its
+controller rather than a further recipient, we do not rely on a transfer
+mechanism for it. What you send us through the contact form you send directly and
+on your own initiative, which under the European Data Protection Board's guidance
+is not a transfer at all.
 
 **Freemius Inc.** is the one service outside the EEA: it is in the United States,
 and its data-processing agreement incorporates the European Commission's Standard
 Contractual Clauses of 2021 for transfers.
+
+The GDPR and the UK GDPR apply to us directly, because CatalogOps is offered to
+customers in those territories.
 
 ## Your rights
 
