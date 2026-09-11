@@ -408,7 +408,13 @@ get_header();
           <summary>What happens when my licence expires?</summary>
           <div class="faq-body"><div class="faq-body-inner"><p>The plugin keeps working exactly as it did. You stop receiving updates and support — you never lose your catalogue tools, your operation history, or the ability to undo a run from months ago.</p></div></div>
         </details>
-  
+
+        <details>
+          <summary>I run an agency. How do I keep track of which client sites are using my licence?</summary>
+          <div class="faq-body"><div class="faq-body-inner"><p>Tick <b>&ldquo;Associate with the license owner&rsquo;s account&rdquo;</b> when you activate your key on a client&rsquo;s site. It appears whenever the key belongs to a different account than the one that site connected with, which is usually the case: a site connects with its own administrator&rsquo;s email.</p>
+          <p>The licence activates either way, and so do updates. What the tick decides is whose account the installation is filed under. Filed under yours, every client site is in one list and you can free a seat when you stop working for that client — without needing access to their site again. Left unticked, the site is filed under the client, and you are paying for a seat you can neither see nor release.</p></div></div>
+        </details>
+
         <details>
           <summary>How many products can it handle?</summary>
           <div class="faq-body"><div class="faq-body-inner"><p>It is developed against a catalogue of 31,084 products with 50,000 variations. Work runs in the background in chunks, at about 12.5 objects a second — so ten thousand products take roughly 22 minutes, and you can keep using WordPress while it does.</p></div></div>
