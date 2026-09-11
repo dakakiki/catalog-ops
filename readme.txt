@@ -72,6 +72,12 @@ MySQL 5.7+ / MariaDB 10.4+. Queries are verified against MySQL 8.0 before each r
 
 Yes. All strings (PHP and the React admin app) are translatable; a `.pot` template ships in `/languages`, with a Serbian starter translation.
 
+= I run an agency. How do I keep track of which client sites are using my licence? =
+
+Tick **"Associate with the license owner's account"** when you activate your key on a client's site. It appears whenever the key you are entering belongs to a different account than the one that site connected with — which is usually the case, because the site connects with its own administrator's email.
+
+The licence is activated either way, and so are updates; what the tick decides is whose account that installation is filed under. Filed under yours, every client site appears in one list, and you can free a seat when you stop working for that client — without needing access to their site again. Left unticked, the site is filed under the client, and you are paying for a seat you can neither see nor release.
+
 == Screenshots ==
 
 1. The filter, product table, and bulk-edit panel.
