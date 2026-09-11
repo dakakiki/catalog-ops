@@ -4,7 +4,6 @@
 
 	<!-- Production code only; tests follow PHPUnit conventions. -->
 	<file>catalogops.php</file>
-	<file>uninstall.php</file>
 	<file>src</file>
 
 	<arg name="extensions" value="php"/>

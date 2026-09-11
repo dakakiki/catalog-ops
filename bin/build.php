@@ -258,7 +258,11 @@ mkdir( $stage, 0777, true );
 // assets/src/, and dot-dirs can never leak into a release.
 $include = array(
 	'catalogops.php',
-	'uninstall.php',
+	// No `uninstall.php`. WordPress prefers that file over the uninstall hook and
+	// calls only it, which silently disables the Freemius SDK's own uninstall
+	// work — so Freemius rejects a deployment that contains one. The cleanup now
+	// hangs off the SDK's `after_uninstall` action, with `register_uninstall_hook`
+	// as the SDK-absent fallback; both live in catalogops.php.
 	'readme.txt',
 	'src',
 	'languages',
