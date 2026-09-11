@@ -1816,13 +1816,29 @@ function ProgressBar( { op } ) {
 	// and a real run settled the argument: 3,042 items changed and 4 left alone
 	// because they already held the value, which is a footnote, and it held a full
 	// green completed bar on the screen to say so.
+	// What is left is a message, so it is shaped like every other message in this
+	// app: a notice. It used to render into a bare `catalogops-progress` div,
+	// which styles a progress bar and nothing else — so the one outcome that
+	// outlives its run was also the one piece of text on the screen with no frame
+	// around it, a heading and a bullet list loose under the Apply button. Every
+	// other ReasonList in this file already sits inside a notice or the skip
+	// summary card; this was the only one that did not.
+	//
+	// The tone follows the worse of the two facts. A failure is an error — the
+	// change was meant to happen and did not — while a skip is a rule doing its
+	// job, which is a warning at most. A run with both is reported as an error,
+	// because that is the half the user has to act on.
 	if ( settled ) {
 		if ( op.failed === 0 && skipped.length === 0 ) {
 			return null;
 		}
 
 		return (
-			<div className="catalogops-progress">
+			<div
+				className={ `notice ${
+					op.failed > 0 ? 'notice-error' : 'notice-warning'
+				} catalogops-inline-notice catalogops-progress__outcome` }
+			>
 				{ op.failed > 0 && (
 					<p>
 						{ sprintf(
@@ -1838,10 +1854,10 @@ function ProgressBar( { op } ) {
 					</p>
 				) }
 				{ skipped.length > 0 && (
-					<div className="catalogops-progress__note">
+					<>
 						<p>{ __( 'Not changed:', 'catalogops' ) }</p>
 						<ReasonList items={ skipped } />
-					</div>
+					</>
 				) }
 			</div>
 		);

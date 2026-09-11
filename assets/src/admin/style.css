@@ -993,11 +993,17 @@ without claiming a position it does not know.
 	height: 11px;
 }
 
-.catalogops-progress__note {
-	margin-top: 8px;
+/* The outcome a finished run leaves behind. `catalogops-inline-notice` zeroes the
+   margin so a notice can sit flush inside a control group; this one stands alone
+   under the Apply button and needs the gap back.
+   The `.catalogops` prefix is not decoration: the rule it has to beat is
+   `.catalogops .catalogops-inline-notice { margin: 0 }`, and a single class loses
+   to two every time. Measured — without it this sat flush against the button. */
+.catalogops .catalogops-progress__outcome {
+	margin-top: 12px;
 }
 
-.catalogops-progress__note p {
+.catalogops .catalogops-progress__outcome p {
 	font-weight: 400;
 }
 
