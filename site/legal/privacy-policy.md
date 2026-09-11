@@ -117,6 +117,13 @@ not used to build a profile of you.
 server, its logs and the mailbox that receives your messages are all with Hetzner
 in Germany. Audience measurement is with Plausible in the European Union.
 
+**How we work with it in practice.** We use each of these services through its
+own web interface and nothing else. Mail is read in Hetzner's webmail, so there
+is no mail client and no copy of your message on any machine of ours. Customer
+records are read in the Freemius dashboard; we do not export them, and we keep no
+list of customers anywhere else. If that ever changes — if we start sending a
+newsletter, for instance — this page changes with it, before it does.
+
 We are established in Serbia, which is outside the EEA and is **not** covered by
 an adequacy decision of the European Commission. We reach the data described
 above by logging in to those EEA services from Serbia; it is not copied here in
