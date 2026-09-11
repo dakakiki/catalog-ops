@@ -7,7 +7,7 @@
 
 ## Who you are dealing with
 
-CatalogOps is made and supported by **[FULL NAME]**, an individual trader in
+CatalogOps is made and supported by Davor Kikindjanin, an individual trader in
 Serbia, reachable at **contact@catalog-ops.app**.
 
 ## Who sells you the licence

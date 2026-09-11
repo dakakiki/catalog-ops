@@ -8,7 +8,7 @@
 
 ## Who is responsible
 
-CatalogOps is run by **[FULL NAME]**, an individual trader in Serbia.
+CatalogOps is run by Davor Kikindjanin, an individual trader in Serbia.
 
 - Email: **contact@catalog-ops.app**
 - Postal address: available on request at the address above.
