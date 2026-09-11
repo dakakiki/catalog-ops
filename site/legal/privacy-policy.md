@@ -102,7 +102,9 @@ again.
 ## Who else sees any of this
 
 - **Freemius** — payments, licensing, updates.
-- **[HOSTING PROVIDER]** — the server this site runs on.
+- **Hetzner Online GmbH** (Germany) — the server this site runs on, and the
+  mailbox that receives what you send us. Our processor under a data-processing
+  agreement; inside the EEA.
 - **Plausible** — aggregate visit counts, hosted in the EU.
 
 Nobody else. Your data is not sold, rented, or handed to advertisers, and it is
@@ -110,21 +112,21 @@ not used to build a profile of you.
 
 ## International transfers
 
-We are established in Serbia, which is outside the European Economic Area and is
-**not** covered by an adequacy decision of the European Commission. Where
-personal data reaches us from the EEA or the UK, it is transferred on the basis
-of **[TRANSFER BASIS]**.
+**Nothing this site collects is stored outside the European Economic Area.** The
+server, its logs and the mailbox that receives your messages are all with Hetzner
+in Germany. Audience measurement is with Plausible in the European Union.
+
+We are established in Serbia, which is outside the EEA and is **not** covered by
+an adequacy decision of the European Commission. We reach the data described
+above by logging in to those EEA services from Serbia; it is not copied here in
+the ordinary course. That access is made on the basis of **[TRANSFER BASIS]**.
 
 The GDPR and the UK GDPR apply to us directly, because CatalogOps is offered to
 customers in those territories.
 
-Two of the services named above sit outside Serbia:
-
-- **Freemius Inc.** is in the United States and is an independent controller for
-  the payment. Transfers to Freemius are governed by its own published
-  safeguards and its privacy policy.
-- **Plausible Analytics** is hosted in the European Union, so audience
-  measurement involves no transfer out of the EEA.
+**Freemius Inc.** is the one service outside the EEA: it is in the United States,
+and its data-processing agreement incorporates the European Commission's Standard
+Contractual Clauses of 2021 for transfers.
 
 ## Your rights
 
