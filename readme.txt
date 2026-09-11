@@ -6,7 +6,7 @@ Tested up to: 7.1
 Requires PHP: 8.1
 WC requires at least: 9.0
 WC tested up to: 11.0
-Stable tag: 0.8.0
+Stable tag: 0.8.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -72,12 +72,6 @@ MySQL 5.7+ / MariaDB 10.4+. Queries are verified against MySQL 8.0 before each r
 
 Yes. All strings (PHP and the React admin app) are translatable; a `.pot` template ships in `/languages`, with a Serbian starter translation.
 
-= I run an agency. How do I keep track of which client sites are using my licence? =
-
-Tick **"Associate with the license owner's account"** when you activate your key on a client's site. It appears whenever the key you are entering belongs to a different account than the one that site connected with — which is usually the case, because the site connects with its own administrator's email.
-
-The licence is activated either way, and so are updates; what the tick decides is whose account that installation is filed under. Filed under yours, every client site appears in one list, and you can free a seat when you stop working for that client — without needing access to their site again. Left unticked, the site is filed under the client, and you are paying for a seat you can neither see nor release.
-
 == Screenshots ==
 
 1. The filter, product table, and bulk-edit panel.
@@ -85,6 +79,9 @@ The licence is activated either way, and so are updates; what the tick decides i
 3. Operation history with one-click undo.
 
 == Changelog ==
+
+= 0.8.1 =
+* Changed: the uninstall cleanup moved out of `uninstall.php` and onto the uninstall hook. WordPress calls that file *instead of* the hook, so shipping one silently prevented the licensing SDK from doing its own uninstall work. What gets removed is unchanged: the plugin's tables, its scheduled background actions, its options and the per-user tour flag, on every site of a network.
 
 = 0.8.0 =
 * Added: on a WPML site, CatalogOps now works in whatever language you are already in — filter, results, bulk edit, schedules and history, all of it. It never asks which language you mean, because standing in one and being asked is a question the screen can already answer. On WPML's "All languages" nothing is confined and the whole catalogue is in reach, which is the same behaviour a shop without WPML has always had.
