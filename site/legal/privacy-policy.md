@@ -34,7 +34,8 @@ page, and the browser's user-agent string. These exist to keep the site running
 and to investigate abuse.
 
 - Legal basis: legitimate interest in operating and securing the site.
-- Retention: **[N] days**, then deleted.
+- Retention: **7 days**, then deleted. That is the period our host, Hetzner,
+  keeps web-server and mail-server logs for.
 
 **Audience measurement (Plausible).** Visits are counted with
 [Plausible Analytics](https://plausible.io), hosted in the European Union.
