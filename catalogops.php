@@ -115,9 +115,16 @@ if ( is_readable( CATALOGOPS_PATH . 'freemius/start.php' ) && ! function_exists(
 				'has_addons'          => false,
 				'has_paid_plans'      => true,
 				'is_org_compliant'    => true,
+				// `pricing` and `contact` are switched off and replaced by our own
+				// screens — see CatalogOps\Admin\Pricing_Page, which carries the
+				// argument and, more importantly, what it costs. `account` is
+				// deliberately left ON: it is where a licence is activated,
+				// deactivated and synced, and none of that is presentation.
 				'menu'                => array(
 					'slug'    => 'catalogops',
 					'support' => false,
+					'pricing' => false,
+					'contact' => false,
 				),
 			);
 

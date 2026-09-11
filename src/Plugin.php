@@ -8,6 +8,7 @@
 namespace CatalogOps;
 
 use CatalogOps\Admin\Admin_Page;
+use CatalogOps\Admin\Pricing_Page;
 use CatalogOps\Container\Container;
 use CatalogOps\Database\Schema;
 use CatalogOps\Licensing\License;
@@ -158,6 +159,14 @@ final class Plugin {
 			$admin_page = $this->container->get( Admin_Page::class );
 			add_action( 'admin_menu', array( $admin_page, 'register_menu' ) );
 			add_action( 'admin_enqueue_scripts', array( $admin_page, 'enqueue_assets' ) );
+
+			// Late, and that is the whole reason for the priority: the parent menu
+			// is added on this same hook above, and the Freemius SDK adds Account
+			// on it too. Registering after both leaves Account where a Freemius
+			// user expects it and puts these two after it.
+			$pricing_page = $this->container->get( Pricing_Page::class );
+			add_action( 'admin_menu', array( $pricing_page, 'register_menu' ), 100 );
+			add_action( 'admin_enqueue_scripts', array( $pricing_page, 'enqueue_assets' ) );
 		}
 
 		/**
@@ -372,6 +381,14 @@ final class Plugin {
 				$plugin_file,
 				$container->get( License::class ),
 				$container->get( Filter_Providers::class )
+			)
+		);
+
+		$this->container->singleton(
+			Pricing_Page::class,
+			static fn( Container $container ): Pricing_Page => new Pricing_Page(
+				$plugin_file,
+				$container->get( License::class )
 			)
 		);
 
